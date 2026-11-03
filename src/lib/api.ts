@@ -1,0 +1,68 @@
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import type { LibrarySummary, MediaRecord, ScanReport } from "./types";
+
+export class BridgeError extends Error {
+  readonly offline: boolean;
+
+  constructor(message: string, offline = false) {
+    super(message);
+    this.name = "BridgeError";
+    this.offline = offline;
+  }
+}
+
+export function desktopBridgeAvailable(): boolean {
+  return isTauri();
+}
+
+export function errorMessage(error: unknown): string {
+  if (typeof error === "string" && error.trim()) return error;
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return "Something went wrong while talking to the local library.";
+}
+
+function assertBridge(): void {
+  if (!desktopBridgeAvailable()) {
+    throw new BridgeError(
+      "Desktop bridge is not connected. Run npm run tauri dev to use the library.",
+      true,
+    );
+  }
+}
+
+export async function fetchLibrary(): Promise<{
+  summary: LibrarySummary;
+  media: MediaRecord[];
+}> {
+  assertBridge();
+  const [summary, media] = await Promise.all([
+    invoke<LibrarySummary>("library_summary"),
+    invoke<MediaRecord[]>("list_media"),
+  ]);
+  return { summary, media };
+}
+
+export async function scanDirectory(root: string): Promise<ScanReport> {
+  assertBridge();
+  return invoke<ScanReport>("scan_directory", { root });
+}
+
+export async function setRating(
+  path: string,
+  rating: number | null,
+): Promise<MediaRecord> {
+  assertBridge();
+  return invoke<MediaRecord>("set_rating", { path, rating });
+}
+
+export async function pickFolder(): Promise<string | null> {
+  assertBridge();
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    recursive: true,
+    title: "Choose a media folder",
+  });
+  return typeof selected === "string" ? selected : null;
+}
