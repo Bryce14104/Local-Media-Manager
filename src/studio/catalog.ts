@@ -45,6 +45,34 @@ const SEED: Seed[] = [
   ["R5_1022.CR3", "raw", "2025-12-06T12:14:00", "Canon R5", "RF 100-500mm F4.5-7.1 L", 4, "pick", 45102880, 500, "1/2000", "f/7.1", "400mm", 8192, 5464, "Archive/2025/Atacama"],
 ];
 
+const PLACES: Record<string, { name: string; latitude: number; longitude: number }> = {
+  "Archive/2026/Iceland": { name: "Iceland", latitude: 63.53, longitude: -19.02 },
+  "Archive/2026/Lisbon": { name: "Lisbon", latitude: 38.722, longitude: -9.139 },
+  "Archive/2026/Kyoto": { name: "Kyoto", latitude: 35.011, longitude: 135.768 },
+  "Archive/2026/Namibia": { name: "Namibia", latitude: -24.729, longitude: 15.292 },
+  "Archive/2025/Atacama": { name: "Atacama", latitude: -23.863, longitude: -69.132 },
+  "Archive/2025/Oslo": { name: "Oslo", latitude: 59.913, longitude: 10.752 },
+};
+
+const INBOX = { name: "Inbox", latitude: -27.469, longitude: 153.026 };
+
+export function placeName(folder: string): string {
+  return PLACES[folder]?.name ?? folder.split("/").filter(Boolean).pop() ?? INBOX.name;
+}
+
+export function coordinatesFor(folder: string, id: string): { latitude: number; longitude: number } {
+  const place = PLACES[folder] ?? INBOX;
+  let state = 0;
+  for (const char of id) state = (Math.imul(state, 33) + char.charCodeAt(0)) >>> 0;
+  const latitude = place.latitude + ((state % 1000) / 1000 - 0.5) * 0.16;
+  state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+  const longitude = place.longitude + ((state % 1000) / 1000 - 0.5) * 0.2;
+  return {
+    latitude: Math.round(latitude * 10000) / 10000,
+    longitude: Math.round(longitude * 10000) / 10000,
+  };
+}
+
 export function createCatalog(): StudioItem[] {
   return SEED.map((row) => seedItem(row, row[0]));
 }
@@ -80,6 +108,7 @@ export function inventItems(folder: string, format: MediaFormat): StudioItem[] {
       height: format === "video" ? 2160 : 4000,
       hash: fakeHash(id),
       histogram: histogram(id),
+      ...coordinatesFor(folder.trim() || "Inbox", id),
     };
   });
 }
@@ -138,6 +167,7 @@ function seedItem(row: Seed, id: string): StudioItem {
     folder,
     hash: fakeHash(id),
     histogram: histogram(id),
+    ...coordinatesFor(folder, id),
   };
 }
 

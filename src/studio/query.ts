@@ -1,3 +1,4 @@
+import { formatLatitude, formatLongitude } from "./geo";
 import type {
   ActiveFilter,
   Filter,
@@ -15,9 +16,11 @@ const ACTIONS: { action: StudioAction; label: string; hint: string; keywords: st
   { action: "preset-browse", label: "Preset: Browse", hint: "Grid only", keywords: "preset browse layout" },
   { action: "preset-inspect", label: "Preset: Inspect", hint: "Dock the info panel", keywords: "preset inspect exif info" },
   { action: "preset-compare", label: "Preset: Compare", hint: "Side by side", keywords: "preset compare split" },
+  { action: "preset-map", label: "Preset: Map", hint: "Map above the grid", keywords: "preset map geo gps" },
   { action: "view-compact", label: "View: Compact grid", hint: "Tight tiles", keywords: "view compact grid" },
   { action: "view-cards", label: "View: Detailed cards", hint: "Larger frames", keywords: "view card detailed" },
   { action: "view-timeline", label: "View: Timeline", hint: "Group by month", keywords: "view timeline date" },
+  { action: "view-map", label: "View: Map", hint: "Pins for the roll", keywords: "view map geo gps" },
   { action: "toggle-inspector", label: "Toggle info panel", hint: "Dock, float, or hide", keywords: "toggle inspector info panel exif" },
   { action: "clear-filters", label: "Clear filters", hint: "Show the full roll", keywords: "clear filters reset" },
 ];
@@ -110,6 +113,13 @@ export function filterLabel(filter: ActiveFilter): string {
       return flagLabel(filter.value);
     case "text":
       return `“${filter.value}”`;
+    case "region": {
+      const latitude = (filter.south + filter.north) / 2;
+      const longitude = (filter.west + filter.east) / 2;
+      return `Region ${formatLatitude(latitude, 1)} ${formatLongitude(longitude, 1)}`;
+    }
+    case "cluster":
+      return filter.label;
   }
 }
 
@@ -264,6 +274,15 @@ function matchesOne(item: StudioItem, filter: Filter): boolean {
       const haystack = `${item.fileName} ${item.folder} ${item.camera}`.toLowerCase();
       return haystack.includes(filter.value.toLowerCase());
     }
+    case "region":
+      return (
+        item.longitude >= filter.west &&
+        item.longitude <= filter.east &&
+        item.latitude >= filter.south &&
+        item.latitude <= filter.north
+      );
+    case "cluster":
+      return filter.ids.includes(item.id);
   }
 }
 
@@ -281,6 +300,10 @@ function filterKey(filter: Filter): string {
       return `flag:${filter.value}`;
     case "text":
       return `text:${filter.value.toLowerCase()}`;
+    case "region":
+      return "region";
+    case "cluster":
+      return "cluster";
   }
 }
 

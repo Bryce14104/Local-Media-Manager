@@ -24,6 +24,7 @@ const PRESETS: { id: LayoutPreset; label: string }[] = [
   { id: "browse", label: "Browse" },
   { id: "inspect", label: "Inspect" },
   { id: "compare", label: "Compare" },
+  { id: "map", label: "Map" },
 ];
 
 export function TopBar({

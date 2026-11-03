@@ -2,9 +2,16 @@ export type MediaFormat = "raw" | "jpg" | "video";
 
 export type FlagStatus = "unflagged" | "pick" | "reject";
 
-export type ViewMode = "compact" | "cards" | "timeline";
+export type ViewMode = "compact" | "cards" | "timeline" | "map";
 
-export type LayoutPreset = "browse" | "inspect" | "compare";
+export type LayoutPreset = "browse" | "inspect" | "compare" | "map";
+
+export type GeoBounds = {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+};
 
 export type PanelMode = "docked" | "floating" | "hidden";
 
@@ -15,9 +22,11 @@ export type StudioAction =
   | "preset-browse"
   | "preset-inspect"
   | "preset-compare"
+  | "preset-map"
   | "view-compact"
   | "view-cards"
   | "view-timeline"
+  | "view-map"
   | "toggle-inspector"
   | "clear-filters";
 
@@ -40,6 +49,8 @@ export type StudioItem = {
   height: number | null;
   hash: string;
   histogram: number[];
+  latitude: number;
+  longitude: number;
 };
 
 export type Filter =
@@ -48,7 +59,9 @@ export type Filter =
   | { kind: "camera"; value: string }
   | { kind: "date"; value: string }
   | { kind: "flag"; value: Exclude<FlagStatus, "unflagged"> | "unflagged" }
-  | { kind: "text"; value: string };
+  | { kind: "text"; value: string }
+  | ({ kind: "region" } & GeoBounds)
+  | { kind: "cluster"; ids: string[]; label: string };
 
 export type ActiveFilter = Filter & { id: string };
 

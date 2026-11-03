@@ -1,6 +1,7 @@
 import { formatMonth } from "../../studio/query";
-import type { StudioItem, ViewMode } from "../../studio/types";
+import type { GeoBounds, StudioItem, ViewMode } from "../../studio/types";
 import { MediaCard } from "./MediaCard";
+import { MediaMap } from "./MediaMap";
 
 type MediaStageProps = {
   items: StudioItem[];
@@ -16,12 +17,17 @@ type MediaStageProps = {
   onClearFilters: () => void;
   filteredEmpty: boolean;
   onShowInfo: () => void;
+  onRegion: (bounds: GeoBounds) => void;
+  onCluster: (ids: string[], label: string) => void;
+  mapDocked?: boolean;
+  className?: string;
 };
 
 const MODES: { id: ViewMode; label: string }[] = [
   { id: "compact", label: "Compact" },
   { id: "cards", label: "Cards" },
   { id: "timeline", label: "Timeline" },
+  { id: "map", label: "Map" },
 ];
 
 export function MediaStage({
@@ -38,9 +44,14 @@ export function MediaStage({
   onClearFilters,
   filteredEmpty,
   onShowInfo,
+  onRegion,
+  onCluster,
+  mapDocked = false,
+  className,
 }: MediaStageProps) {
+  const showMap = viewMode === "map" && !mapDocked;
   return (
-    <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+    <section className={`flex min-h-0 min-w-0 flex-1 flex-col ${className ?? ""}`}>
       <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
         <div>
           <h1 className="text-sm font-medium">Workspace</h1>
@@ -77,8 +88,17 @@ export function MediaStage({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-auto px-4 pb-4">
-        {filteredEmpty ? (
+      <div className={showMap ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-auto px-4 pb-4"}>
+        {showMap ? (
+          <MediaMap
+            items={items}
+            primaryId={primaryId}
+            onOpen={onOpen}
+            onRegion={onRegion}
+            onCluster={onCluster}
+            className="h-full"
+          />
+        ) : filteredEmpty ? (
           <div className="rounded-2xl border border-dashed border-line px-5 py-12 text-center">
             <p className="text-sm">No frames match these filters.</p>
             <button
@@ -89,6 +109,16 @@ export function MediaStage({
               Clear filters
             </button>
           </div>
+        ) : viewMode === "map" ? (
+          <Filmstrip
+            items={items}
+            selectedIds={selectedIds}
+            primaryId={primaryId}
+            onOpen={onOpen}
+            onToggle={onToggle}
+            onRate={onRate}
+            onFlag={onFlag}
+          />
         ) : viewMode === "timeline" ? (
           <Timeline
             items={items}
@@ -153,6 +183,27 @@ function Grid({
           onRate={(rating) => onRate(item.id, rating)}
           onFlag={() => onFlag(item.id)}
         />
+      ))}
+    </div>
+  );
+}
+
+function Filmstrip(props: Omit<Parameters<typeof Grid>[0], "density">) {
+  return (
+    <div className="flex gap-3 overflow-x-auto pb-1">
+      {props.items.map((item) => (
+        <div key={item.id} className="w-36 shrink-0">
+          <MediaCard
+            item={item}
+            density="compact"
+            selected={props.selectedIds.includes(item.id)}
+            primary={props.primaryId === item.id}
+            onOpen={() => props.onOpen(item.id)}
+            onToggle={() => props.onToggle(item.id)}
+            onRate={(rating) => props.onRate(item.id, rating)}
+            onFlag={() => props.onFlag(item.id)}
+          />
+        </div>
       ))}
     </div>
   );

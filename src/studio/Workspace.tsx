@@ -5,11 +5,13 @@ import { InspectorPanel } from "../components/panels/InspectorPanel";
 import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
+import { MediaMap } from "../components/workspace/MediaMap";
 import { MediaStage } from "../components/workspace/MediaStage";
 import { createCatalog, inventItems, nextFlag } from "./catalog";
 import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
 import type {
   ActiveFilter,
+  GeoBounds,
   LayoutPreset,
   MediaFormat,
   PanelMode,
@@ -89,6 +91,29 @@ export function Workspace() {
     setPanelCollapsed(false);
     if (next === "inspect") setPanelMode("docked");
     else setPanelMode("hidden");
+    if (next === "map") setViewMode("map");
+  }
+
+  function revealMapGrid() {
+    setPreset("map");
+    setPanelMode("hidden");
+    setPanelCollapsed(false);
+  }
+
+  function applyRegion(bounds: GeoBounds) {
+    setFilters((current) => {
+      const withoutCluster = current.filter((filter) => filter.kind !== "cluster");
+      return upsertFilter(withoutCluster, { kind: "region", ...bounds });
+    });
+    revealMapGrid();
+  }
+
+  function applyCluster(ids: string[], label: string) {
+    setFilters((current) => {
+      const withoutRegion = current.filter((filter) => filter.kind !== "region");
+      return upsertFilter(withoutRegion, { kind: "cluster", ids, label });
+    });
+    revealMapGrid();
   }
 
   function applyAction(action: StudioAction) {
@@ -112,6 +137,9 @@ export function Workspace() {
       case "preset-compare":
         applyPreset("compare");
         break;
+      case "preset-map":
+        applyPreset("map");
+        break;
       case "view-compact":
         setViewMode("compact");
         break;
@@ -120,6 +148,9 @@ export function Workspace() {
         break;
       case "view-timeline":
         setViewMode("timeline");
+        break;
+      case "view-map":
+        setViewMode("map");
         break;
       case "toggle-inspector":
         setPanelMode((current) => (current === "hidden" ? "docked" : "hidden"));
@@ -243,6 +274,43 @@ export function Workspace() {
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {preset === "compare" ? (
           <ComparePane pair={comparePair} onClear={() => setSelectedIds([])} />
+        ) : preset === "map" ? (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <MediaMap
+              items={visible}
+              primaryId={primaryId}
+              onOpen={openItem}
+              onRegion={applyRegion}
+              onCluster={applyCluster}
+              className="min-h-[220px] flex-[1.4]"
+            />
+            <MediaStage
+              className={
+                viewMode === "map"
+                  ? "shrink-0 border-t border-line"
+                  : "min-h-0 flex-1 border-t border-line"
+              }
+              items={visible}
+              total={items.length}
+              viewMode={viewMode}
+              onViewMode={setViewMode}
+              selectedIds={selectedIds}
+              primaryId={primaryId}
+              onOpen={openItem}
+              onToggle={toggleItem}
+              onRate={rate}
+              onFlag={flag}
+              onClearFilters={() => setFilters([])}
+              filteredEmpty={visible.length === 0}
+              onShowInfo={() => {
+                setPanelMode("docked");
+                setPanelCollapsed(false);
+              }}
+              onRegion={applyRegion}
+              onCluster={applyCluster}
+              mapDocked
+            />
+          </div>
         ) : (
           <MediaStage
             items={visible}
@@ -261,6 +329,8 @@ export function Workspace() {
               setPanelMode("docked");
               setPanelCollapsed(false);
             }}
+            onRegion={applyRegion}
+            onCluster={applyCluster}
           />
         )}
         {panelMode === "docked" ? (
