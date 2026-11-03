@@ -17,6 +17,7 @@ type TopBarProps = {
   onExport: () => void;
   indexOpen: boolean;
   onIndexOpen: (open: boolean) => void;
+  onPreferences: () => void;
   inputRef: RefObject<HTMLInputElement | null>;
 };
 
@@ -41,6 +42,7 @@ export function TopBar({
   onExport,
   indexOpen,
   onIndexOpen,
+  onPreferences,
   inputRef,
 }: TopBarProps) {
   const [open, setOpen] = useState(false);
@@ -198,6 +200,13 @@ export function TopBar({
                 label="AI indexing"
                 onClick={() => {
                   onIndexOpen(true);
+                  setMenuOpen(false);
+                }}
+              />
+              <MenuRow
+                label="Preferences"
+                onClick={() => {
+                  onPreferences();
                   setMenuOpen(false);
                 }}
               />

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AddMediaModal } from "../components/drawers/AddMediaModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
+import { MapPackPrompt, PreferencesModal } from "../components/drawers/PreferencesModal";
 import { InspectorPanel } from "../components/panels/InspectorPanel";
 import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
@@ -8,6 +9,7 @@ import { ComparePane } from "../components/workspace/ComparePane";
 import { MediaMap } from "../components/workspace/MediaMap";
 import { MediaStage } from "../components/workspace/MediaStage";
 import { createCatalog, inventItems, nextFlag } from "./catalog";
+import { mapPromptSeen, markMapPromptSeen } from "./mapLibrary";
 import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
 import type {
   ActiveFilter,
@@ -44,7 +46,8 @@ export function Workspace() {
   const [panelPosition, setPanelPosition] = useState({ x: 64, y: 72 });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
-  const [modal, setModal] = useState<"add" | "export" | null>(null);
+  const [modal, setModal] = useState<"add" | "export" | "preferences" | null>(null);
+  const [mapPrompt, setMapPrompt] = useState(false);
   const [indexOpen, setIndexOpen] = useState(false);
   const [telemetry, setTelemetry] = useState<Telemetry>(INITIAL_TELEMETRY);
 
@@ -74,6 +77,7 @@ export function Workspace() {
         target instanceof HTMLSelectElement;
       if (event.key === "Escape") {
         setModal(null);
+        dismissMapPrompt();
         if (panelMode === "floating") setPanelMode("hidden");
         return;
       }
@@ -84,14 +88,37 @@ export function Workspace() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [modal, panelMode, primaryId]);
+  }, [modal, panelMode, primaryId, mapPrompt]);
 
   function applyPreset(next: LayoutPreset) {
     setPreset(next);
     setPanelCollapsed(false);
     if (next === "inspect") setPanelMode("docked");
     else setPanelMode("hidden");
-    if (next === "map") setViewMode("map");
+    if (next === "map") {
+      setViewMode("map");
+      offerMapPacks();
+    }
+  }
+
+  function chooseView(mode: ViewMode) {
+    setViewMode(mode);
+    if (mode === "map") offerMapPacks();
+  }
+
+  function offerMapPacks() {
+    if (!mapPromptSeen()) setMapPrompt(true);
+  }
+
+  function dismissMapPrompt() {
+    if (!mapPrompt) return;
+    markMapPromptSeen();
+    setMapPrompt(false);
+  }
+
+  function openPreferences() {
+    dismissMapPrompt();
+    setModal("preferences");
   }
 
   function revealMapGrid() {
@@ -141,16 +168,19 @@ export function Workspace() {
         applyPreset("map");
         break;
       case "view-compact":
-        setViewMode("compact");
+        chooseView("compact");
         break;
       case "view-cards":
-        setViewMode("cards");
+        chooseView("cards");
         break;
       case "view-timeline":
-        setViewMode("timeline");
+        chooseView("timeline");
         break;
       case "view-map":
-        setViewMode("map");
+        chooseView("map");
+        break;
+      case "preferences":
+        openPreferences();
         break;
       case "toggle-inspector":
         setPanelMode((current) => (current === "hidden" ? "docked" : "hidden"));
@@ -268,6 +298,7 @@ export function Workspace() {
         onExport={() => setModal("export")}
         indexOpen={indexOpen}
         onIndexOpen={setIndexOpen}
+        onPreferences={openPreferences}
         inputRef={inputRef}
       />
 
@@ -293,7 +324,7 @@ export function Workspace() {
               items={visible}
               total={items.length}
               viewMode={viewMode}
-              onViewMode={setViewMode}
+              onViewMode={chooseView}
               selectedIds={selectedIds}
               primaryId={primaryId}
               onOpen={openItem}
@@ -316,7 +347,7 @@ export function Workspace() {
             items={visible}
             total={items.length}
             viewMode={viewMode}
-            onViewMode={setViewMode}
+            onViewMode={chooseView}
             selectedIds={selectedIds}
             primaryId={primaryId}
             onOpen={openItem}
@@ -364,9 +395,13 @@ export function Workspace() {
         />
       ) : null}
 
-      <TelemetryBar telemetry={telemetry} />
+      <TelemetryBar telemetry={telemetry} onPreferences={openPreferences} />
 
       {modal === "add" ? <AddMediaModal onClose={() => setModal(null)} onAdd={addMedia} /> : null}
+      {modal === "preferences" ? <PreferencesModal onClose={() => setModal(null)} /> : null}
+      {mapPrompt ? (
+        <MapPackPrompt onClose={dismissMapPrompt} onOpenPreferences={openPreferences} />
+      ) : null}
       {modal === "export" ? (
         <BatchExportModal
           count={selectedIds.length}

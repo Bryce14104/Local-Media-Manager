@@ -23,6 +23,7 @@ const ACTIONS: { action: StudioAction; label: string; hint: string; keywords: st
   { action: "view-map", label: "View: Map", hint: "Pins for the roll", keywords: "view map geo gps" },
   { action: "toggle-inspector", label: "Toggle info panel", hint: "Dock, float, or hide", keywords: "toggle inspector info panel exif" },
   { action: "clear-filters", label: "Clear filters", hint: "Show the full roll", keywords: "clear filters reset" },
+  { action: "preferences", label: "Preferences", hint: "Download or clear map packs", keywords: "preferences settings map tiles download cache" },
 ];
 
 export function parseQuery(input: string): Filter[] {

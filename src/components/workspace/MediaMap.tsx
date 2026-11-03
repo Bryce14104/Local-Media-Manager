@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { frameBackground, placeName } from "../../studio/catalog";
+import { packById } from "../../studio/mapPacks";
+import { useMapLibrary } from "../../studio/useMapLibrary";
 import {
   clientToWorld,
   fitItems,
@@ -133,7 +135,10 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
     setView(fitItems(items, size));
   }, [ids, items, size]);
 
+  const library = useMapLibrary();
   const unit = size.width > 0 ? view.w / size.width : 1;
+  const detailTiles = view.w < 48 ? library.tiles.filter((tile) => intersectsView(view, tile)) : [];
+  const detailNames = [...new Set(detailTiles.map((tile) => packById(tile.packId)?.name).filter(Boolean))];
   const groups = useMemo(() => groupPins(items, view, size), [items, view, size]);
   const previewItem = preview ? items.find((item) => item.id === preview.id) ?? null : null;
 
@@ -262,6 +267,11 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
       <p className="pointer-events-none absolute left-3 top-12 z-20 text-xs text-mute">
         {tool === "region" ? "Drag a box to filter the grid." : "Click a cluster to filter. Shift-drag selects a region."}
       </p>
+      {detailNames.length > 0 ? (
+        <p className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-full border border-teal/40 bg-studio/80 px-2.5 py-1 text-xs text-teal">
+          Offline detail · {detailNames.join(", ")}
+        </p>
+      ) : null}
 
       <svg
         ref={svgRef}
@@ -279,6 +289,22 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
         {LAND_PATHS.map((path, index) => (
           <path key={index} d={path} fill="#1c222c" stroke="#2c3340" strokeWidth={0.45 * unit} />
         ))}
+        {detailTiles.map((tile) => {
+          const origin = project(tile.west, tile.north);
+          const end = project(tile.east, tile.south);
+          return (
+            <image
+              key={tile.key}
+              href={tile.url}
+              x={origin.x}
+              y={origin.y}
+              width={Math.max(0.01, end.x - origin.x)}
+              height={Math.max(0.01, end.y - origin.y)}
+              preserveAspectRatio="none"
+              style={{ pointerEvents: "none" }}
+            />
+          );
+        })}
         {rubber ? (
           <rect
             x={rubber.x}
@@ -468,6 +494,17 @@ function placeCard(preview: Preview, size: MapSize): { left: number; top: number
   if (top < 8) top = 8;
   if (left < 8) left = 8;
   return { left, top };
+}
+
+function intersectsView(
+  view: MapView,
+  tile: { west: number; south: number; east: number; north: number },
+): boolean {
+  const west = view.x - 180;
+  const east = west + view.w;
+  const north = 90 - view.y;
+  const south = north - view.h;
+  return tile.west < east && tile.east > west && tile.south < north && tile.north > south;
 }
 
 function average(values: number[]): number {

@@ -68,7 +68,7 @@ Start the Vite UI on <http://127.0.0.1:1420>:
 npm run dev
 ```
 
-That page is the studio. The grid, command palette, inspector, map, and telemetry run on a mock catalog, so the layout can be tried in a browser. Press Ctrl+K or Cmd+K to filter. `type:raw`, `rating:>=4`, `camera:`, and `date:2026-03` are the filter forms. Map, in the view switcher or the layout presets, plots each frame from its mock GPS fix. Drag a region or click a cluster to filter the grid. A pin opens a preview card.
+That page is the studio. The grid, command palette, inspector, map, and telemetry run on a mock catalog, so the layout can be tried in a browser. Press Ctrl+K or Cmd+K to filter. `type:raw`, `rating:>=4`, `camera:`, and `date:2026-03` are the filter forms. Map, in the view switcher or the layout presets, plots each frame from its mock GPS fix. Drag a region or click a cluster to filter the grid. A pin opens a preview card. The first time you open Map, Shelf offers regional detail packs. Preferences, in the footer, downloads or clears those packs. They are built in the browser and stored locally. No map server is contacted.
 
 ```bash
 npm run tauri dev

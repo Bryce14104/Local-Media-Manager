@@ -62,10 +62,12 @@ export function Modal({
   title,
   onClose,
   children,
+  wide = false,
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  wide?: boolean;
 }) {
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onMouseDown={onClose}>
@@ -73,7 +75,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="w-full max-w-md rounded-2xl border border-line bg-card p-5"
+        className={`w-full rounded-2xl border border-line bg-card p-5 ${wide ? "max-w-lg" : "max-w-md"}`}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <h2 className="text-lg font-medium">{title}</h2>

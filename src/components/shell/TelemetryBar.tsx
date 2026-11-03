@@ -1,6 +1,12 @@
 import type { Telemetry } from "../../studio/types";
 
-export function TelemetryBar({ telemetry }: { telemetry: Telemetry }) {
+export function TelemetryBar({
+  telemetry,
+  onPreferences,
+}: {
+  telemetry: Telemetry;
+  onPreferences: () => void;
+}) {
   const scanning = telemetry.scanProgress != null && telemetry.scanProgress < 1;
   return (
     <footer className="relative border-t border-line bg-card">
@@ -19,6 +25,13 @@ export function TelemetryBar({ telemetry }: { telemetry: Telemetry }) {
           {telemetry.storageUsed} indexed · {telemetry.storageFree} free
         </span>
         {telemetry.exportLabel ? <span className="truncate text-teal">{telemetry.exportLabel}</span> : null}
+        <button
+          type="button"
+          onClick={onPreferences}
+          className="shrink-0 rounded-full border border-line px-2.5 py-0.5 text-[11px] text-foam hover:border-teal hover:text-teal"
+        >
+          Preferences
+        </button>
       </div>
     </footer>
   );

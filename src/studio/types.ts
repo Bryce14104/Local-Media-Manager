@@ -28,7 +28,8 @@ export type StudioAction =
   | "view-timeline"
   | "view-map"
   | "toggle-inspector"
-  | "clear-filters";
+  | "clear-filters"
+  | "preferences";
 
 export type StudioItem = {
   id: string;
