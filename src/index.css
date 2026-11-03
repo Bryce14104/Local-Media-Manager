@@ -1,6 +1,3 @@
-@import "@fontsource/literata/400.css";
-@import "@fontsource/literata/600.css";
-@import "@fontsource/literata/700.css";
 @import "@fontsource/outfit/400.css";
 @import "@fontsource/outfit/500.css";
 @import "@fontsource/outfit/600.css";
@@ -8,27 +5,28 @@
 
 @theme {
   --font-sans: "Outfit", "Avenir Next", "Segoe UI", sans-serif;
-  --font-serif: "Literata", "Iowan Old Style", Palatino, Georgia, serif;
-  --color-paper: #efe8da;
-  --color-paper-deep: #e4d8c4;
-  --color-ink: #221c16;
-  --color-ink-soft: #5e564c;
-  --color-brass: #8d5a2b;
-  --color-moss: #1f3f36;
-  --color-moss-bright: #2f6b56;
-  --color-line: #d9cdb8;
-  --color-danger: #8d3b32;
+  --font-mono: "IBM Plex Mono", "ui-monospace", "SFMono-Regular", Menlo, Consolas, monospace;
+  --color-studio: #0f1115;
+  --color-card: #171b22;
+  --color-raised: #1e242e;
+  --color-line: #2c3340;
+  --color-foam: #e7e9ee;
+  --color-mute: #8d95a6;
+  --color-teal: #2ee0c5;
+  --color-teal-ink: #06221d;
+  --color-danger: #f07178;
+  --color-gold: #e6c15a;
 }
 
 html,
 body,
 #root {
-  min-height: 100%;
+  height: 100%;
 }
 
 body {
   margin: 0;
-  background: var(--color-paper);
-  color: var(--color-ink);
+  background: var(--color-studio);
+  color: var(--color-foam);
   font-family: var(--font-sans);
 }

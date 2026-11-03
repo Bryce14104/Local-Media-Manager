@@ -7,9 +7,10 @@ The desktop shell is [Tauri 2](https://tauri.app/). The backend is Rust. The int
 ## Layout
 
 ```text
-src/                          React UI
-src/components/               Library, scan, and storage screens
-src/lib/api.ts                Tauri commands used by the UI
+src/                          React studio
+src/studio/                   Mock catalog, filters, and workspace state
+src/components/               Command bar, grids, inspector, and dialogs
+src/lib/api.ts                Tauri commands kept for the Rust catalog
 src-tauri/src/lib.rs          App startup. Opens library.sqlite.
 src-tauri/src/commands.rs     Commands the UI can call
 src-tauri/src/db/schema.sql   SQLite initialization script
@@ -67,13 +68,13 @@ Start the Vite UI on <http://127.0.0.1:1420>:
 npm run dev
 ```
 
-That page is the interface. A normal browser tab cannot open the native folder dialog or the SQLite file. Use the desktop shell for that:
+That page is the studio. The grid, command palette, inspector, and telemetry run on a mock catalog, so the layout can be tried in a browser. Press Ctrl+K or Cmd+K to filter. `type:raw`, `rating:>=4`, `camera:`, and `date:2026-03` are the filter forms.
 
 ```bash
 npm run tauri dev
 ```
 
-`npm run tauri dev` starts Vite and opens the Shelf window. Choose **Scan**, browse to a folder, and the library fills from `library.sqlite` in the operating system’s app-data directory.
+`npm run tauri dev` opens the same studio in a desktop window. The Rust catalog in `src-tauri` still creates `library.sqlite` on launch. The studio screen does not read that file yet.
 
 `npm run test:rust` and `npm run check:rust` are the same Cargo commands as above.
 

@@ -1,0 +1,77 @@
+export type MediaFormat = "raw" | "jpg" | "video";
+
+export type FlagStatus = "unflagged" | "pick" | "reject";
+
+export type ViewMode = "compact" | "cards" | "timeline";
+
+export type LayoutPreset = "browse" | "inspect" | "compare";
+
+export type PanelMode = "docked" | "floating" | "hidden";
+
+export type StudioAction =
+  | "add-media"
+  | "batch-export"
+  | "index-status"
+  | "preset-browse"
+  | "preset-inspect"
+  | "preset-compare"
+  | "view-compact"
+  | "view-cards"
+  | "view-timeline"
+  | "toggle-inspector"
+  | "clear-filters";
+
+export type StudioItem = {
+  id: string;
+  fileName: string;
+  folder: string;
+  capturedAt: string;
+  camera: string;
+  lens: string;
+  rating: number | null;
+  flag: FlagStatus;
+  format: MediaFormat;
+  fileSize: number;
+  iso: number | null;
+  shutter: string | null;
+  aperture: string | null;
+  focalLength: string | null;
+  width: number | null;
+  height: number | null;
+  hash: string;
+  histogram: number[];
+};
+
+export type Filter =
+  | { kind: "rating"; op: ">=" | "="; value: number }
+  | { kind: "type"; value: MediaFormat }
+  | { kind: "camera"; value: string }
+  | { kind: "date"; value: string }
+  | { kind: "flag"; value: Exclude<FlagStatus, "unflagged"> | "unflagged" }
+  | { kind: "text"; value: string };
+
+export type ActiveFilter = Filter & { id: string };
+
+export type Suggestion = {
+  id: string;
+  label: string;
+  hint: string;
+} & (
+  | { type: "action"; action: StudioAction }
+  | { type: "filters"; filters: Filter[] }
+);
+
+export type Telemetry = {
+  scanLabel: string;
+  scanProgress: number | null;
+  syncLabel: string;
+  storageUsed: string;
+  storageFree: string;
+  exportLabel: string | null;
+};
+
+export type IndexJob = {
+  name: string;
+  detail: string;
+  progress: number;
+};
