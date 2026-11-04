@@ -11,8 +11,7 @@ const TILE_STORE = "slippy";
 const REGION_STORE = "regions";
 const MIN_ZOOM = 2;
 const MAX_ZOOM = 14;
-const MAX_TILES = 48;
-const TOP_LEVEL_BUDGET = 32;
+export const TILE_BUDGET = 480;
 const MAX_LAT = 85.05112878;
 const FETCH_CONCURRENCY = 4;
 
@@ -44,6 +43,8 @@ export type TilePlan = {
   tiles: PlannedTile[];
   minZoom: number;
   maxZoom: number;
+  needed: number;
+  overBudget: boolean;
 };
 
 export type MapTile = {
@@ -108,36 +109,45 @@ export function loadMapLibrary(): Promise<void> {
   return loadTask;
 }
 
-export function planRegion(bounds: GeoBounds): TilePlan {
+export function planRegion(bounds: GeoBounds, maxZoom = 12): TilePlan {
+  const zoom = clamp(Math.round(maxZoom), MIN_ZOOM, MAX_ZOOM);
   const box = normalizeBounds(bounds);
-  if (!box) return { tiles: [], minZoom: 0, maxZoom: 0 };
-  const counts = new Map<number, number>();
-  for (let zoom = MIN_ZOOM; zoom <= MAX_ZOOM; zoom += 1) counts.set(zoom, countTiles(box, zoom));
-  let maxZoom = highestZoom(counts, TOP_LEVEL_BUDGET);
-  if (maxZoom < 0) maxZoom = highestZoom(counts, MAX_TILES);
-  if (maxZoom < 0) return { tiles: [], minZoom: 0, maxZoom: 0 };
-  const tiles: PlannedTile[] = [];
-  let minZoom = maxZoom;
-  for (let zoom = maxZoom; zoom >= MIN_ZOOM; zoom -= 1) {
-    const level = tilesAtZoom(box, zoom);
-    if (tiles.length + level.length > MAX_TILES) break;
-    tiles.push(...level);
-    minZoom = zoom;
+  if (!box) return { tiles: [], minZoom: 0, maxZoom: zoom, needed: 0, overBudget: false };
+  const needed = countTiles(box, zoom);
+  if (needed === 0) return { tiles: [], minZoom: 0, maxZoom: zoom, needed: 0, overBudget: false };
+  if (needed > TILE_BUDGET) return { tiles: [], minZoom: 0, maxZoom: zoom, needed, overBudget: true };
+  const tiles = tilesAtZoom(box, zoom);
+  let minZoom = zoom;
+  for (let level = zoom - 1; level >= MIN_ZOOM; level -= 1) {
+    const count = countTiles(box, level);
+    if (count === 0 || tiles.length + count > TILE_BUDGET) continue;
+    tiles.push(...tilesAtZoom(box, level));
+    minZoom = level;
   }
-  return { tiles, minZoom, maxZoom };
+  return { tiles, minZoom, maxZoom: zoom, needed, overBudget: false };
 }
 
-export async function cacheRegion(bounds: GeoBounds): Promise<void> {
+export async function cacheRegion(
+  bounds: GeoBounds,
+  options?: { maxZoom?: number; label?: string },
+): Promise<void> {
   await loadMapLibrary();
   if (snapshot.job) await waitForIdle();
-  const plan = planRegion(bounds);
+  const plan = planRegion(bounds, options?.maxZoom);
+  if (plan.overBudget) {
+    publish({
+      ...snapshot,
+      error: `Zoom ${plan.maxZoom} needs ${plan.needed} tiles. The limit is ${TILE_BUDGET}. Lower the maximum zoom or shrink the region.`,
+    });
+    return;
+  }
   if (plan.tiles.length === 0) {
-    publish({ ...snapshot, error: "That box does not cover any map tiles." });
+    publish({ ...snapshot, error: "That region does not cover any map tiles." });
     return;
   }
   const generation = libraryGeneration;
   const id = `region-${Date.now()}`;
-  const label = regionLabel(bounds);
+  const label = options?.label?.trim() || regionLabel(bounds);
   const abort = new AbortController();
   activeAbort = abort;
   publish({
@@ -469,14 +479,6 @@ function normalizeBounds(bounds: GeoBounds): GeoBounds | null {
   return { west, south, east, north };
 }
 
-function highestZoom(counts: Map<number, number>, limit: number): number {
-  for (let zoom = MAX_ZOOM; zoom >= MIN_ZOOM; zoom -= 1) {
-    const count = counts.get(zoom) ?? 0;
-    if (count > 0 && count <= limit) return zoom;
-  }
-  return -1;
-}
-
 function countTiles(bounds: GeoBounds, zoom: number): number {
   const range = tileRange(bounds, zoom);
   if (!range) return 0;
@@ -485,7 +487,7 @@ function countTiles(bounds: GeoBounds, zoom: number): number {
 
 function tilesAtZoom(bounds: GeoBounds, zoom: number): PlannedTile[] {
   const range = tileRange(bounds, zoom);
-  if (!range || range.xCount * range.yCount > MAX_TILES) return [];
+  if (!range || range.xCount * range.yCount > TILE_BUDGET) return [];
   const tiles: PlannedTile[] = [];
   for (let x = range.x0; x <= range.x1; x += 1) {
     for (let y = range.y0; y <= range.y1; y += 1) {

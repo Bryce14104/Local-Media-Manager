@@ -68,7 +68,7 @@ Start the Vite UI on <http://127.0.0.1:1420>:
 npm run dev
 ```
 
-That page is the studio. The grid, command palette, inspector, map, and telemetry run on a mock catalog, so the layout can be tried in a browser. Press Ctrl+K or Cmd+K to filter. `type:raw`, `rating:>=4`, `camera:`, and `date:2026-03` are the filter forms. Map, in the view switcher or the layout presets, plots each frame from its mock GPS fix. Drag a region or click a cluster to filter the grid. A pin opens a preview card. Cache region lets you drag any bounding box; after you confirm, Shelf fetches that box from the Esri dark basemap and stores the tiles in this browser for offline zoom. Preferences lists those regions and can clear them. Tiles are requested only after confirmation.
+That page is the studio. The grid, command palette, inspector, map, and telemetry run on a mock catalog, so the layout can be tried in a browser. Press Ctrl+K or Cmd+K to filter. `type:raw`, `rating:>=4`, `camera:`, and `date:2026-03` are the filter forms. Map, in the view switcher or the layout presets, plots each frame from its mock GPS fix. A thumbnail tray along the bottom stays in step with the pins: choose a frame to center its pin, or choose a pin to highlight its frame. Drag a region or click a cluster to filter the grid. Preferences downloads a named or custom region at a maximum zoom you choose, from overview through street detail, and stores those Esri dark-basemap tiles in this browser. Tiles are requested only when you start the download.
 
 ```bash
 npm run tauri dev

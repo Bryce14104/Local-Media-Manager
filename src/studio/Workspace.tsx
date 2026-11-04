@@ -287,6 +287,27 @@ export function Workspace() {
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {preset === "compare" ? (
           <ComparePane pair={comparePair} onClear={() => setSelectedIds([])} />
+        ) : preset === "map" && viewMode === "map" ? (
+          <MediaStage
+            items={visible}
+            total={items.length}
+            viewMode={viewMode}
+            onViewMode={chooseView}
+            selectedIds={selectedIds}
+            primaryId={primaryId}
+            onOpen={openItem}
+            onToggle={toggleItem}
+            onRate={rate}
+            onFlag={flag}
+            onClearFilters={() => setFilters([])}
+            filteredEmpty={visible.length === 0}
+            onShowInfo={() => {
+              setPanelMode("docked");
+              setPanelCollapsed(false);
+            }}
+            onRegion={applyRegion}
+            onCluster={applyCluster}
+          />
         ) : preset === "map" ? (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             <MediaMap

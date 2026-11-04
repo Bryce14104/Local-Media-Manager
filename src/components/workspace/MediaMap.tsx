@@ -14,7 +14,7 @@ import {
   type MapSize,
   type MapView,
 } from "../../studio/geo";
-import { TILE_ATTRIBUTION, cacheRegion, planRegion, type MapTile } from "../../studio/mapLibrary";
+import { TILE_ATTRIBUTION, type MapTile } from "../../studio/mapLibrary";
 import { useMapLibrary } from "../../studio/useMapLibrary";
 import { LAND_PATHS } from "../../studio/land";
 import { formatLabel } from "../../studio/query";
@@ -23,17 +23,16 @@ import type { GeoBounds, StudioItem } from "../../studio/types";
 type MediaMapProps = {
   items: StudioItem[];
   primaryId: string | null;
+  focusRequest?: { id: string; nonce: number } | null;
   onOpen: (id: string) => void;
   onRegion: (bounds: GeoBounds) => void;
   onCluster: (ids: string[], label: string) => void;
   className?: string;
 };
 
-type Tool = "pan" | "region" | "cache";
+type Tool = "pan" | "region";
 
 type WorldBox = { x: number; y: number; w: number; h: number };
-
-type CacheDraft = { bounds: GeoBounds; box: WorldBox };
 
 type Preview = {
   id: string;
@@ -57,17 +56,15 @@ type Cluster = {
 
 const CLUSTER_RADIUS = 36;
 
-export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, className }: MediaMapProps) {
+export function MediaMap({ items, primaryId, focusRequest, onOpen, onRegion, onCluster, className }: MediaMapProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const fitted = useRef<string | null>(null);
   const [size, setSize] = useState<MapSize>({ width: 0, height: 0 });
   const [view, setView] = useState<MapView>(() => fitWorld({ width: 16, height: 9 }));
   const [tool, setTool] = useState<Tool>("pan");
   const [rubber, setRubber] = useState<WorldBox | null>(null);
-  const [draft, setDraft] = useState<CacheDraft | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
   const library = useMapLibrary();
-  const jobRegion = useRef<string | null>(null);
   const viewRef = useRef(view);
   const sizeRef = useRef(size);
   viewRef.current = view;
@@ -119,7 +116,6 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
     function onKey(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       setPreview(null);
-      setDraft(null);
       setRubber(null);
     }
     window.addEventListener("keydown", onKey);
@@ -147,19 +143,13 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
   }, [ids, items, size]);
 
   useEffect(() => {
-    if (library.job) {
-      jobRegion.current = library.job.regionId;
-      return;
-    }
-    const finished = jobRegion.current;
-    if (!finished) return;
-    jobRegion.current = null;
-    const region = library.regions.find((item) => item.id === finished);
+    if (!focusRequest?.id) return;
+    const item = items.find((entry) => entry.id === focusRequest.id);
     const box = sizeRef.current;
-    if (!region || box.width < 10 || box.height < 10) return;
-    fitted.current = ids;
-    setView(frameBounds(region, box));
-  }, [ids, library.job, library.regions]);
+    if (!item || box.width < 10 || box.height < 10) return;
+    setView(frameAround(item, box));
+    setPreview((current) => (current && current.id !== item.id ? null : current));
+  }, [focusRequest, items]);
 
   const unit = size.width > 0 ? view.w / size.width : 1;
   const detailTiles = useMemo(() => visibleTiles(library.tiles, view, size), [library.tiles, view, size]);
@@ -170,7 +160,6 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
       ),
     ),
   ];
-  const plan = draft ? planRegion(draft.bounds) : null;
   const groups = useMemo(() => groupPins(items, view, size), [items, view, size]);
   const previewItem = preview ? items.find((item) => item.id === preview.id) ?? null : null;
 
@@ -239,21 +228,11 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
     if (!current) return;
     if (!current.moved || !current.box || current.box.w <= 0.2 || current.box.h <= 0.2) {
       if (!current.moved) setPreview(null);
-      setRubber(draft?.box ?? null);
+      setRubber(null);
       return;
     }
-    const box = current.box;
-    if (current.mode === "region") {
-      onRegion(boundsFromBox(box));
-      setRubber(draft?.box ?? null);
-      return;
-    }
-    if (current.mode === "cache" && !library.job) {
-      setDraft({ bounds: boundsFromBox(box), box });
-      setRubber(box);
-      return;
-    }
-    setRubber(draft?.box ?? null);
+    if (current.mode === "region") onRegion(boundsFromBox(current.box));
+    setRubber(null);
   }
 
   function zoomBy(factor: number) {
@@ -273,7 +252,6 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
             [
               ["pan", "Pan", "Pan the map"],
               ["region", "Region", "Drag a box to filter the grid"],
-              ["cache", "Cache region", "Select region to cache"],
             ] as const
           ).map(([mode, label, description]) => (
             <button
@@ -310,87 +288,16 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
         </button>
         </div>
         <p className="pointer-events-none max-w-xs text-xs text-mute">
-          {tool === "region"
-            ? "Drag a box to filter the grid."
-            : tool === "cache"
-              ? "Drag a box to download map tiles."
-              : "Click a cluster to filter. Shift-drag selects a region."}
+          {tool === "region" ? "Drag a box to filter the grid." : "Click a pin to highlight its frame. Shift-drag selects a region."}
         </p>
       </div>
-      {detailNames.length > 0 && !draft && !library.job ? (
+      {detailNames.length > 0 ? (
         <p className="pointer-events-none absolute bottom-3 left-3 z-20 max-w-[14rem] rounded-full border border-teal/40 bg-studio/80 px-2.5 py-1 text-xs text-teal">
           Offline tiles · {detailNames.join(", ")}
         </p>
       ) : null}
-      {detailTiles.length > 0 && !draft && !library.job ? (
+      {detailTiles.length > 0 ? (
         <p className="pointer-events-none absolute bottom-3 right-3 z-20 max-w-[12rem] text-right text-[10px] leading-snug text-mute">{TILE_ATTRIBUTION}</p>
-      ) : null}
-      {library.error && !draft && !library.job ? (
-        <p className="absolute bottom-3 left-1/2 z-30 w-[min(24rem,calc(100%-1.5rem))] -translate-x-1/2 rounded-2xl border border-line bg-card/95 px-3 py-2 text-sm text-danger">
-          {library.error}
-        </p>
-      ) : null}
-      {draft && plan ? (
-        <div
-          role="dialog"
-          aria-label="Download bounding box"
-          className="absolute bottom-3 left-1/2 z-30 w-[min(24rem,calc(100%-1.5rem))] -translate-x-1/2 rounded-2xl border border-line bg-card/95 p-3 shadow-2xl shadow-black/40"
-        >
-          <h2 className="text-sm font-medium">Download bounding box</h2>
-          <p className="mt-1 text-xs text-mute">
-            {formatLatitude(draft.bounds.south)}–{formatLatitude(draft.bounds.north)}, {formatLongitude(draft.bounds.west)}–
-            {formatLongitude(draft.bounds.east)}
-          </p>
-          <p className="mt-1 text-xs text-mute">
-            {plan.tiles.length === 0
-              ? "That box does not cover any map tiles."
-              : `${plan.tiles.length} tiles · zoom ${plan.minZoom === plan.maxZoom ? plan.maxZoom : `${plan.minZoom}–${plan.maxZoom}`}`}
-          </p>
-          <p className="mt-2 text-xs text-mute">
-            Shelf requests these tiles once from the Esri dark basemap and stores them in this browser.
-          </p>
-          <p className="mt-1 text-[10px] text-mute">{TILE_ATTRIBUTION}</p>
-          <div className="mt-3 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setDraft(null);
-                setRubber(null);
-              }}
-              className="rounded-full px-3 py-1.5 text-xs text-mute hover:text-foam"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={plan.tiles.length === 0 || library.job != null}
-              onClick={() => {
-                const bounds = draft.bounds;
-                setDraft(null);
-                setRubber(null);
-                void cacheRegion(bounds);
-              }}
-              className="rounded-full bg-teal px-3 py-1.5 text-xs font-medium text-teal-ink disabled:opacity-40"
-            >
-              Download tiles
-            </button>
-          </div>
-        </div>
-      ) : null}
-      {library.job ? (
-        <div
-          role="status"
-          className="absolute bottom-3 left-1/2 z-30 w-[min(24rem,calc(100%-1.5rem))] -translate-x-1/2 rounded-2xl border border-line bg-card/95 p-3 shadow-2xl shadow-black/40"
-        >
-          <p className="text-sm">Downloading {library.job.label}</p>
-          <p className="mt-1 font-mono text-[10px] text-teal">
-            {library.job.done}/{library.job.total}
-          </p>
-          <div className="mt-2 h-1 overflow-hidden rounded-full bg-line">
-            <div className="h-full bg-teal" style={{ width: `${Math.round((library.job.done / Math.max(library.job.total, 1)) * 100)}%` }} />
-          </div>
-          <p className="mt-2 text-[10px] text-mute">{TILE_ATTRIBUTION}</p>
-        </div>
       ) : null}
 
       <svg
@@ -483,10 +390,15 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
               style={{ pointerEvents: tool === "pan" ? "auto" : "none" }}
               onClick={(event) => {
                 event.stopPropagation();
-                setPreview({ id: pin.item.id, x: pin.x, y: pin.y });
+                const box = sizeRef.current;
+                setView(frameAround(pin.item, box));
+                setPreview({ id: pin.item.id, x: box.width / 2, y: box.height / 2 });
                 onOpen(pin.item.id);
               }}
             >
+              {active ? (
+                <circle cx={point.x} cy={point.y} r={14 * unit} fill="none" stroke="#2ee0c5" strokeWidth={1.2 * unit} opacity={0.7} />
+              ) : null}
               <circle
                 cx={point.x}
                 cy={point.y}
@@ -614,6 +526,18 @@ function placeCard(preview: Preview, size: MapSize): { left: number; top: number
   if (top < 8) top = 8;
   if (left < 8) left = 8;
   return { left, top };
+}
+
+function frameAround(item: { latitude: number; longitude: number }, size: MapSize): MapView {
+  return frameBounds(
+    {
+      west: item.longitude - 0.35,
+      east: item.longitude + 0.35,
+      south: item.latitude - 0.25,
+      north: item.latitude + 0.25,
+    },
+    size,
+  );
 }
 
 function boundsFromBox(box: WorldBox): GeoBounds {

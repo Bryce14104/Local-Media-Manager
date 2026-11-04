@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { formatMonth } from "../../studio/query";
 import type { GeoBounds, StudioItem, ViewMode } from "../../studio/types";
 import { MediaCard } from "./MediaCard";
 import { MediaMap } from "./MediaMap";
+import { MediaTray } from "./MediaTray";
 
 type MediaStageProps = {
   items: StudioItem[];
@@ -49,7 +51,13 @@ export function MediaStage({
   mapDocked = false,
   className,
 }: MediaStageProps) {
+  const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null);
   const showMap = viewMode === "map" && !mapDocked;
+
+  function selectOnMap(id: string) {
+    onOpen(id);
+    setFocus({ id, nonce: Date.now() });
+  }
   return (
     <section className={`flex min-h-0 min-w-0 flex-1 flex-col ${className ?? ""}`}>
       <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -88,16 +96,20 @@ export function MediaStage({
         </div>
       </header>
 
-      <div className={showMap ? "min-h-0 flex-1 overflow-hidden" : "min-h-0 flex-1 overflow-auto px-4 pb-4"}>
+      <div className={showMap ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "min-h-0 flex-1 overflow-auto px-4 pb-4"}>
         {showMap ? (
-          <MediaMap
-            items={items}
-            primaryId={primaryId}
-            onOpen={onOpen}
-            onRegion={onRegion}
-            onCluster={onCluster}
-            className="h-full"
-          />
+          <>
+            <MediaMap
+              items={items}
+              primaryId={primaryId}
+              focusRequest={focus}
+              onOpen={selectOnMap}
+              onRegion={onRegion}
+              onCluster={onCluster}
+              className="min-h-0 flex-1"
+            />
+            <MediaTray items={items} primaryId={primaryId} onSelect={selectOnMap} />
+          </>
         ) : filteredEmpty ? (
           <div className="rounded-2xl border border-dashed border-line px-5 py-12 text-center">
             <p className="text-sm">No frames match these filters.</p>
