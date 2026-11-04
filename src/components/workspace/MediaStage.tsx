@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { gridMetrics } from "../../studio/gridZoom";
 import { formatMonth } from "../../studio/query";
 import type { GeoBounds, StudioItem, ViewMode } from "../../studio/types";
 import { MediaCard } from "./MediaCard";
@@ -9,6 +10,7 @@ type MediaStageProps = {
   items: StudioItem[];
   total: number;
   viewMode: ViewMode;
+  gridZoom: number;
   selectedIds: string[];
   primaryId: string | null;
   onOpen: (id: string) => void;
@@ -29,6 +31,7 @@ export function MediaStage({
   items,
   total,
   viewMode,
+  gridZoom,
   selectedIds,
   primaryId,
   onOpen,
@@ -94,6 +97,8 @@ export function MediaStage({
         ) : viewMode === "timeline" ? (
           <Timeline
             items={items}
+            zoom={gridZoom}
+            detail="compact"
             selectedIds={selectedIds}
             primaryId={primaryId}
             onOpen={onOpen}
@@ -104,7 +109,8 @@ export function MediaStage({
         ) : (
           <Grid
             items={items}
-            density={viewMode === "compact" ? "compact" : "card"}
+            zoom={gridZoom}
+            detail={viewMode === "cards" ? "card" : "compact"}
             selectedIds={selectedIds}
             primaryId={primaryId}
             onOpen={onOpen}
@@ -120,7 +126,8 @@ export function MediaStage({
 
 function Grid({
   items,
-  density,
+  zoom,
+  detail,
   selectedIds,
   primaryId,
   onOpen,
@@ -129,7 +136,8 @@ function Grid({
   onFlag,
 }: {
   items: StudioItem[];
-  density: "compact" | "card";
+  zoom: number;
+  detail: "compact" | "card";
   selectedIds: string[];
   primaryId: string | null;
   onOpen: (id: string) => void;
@@ -137,17 +145,21 @@ function Grid({
   onRate: (id: string, rating: number | null) => void;
   onFlag: (id: string) => void;
 }) {
-  const columns =
-    density === "compact"
-      ? "grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6"
-      : "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3";
+  const { minPx, gapPx } = gridMetrics(zoom);
   return (
-    <div className={`grid gap-3 ${columns}`}>
+    <div
+      className="grid"
+      style={{
+        gap: gapPx,
+        gridTemplateColumns: `repeat(auto-fill, minmax(min(100%, ${minPx}px), 1fr))`,
+      }}
+    >
       {items.map((item) => (
         <MediaCard
           key={item.id}
           item={item}
-          density={density}
+          zoom={zoom}
+          detail={detail}
           selected={selectedIds.includes(item.id)}
           primary={primaryId === item.id}
           onOpen={() => onOpen(item.id)}
@@ -160,7 +172,7 @@ function Grid({
   );
 }
 
-function Timeline(props: Omit<Parameters<typeof Grid>[0], "density">) {
+function Timeline(props: Omit<Parameters<typeof Grid>[0], "detail"> & { detail: "compact" | "card" }) {
   const groups = new Map<string, StudioItem[]>();
   for (const item of props.items) {
     const key = item.capturedAt.slice(0, 7);
@@ -174,7 +186,7 @@ function Timeline(props: Omit<Parameters<typeof Grid>[0], "density">) {
       {months.map((month) => (
         <section key={month}>
           <h2 className="mb-3 text-xs uppercase tracking-[0.16em] text-mute">{formatMonth(month)}</h2>
-          <Grid {...props} items={groups.get(month) ?? []} density="compact" />
+          <Grid {...props} items={groups.get(month) ?? []} />
         </section>
       ))}
     </div>

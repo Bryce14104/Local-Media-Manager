@@ -68,7 +68,7 @@ Start the Vite UI on <http://127.0.0.1:1420>:
 npm run dev
 ```
 
-That page is the studio. The grid, command palette, inspector, map, and telemetry run on a mock catalog, so the layout can be tried in a browser. Press Ctrl+K or Cmd+K to filter. `type:raw`, `rating:>=4`, `camera:`, and `date:2026-03` are the filter forms. Compact, Cards, Timeline, and Map sit in the top bar. Map opens centered on Australia, with the roll in a panel on the right: choose a frame to center its pin, or choose a pin to bring that frame into view. Drag a region or click a cluster to filter the roll. Preferences sets a maximum zoom, from overview through street detail, then Select area to cache lets you draw that box on the map. Shelf stores the Esri dark-basemap tiles for the box in this browser. Tiles are requested only when you start the download.
+That page is the studio. The grid, command palette, inspector, map, and telemetry run on a mock catalog, so the layout can be tried in a browser. Press Ctrl+K or Cmd+K to filter. `type:raw`, `rating:>=4`, `camera:`, and `date:2026-03` are the filter forms. Compact, Cards, Timeline, and Map sit in the top bar. The status bar slider scales the grid from large preview cards to a dense multi-column layout. Map opens centered on Australia, with the roll in a panel on the right: choose a frame to center its pin, or choose a pin to bring that frame into view. Drag a region or click a cluster to filter the roll. Preferences sets a maximum zoom, from overview through street detail, then Select area to cache lets you draw that box on the map. Shelf stores the Esri dark-basemap tiles for the box in this browser. Tiles are requested only when you start the download.
 
 ```bash
 npm run tauri dev

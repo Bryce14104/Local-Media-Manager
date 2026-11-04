@@ -1,4 +1,5 @@
 import { frameBackground } from "../../studio/catalog";
+import { gridMetrics } from "../../studio/gridZoom";
 import { formatLabel } from "../../studio/query";
 import type { StudioItem } from "../../studio/types";
 import { formatBytes } from "../../lib/format";
@@ -6,7 +7,8 @@ import { Stars } from "./Stars";
 
 type MediaCardProps = {
   item: StudioItem;
-  density: "compact" | "card";
+  zoom: number;
+  detail: "compact" | "card";
   selected: boolean;
   primary: boolean;
   onOpen: () => void;
@@ -17,7 +19,8 @@ type MediaCardProps = {
 
 export function MediaCard({
   item,
-  density,
+  zoom,
+  detail,
   selected,
   primary,
   onOpen,
@@ -25,35 +28,38 @@ export function MediaCard({
   onRate,
   onFlag,
 }: MediaCardProps) {
-  const compact = density === "compact";
+  const { roomy, dense } = gridMetrics(zoom);
+  const showMeta = detail === "card" ? !dense : roomy;
   return (
     <article
-      className={`relative overflow-hidden rounded-xl border bg-card ${
+      className={`group relative overflow-hidden border bg-card ${dense ? "rounded-lg" : "rounded-xl"} ${
         primary ? "border-teal" : selected ? "border-teal/50" : "border-line"
       }`}
     >
       <button type="button" onClick={onOpen} className="block w-full text-left">
         <div
-          className={compact ? "aspect-square" : "aspect-[4/3]"}
+          className={roomy ? "aspect-[4/3]" : "aspect-square"}
           style={{ background: frameBackground(item.id) }}
         />
-        {!compact ? (
-          <div className="space-y-1 px-3 py-3">
-            <p className="truncate text-sm font-medium">{item.fileName}</p>
+        {showMeta ? (
+          <div className={roomy ? "space-y-1 px-3 py-3" : "space-y-0.5 px-2 py-2"}>
+            <p className={`truncate font-medium ${roomy ? "text-sm" : "text-xs"}`}>{item.fileName}</p>
             <p className="truncate text-xs text-mute">
               {item.camera} · {formatBytes(item.fileSize)}
             </p>
           </div>
         ) : (
-          <p className="truncate px-2 py-2 text-xs text-mute">{item.fileName}</p>
+          <p className={`truncate text-mute ${dense ? "px-1.5 py-1 text-[10px]" : "px-2 py-2 text-xs"}`}>{item.fileName}</p>
         )}
       </button>
 
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between gap-2 p-2">
-        <span className="pointer-events-auto rounded-md border border-white/15 bg-studio/75 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-foam">
-          {formatLabel(item.format)}
-        </span>
-        <span className="pointer-events-auto flex items-center gap-1">
+      <div className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between ${dense ? "gap-1 p-1" : "gap-2 p-2"}`}>
+        {dense ? null : (
+          <span className="pointer-events-auto rounded-md border border-white/15 bg-studio/75 px-1.5 py-0.5 font-mono text-[10px] tracking-wide text-foam">
+            {formatLabel(item.format)}
+          </span>
+        )}
+        <span className="pointer-events-auto ml-auto flex items-center gap-1">
           <button
             type="button"
             onPointerDown={(event) => event.stopPropagation()}
@@ -63,7 +69,7 @@ export function MediaCard({
             }}
             aria-label={flagTitle(item.flag)}
             title={flagTitle(item.flag)}
-            className={`grid h-8 w-8 place-items-center rounded-md border text-sm ${flagClass(item.flag)}`}
+            className={`grid place-items-center rounded-md border ${dense ? "h-5 w-5 text-[10px]" : "h-8 w-8 text-sm"} ${flagClass(item.flag)}`}
           >
             {item.flag === "reject" ? "×" : "⚑"}
           </button>
@@ -76,7 +82,7 @@ export function MediaCard({
               onToggle();
             }}
             aria-label={selected ? "Remove from selection" : "Add to selection"}
-            className={`grid h-8 w-8 place-items-center rounded-md border text-sm ${
+            className={`grid place-items-center rounded-md border ${dense ? "h-5 w-5 text-[10px]" : "h-8 w-8 text-sm"} ${
               selected
                 ? "border-teal bg-teal text-teal-ink"
                 : "border-white/20 bg-studio/80 text-foam"
@@ -89,11 +95,11 @@ export function MediaCard({
 
       <div
         className={`pointer-events-none absolute inset-x-0 flex justify-start px-1.5 ${
-          compact ? "bottom-7" : "bottom-[4.4rem]"
-        }`}
+          showMeta ? (roomy ? "bottom-[4.4rem]" : "bottom-12") : "bottom-7"
+        } ${dense ? "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" : ""}`}
       >
         <div className="pointer-events-auto rounded-full bg-studio/80 px-1">
-          <Stars rating={item.rating} onChange={onRate} compact={compact} />
+          <Stars rating={item.rating} onChange={onRate} compact={!roomy} />
         </div>
       </div>
     </article>

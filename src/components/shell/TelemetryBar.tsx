@@ -1,10 +1,15 @@
+import { gridZoomLabel } from "../../studio/gridZoom";
 import type { Telemetry } from "../../studio/types";
 
 export function TelemetryBar({
   telemetry,
+  gridZoom,
+  onGridZoom,
   onPreferences,
 }: {
   telemetry: Telemetry;
+  gridZoom: number;
+  onGridZoom: (zoom: number) => void;
   onPreferences: () => void;
 }) {
   const scanning = telemetry.scanProgress != null && telemetry.scanProgress < 1;
@@ -25,6 +30,26 @@ export function TelemetryBar({
           {telemetry.storageUsed} indexed · {telemetry.storageFree} free
         </span>
         {telemetry.exportLabel ? <span className="truncate text-teal">{telemetry.exportLabel}</span> : null}
+        <label className="ml-auto flex shrink-0 items-center gap-2 text-mute md:ml-0">
+          <span className="sr-only">Grid size</span>
+          <span aria-hidden className="grid h-3 w-3 grid-cols-3 gap-px">
+            {Array.from({ length: 9 }, (_, index) => (
+              <span key={index} className="rounded-[1px] bg-current" />
+            ))}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={1}
+            value={gridZoom}
+            aria-valuetext={gridZoomLabel(gridZoom)}
+            title={gridZoomLabel(gridZoom)}
+            onChange={(event) => onGridZoom(Number(event.target.value))}
+            className="grid-zoom w-20 sm:w-28"
+          />
+          <span aria-hidden className="h-3.5 w-3.5 rounded-[3px] border border-current" />
+        </label>
         <button
           type="button"
           onClick={onPreferences}

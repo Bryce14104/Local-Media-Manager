@@ -8,6 +8,7 @@ import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
 import { MediaStage } from "../components/workspace/MediaStage";
 import { createCatalog, inventItems, nextFlag } from "./catalog";
+import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
 import type { MapZoom } from "./mapRegions";
 import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
 import type {
@@ -39,6 +40,7 @@ export function Workspace() {
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<ActiveFilter[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("compact");
+  const [gridZoom, setGridZoom] = useState(readGridZoom);
   const [preset, setPreset] = useState<LayoutPreset>("browse");
   const [panelMode, setPanelMode] = useState<PanelMode>("hidden");
   const [panelCollapsed, setPanelCollapsed] = useState(false);
@@ -332,6 +334,7 @@ export function Workspace() {
             items={visible}
             total={items.length}
             viewMode={viewMode}
+            gridZoom={gridZoom}
             selectedIds={selectedIds}
             primaryId={primaryId}
             onOpen={openItem}
@@ -378,7 +381,16 @@ export function Workspace() {
         />
       ) : null}
 
-      <TelemetryBar telemetry={telemetry} onPreferences={openPreferences} />
+      <TelemetryBar
+        telemetry={telemetry}
+        gridZoom={gridZoom}
+        onGridZoom={(zoom) => {
+          const next = clampGridZoom(zoom);
+          setGridZoom(next);
+          writeGridZoom(next);
+        }}
+        onPreferences={openPreferences}
+      />
 
       {modal === "add" ? <AddMediaModal onClose={() => setModal(null)} onAdd={addMedia} /> : null}
       {modal === "preferences" ? (

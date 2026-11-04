@@ -30,3 +30,40 @@ body {
   color: var(--color-foam);
   font-family: var(--font-sans);
 }
+
+.grid-zoom {
+  height: 16px;
+  cursor: pointer;
+  appearance: none;
+  background: transparent;
+}
+
+.grid-zoom::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 999px;
+  background: #2c3340;
+}
+
+.grid-zoom::-webkit-slider-thumb {
+  height: 12px;
+  width: 12px;
+  margin-top: -5px;
+  appearance: none;
+  border-radius: 999px;
+  background: #2ee0c5;
+}
+
+.grid-zoom::-moz-range-thumb {
+  height: 12px;
+  width: 12px;
+  border: 0;
+  border-radius: 999px;
+  background: #2ee0c5;
+}
+
+.grid-zoom::-moz-range-track {
+  height: 2px;
+  border: 0;
+  border-radius: 999px;
+  background: #2c3340;
+}
