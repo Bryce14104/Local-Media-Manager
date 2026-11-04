@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AddMediaModal } from "../components/drawers/AddMediaModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
-import { MapPackPrompt, PreferencesModal } from "../components/drawers/PreferencesModal";
+import { PreferencesModal } from "../components/drawers/PreferencesModal";
 import { InspectorPanel } from "../components/panels/InspectorPanel";
 import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
@@ -9,7 +9,6 @@ import { ComparePane } from "../components/workspace/ComparePane";
 import { MediaMap } from "../components/workspace/MediaMap";
 import { MediaStage } from "../components/workspace/MediaStage";
 import { createCatalog, inventItems, nextFlag } from "./catalog";
-import { mapPromptSeen, markMapPromptSeen } from "./mapLibrary";
 import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
 import type {
   ActiveFilter,
@@ -47,7 +46,6 @@ export function Workspace() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const [modal, setModal] = useState<"add" | "export" | "preferences" | null>(null);
-  const [mapPrompt, setMapPrompt] = useState(false);
   const [indexOpen, setIndexOpen] = useState(false);
   const [telemetry, setTelemetry] = useState<Telemetry>(INITIAL_TELEMETRY);
 
@@ -77,7 +75,6 @@ export function Workspace() {
         target instanceof HTMLSelectElement;
       if (event.key === "Escape") {
         setModal(null);
-        dismissMapPrompt();
         if (panelMode === "floating") setPanelMode("hidden");
         return;
       }
@@ -88,36 +85,21 @@ export function Workspace() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [modal, panelMode, primaryId, mapPrompt]);
+  }, [modal, panelMode, primaryId]);
 
   function applyPreset(next: LayoutPreset) {
     setPreset(next);
     setPanelCollapsed(false);
     if (next === "inspect") setPanelMode("docked");
     else setPanelMode("hidden");
-    if (next === "map") {
-      setViewMode("map");
-      offerMapPacks();
-    }
+    if (next === "map") setViewMode("map");
   }
 
   function chooseView(mode: ViewMode) {
     setViewMode(mode);
-    if (mode === "map") offerMapPacks();
-  }
-
-  function offerMapPacks() {
-    if (!mapPromptSeen()) setMapPrompt(true);
-  }
-
-  function dismissMapPrompt() {
-    if (!mapPrompt) return;
-    markMapPromptSeen();
-    setMapPrompt(false);
   }
 
   function openPreferences() {
-    dismissMapPrompt();
     setModal("preferences");
   }
 
@@ -399,9 +381,6 @@ export function Workspace() {
 
       {modal === "add" ? <AddMediaModal onClose={() => setModal(null)} onAdd={addMedia} /> : null}
       {modal === "preferences" ? <PreferencesModal onClose={() => setModal(null)} /> : null}
-      {mapPrompt ? (
-        <MapPackPrompt onClose={dismissMapPrompt} onOpenPreferences={openPreferences} />
-      ) : null}
       {modal === "export" ? (
         <BatchExportModal
           count={selectedIds.length}

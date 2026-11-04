@@ -89,9 +89,21 @@ export function clampPan(view: MapView): MapView {
   };
 }
 
+export function frameBounds(bounds: GeoBounds, size: MapSize): MapView {
+  const aspect = aspectOf(size);
+  const lonSpan = Math.max(0.04, (bounds.east - bounds.west) * 1.35);
+  const latSpan = Math.max(0.04 / aspect, (bounds.north - bounds.south) * 1.35);
+  const w = Math.max(lonSpan, latSpan * aspect);
+  const h = w / aspect;
+  const cx = (bounds.west + bounds.east) / 2 + 180;
+  const cy = 90 - (bounds.south + bounds.north) / 2;
+  return clampPan({ x: cx - w / 2, y: cy - h / 2, w, h });
+}
+
 export function zoomAt(view: MapView, cursor: { x: number; y: number }, factor: number, size: MapSize): MapView {
   const aspect = aspectOf(size);
-  const w = clamp(view.w / factor, 0.7, 460);
+  const street = (360 / 16384) * (Math.max(size.width, 1) / 420);
+  const w = clamp(view.w / factor, Math.max(0.03, street), 460);
   const h = w / aspect;
   const px = (cursor.x - view.x) / view.w;
   const py = (cursor.y - view.y) / view.h;

@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { frameBackground, placeName } from "../../studio/catalog";
-import { packById } from "../../studio/mapPacks";
-import { useMapLibrary } from "../../studio/useMapLibrary";
 import {
   clientToWorld,
+  frameBounds,
   fitItems,
   fitWorld,
   formatLatitude,
@@ -15,6 +14,8 @@ import {
   type MapSize,
   type MapView,
 } from "../../studio/geo";
+import { TILE_ATTRIBUTION, cacheRegion, planRegion, type MapTile } from "../../studio/mapLibrary";
+import { useMapLibrary } from "../../studio/useMapLibrary";
 import { LAND_PATHS } from "../../studio/land";
 import { formatLabel } from "../../studio/query";
 import type { GeoBounds, StudioItem } from "../../studio/types";
@@ -28,7 +29,11 @@ type MediaMapProps = {
   className?: string;
 };
 
-type Tool = "pan" | "region";
+type Tool = "pan" | "region" | "cache";
+
+type WorldBox = { x: number; y: number; w: number; h: number };
+
+type CacheDraft = { bounds: GeoBounds; box: WorldBox };
 
 type Preview = {
   id: string;
@@ -58,8 +63,11 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
   const [size, setSize] = useState<MapSize>({ width: 0, height: 0 });
   const [view, setView] = useState<MapView>(() => fitWorld({ width: 16, height: 9 }));
   const [tool, setTool] = useState<Tool>("pan");
-  const [rubber, setRubber] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  const [rubber, setRubber] = useState<WorldBox | null>(null);
+  const [draft, setDraft] = useState<CacheDraft | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const library = useMapLibrary();
+  const jobRegion = useRef<string | null>(null);
   const viewRef = useRef(view);
   const sizeRef = useRef(size);
   viewRef.current = view;
@@ -72,7 +80,7 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
     startWorld: { x: number; y: number };
     origin: MapView;
     moved: boolean;
-    box: { x: number; y: number; w: number; h: number } | null;
+    box: WorldBox | null;
   } | null>(null);
 
   useEffect(() => {
@@ -109,7 +117,10 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setPreview(null);
+      if (event.key !== "Escape") return;
+      setPreview(null);
+      setDraft(null);
+      setRubber(null);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -135,10 +146,31 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
     setView(fitItems(items, size));
   }, [ids, items, size]);
 
-  const library = useMapLibrary();
+  useEffect(() => {
+    if (library.job) {
+      jobRegion.current = library.job.regionId;
+      return;
+    }
+    const finished = jobRegion.current;
+    if (!finished) return;
+    jobRegion.current = null;
+    const region = library.regions.find((item) => item.id === finished);
+    const box = sizeRef.current;
+    if (!region || box.width < 10 || box.height < 10) return;
+    fitted.current = ids;
+    setView(frameBounds(region, box));
+  }, [ids, library.job, library.regions]);
+
   const unit = size.width > 0 ? view.w / size.width : 1;
-  const detailTiles = view.w < 48 ? library.tiles.filter((tile) => intersectsView(view, tile)) : [];
-  const detailNames = [...new Set(detailTiles.map((tile) => packById(tile.packId)?.name).filter(Boolean))];
+  const detailTiles = useMemo(() => visibleTiles(library.tiles, view, size), [library.tiles, view, size]);
+  const detailNames = [
+    ...new Set(
+      detailTiles.flatMap((tile) =>
+        tile.regionIds.map((id) => library.regions.find((region) => region.id === id)?.label ?? "Cached region"),
+      ),
+    ),
+  ];
+  const plan = draft ? planRegion(draft.bounds) : null;
   const groups = useMemo(() => groupPins(items, view, size), [items, view, size]);
   const previewItem = preview ? items.find((item) => item.id === preview.id) ?? null : null;
 
@@ -157,7 +189,7 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
     const startWorld = clientToWorld(event.clientX, event.clientY, view, rect);
     if (!startWorld) return;
     drag.current = {
-      mode: tool === "region" || event.shiftKey ? "region" : "pan",
+      mode: tool === "region" || event.shiftKey ? "region" : tool,
       startX: event.clientX,
       startY: event.clientY,
       startWorld,
@@ -205,19 +237,23 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
     if (!current) return;
-    if (current.mode === "region" && current.moved && current.box && current.box.w > 0.2 && current.box.h > 0.2) {
-      const start = worldToLonLat(current.box.x, current.box.y + current.box.h);
-      const end = worldToLonLat(current.box.x + current.box.w, current.box.y);
-      onRegion({
-        west: Math.min(start.longitude, end.longitude),
-        east: Math.max(start.longitude, end.longitude),
-        south: Math.min(start.latitude, end.latitude),
-        north: Math.max(start.latitude, end.latitude),
-      });
-    } else if (!current.moved) {
-      setPreview(null);
+    if (!current.moved || !current.box || current.box.w <= 0.2 || current.box.h <= 0.2) {
+      if (!current.moved) setPreview(null);
+      setRubber(draft?.box ?? null);
+      return;
     }
-    setRubber(null);
+    const box = current.box;
+    if (current.mode === "region") {
+      onRegion(boundsFromBox(box));
+      setRubber(draft?.box ?? null);
+      return;
+    }
+    if (current.mode === "cache" && !library.job) {
+      setDraft({ bounds: boundsFromBox(box), box });
+      setRubber(box);
+      return;
+    }
+    setRubber(draft?.box ?? null);
   }
 
   function zoomBy(factor: number) {
@@ -230,20 +266,29 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
 
   return (
     <div className={`relative min-h-0 min-w-0 bg-studio ${className ?? ""}`}>
-      <div className="absolute left-3 top-3 z-20 flex flex-wrap items-center gap-2">
+      <div className="absolute left-3 top-3 z-20 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-2">
+        <div className="flex flex-wrap items-center gap-2">
         <div role="radiogroup" aria-label="Map tool" className="flex rounded-full border border-line bg-card/95 p-0.5">
-          {(["pan", "region"] as const).map((mode) => (
+          {(
+            [
+              ["pan", "Pan", "Pan the map"],
+              ["region", "Region", "Drag a box to filter the grid"],
+              ["cache", "Cache region", "Select region to cache"],
+            ] as const
+          ).map(([mode, label, description]) => (
             <button
               key={mode}
               type="button"
               role="radio"
               aria-checked={tool === mode}
+              aria-label={description}
+              title={description}
               onClick={() => setTool(mode)}
               className={`rounded-full px-3 py-1 text-xs ${
                 tool === mode ? "bg-teal text-teal-ink" : "text-mute hover:text-foam"
               }`}
             >
-              {mode === "pan" ? "Pan" : "Region"}
+              {label}
             </button>
           ))}
         </div>
@@ -263,19 +308,94 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
         >
           Fit
         </button>
-      </div>
-      <p className="pointer-events-none absolute left-3 top-12 z-20 text-xs text-mute">
-        {tool === "region" ? "Drag a box to filter the grid." : "Click a cluster to filter. Shift-drag selects a region."}
-      </p>
-      {detailNames.length > 0 ? (
-        <p className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-full border border-teal/40 bg-studio/80 px-2.5 py-1 text-xs text-teal">
-          Offline detail · {detailNames.join(", ")}
+        </div>
+        <p className="pointer-events-none max-w-xs text-xs text-mute">
+          {tool === "region"
+            ? "Drag a box to filter the grid."
+            : tool === "cache"
+              ? "Drag a box to download map tiles."
+              : "Click a cluster to filter. Shift-drag selects a region."}
         </p>
+      </div>
+      {detailNames.length > 0 && !draft && !library.job ? (
+        <p className="pointer-events-none absolute bottom-3 left-3 z-20 max-w-[14rem] rounded-full border border-teal/40 bg-studio/80 px-2.5 py-1 text-xs text-teal">
+          Offline tiles · {detailNames.join(", ")}
+        </p>
+      ) : null}
+      {detailTiles.length > 0 && !draft && !library.job ? (
+        <p className="pointer-events-none absolute bottom-3 right-3 z-20 max-w-[12rem] text-right text-[10px] leading-snug text-mute">{TILE_ATTRIBUTION}</p>
+      ) : null}
+      {library.error && !draft && !library.job ? (
+        <p className="absolute bottom-3 left-1/2 z-30 w-[min(24rem,calc(100%-1.5rem))] -translate-x-1/2 rounded-2xl border border-line bg-card/95 px-3 py-2 text-sm text-danger">
+          {library.error}
+        </p>
+      ) : null}
+      {draft && plan ? (
+        <div
+          role="dialog"
+          aria-label="Download bounding box"
+          className="absolute bottom-3 left-1/2 z-30 w-[min(24rem,calc(100%-1.5rem))] -translate-x-1/2 rounded-2xl border border-line bg-card/95 p-3 shadow-2xl shadow-black/40"
+        >
+          <h2 className="text-sm font-medium">Download bounding box</h2>
+          <p className="mt-1 text-xs text-mute">
+            {formatLatitude(draft.bounds.south)}–{formatLatitude(draft.bounds.north)}, {formatLongitude(draft.bounds.west)}–
+            {formatLongitude(draft.bounds.east)}
+          </p>
+          <p className="mt-1 text-xs text-mute">
+            {plan.tiles.length === 0
+              ? "That box does not cover any map tiles."
+              : `${plan.tiles.length} tiles · zoom ${plan.minZoom === plan.maxZoom ? plan.maxZoom : `${plan.minZoom}–${plan.maxZoom}`}`}
+          </p>
+          <p className="mt-2 text-xs text-mute">
+            Shelf requests these tiles once from the Esri dark basemap and stores them in this browser.
+          </p>
+          <p className="mt-1 text-[10px] text-mute">{TILE_ATTRIBUTION}</p>
+          <div className="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(null);
+                setRubber(null);
+              }}
+              className="rounded-full px-3 py-1.5 text-xs text-mute hover:text-foam"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={plan.tiles.length === 0 || library.job != null}
+              onClick={() => {
+                const bounds = draft.bounds;
+                setDraft(null);
+                setRubber(null);
+                void cacheRegion(bounds);
+              }}
+              className="rounded-full bg-teal px-3 py-1.5 text-xs font-medium text-teal-ink disabled:opacity-40"
+            >
+              Download tiles
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {library.job ? (
+        <div
+          role="status"
+          className="absolute bottom-3 left-1/2 z-30 w-[min(24rem,calc(100%-1.5rem))] -translate-x-1/2 rounded-2xl border border-line bg-card/95 p-3 shadow-2xl shadow-black/40"
+        >
+          <p className="text-sm">Downloading {library.job.label}</p>
+          <p className="mt-1 font-mono text-[10px] text-teal">
+            {library.job.done}/{library.job.total}
+          </p>
+          <div className="mt-2 h-1 overflow-hidden rounded-full bg-line">
+            <div className="h-full bg-teal" style={{ width: `${Math.round((library.job.done / Math.max(library.job.total, 1)) * 100)}%` }} />
+          </div>
+          <p className="mt-2 text-[10px] text-mute">{TILE_ATTRIBUTION}</p>
+        </div>
       ) : null}
 
       <svg
         ref={svgRef}
-        className={`h-full w-full touch-none ${tool === "region" ? "cursor-crosshair" : "cursor-grab"}`}
+        className={`h-full w-full touch-none ${tool === "pan" ? "cursor-grab" : "cursor-crosshair"}`}
         viewBox={`${view.x} ${view.y} ${view.w} ${view.h}`}
         role="application"
         aria-label="Media map"
@@ -325,7 +445,7 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
               key={cluster.key}
               data-pin="cluster"
               className="cursor-pointer"
-              style={{ pointerEvents: tool === "region" ? "none" : "auto" }}
+              style={{ pointerEvents: tool === "pan" ? "auto" : "none" }}
               onClick={(event) => {
                 event.stopPropagation();
                 focusItems(cluster.items);
@@ -360,7 +480,7 @@ export function MediaMap({ items, primaryId, onOpen, onRegion, onCluster, classN
               key={pin.item.id}
               data-pin="item"
               className="cursor-pointer"
-              style={{ pointerEvents: tool === "region" ? "none" : "auto" }}
+              style={{ pointerEvents: tool === "pan" ? "auto" : "none" }}
               onClick={(event) => {
                 event.stopPropagation();
                 setPreview({ id: pin.item.id, x: pin.x, y: pin.y });
@@ -494,6 +614,43 @@ function placeCard(preview: Preview, size: MapSize): { left: number; top: number
   if (top < 8) top = 8;
   if (left < 8) left = 8;
   return { left, top };
+}
+
+function boundsFromBox(box: WorldBox): GeoBounds {
+  const start = worldToLonLat(box.x, box.y + box.h);
+  const end = worldToLonLat(box.x + box.w, box.y);
+  return {
+    west: Math.min(start.longitude, end.longitude),
+    east: Math.max(start.longitude, end.longitude),
+    south: Math.min(start.latitude, end.latitude),
+    north: Math.max(start.latitude, end.latitude),
+  };
+}
+
+function visibleTiles(tiles: MapTile[], view: MapView, size: MapSize): MapTile[] {
+  if (size.width < 10 || size.height < 10 || view.w >= 96) return [];
+  const intersecting = tiles.filter((tile) => intersectsView(view, tile));
+  const zoom = chooseTileZoom(intersecting, view, size);
+  if (zoom == null) return [];
+  return intersecting.filter((tile) => tile.z === zoom);
+}
+
+function chooseTileZoom(tiles: MapTile[], view: MapView, size: MapSize): number | null {
+  let best: number | null = null;
+  let bestScore = Infinity;
+  const seen = new Set<number>();
+  for (const tile of tiles) {
+    if (seen.has(tile.z)) continue;
+    seen.add(tile.z);
+    const px = ((360 / 2 ** tile.z) / view.w) * size.width;
+    if (px < 48) continue;
+    const score = Math.abs(px - 220);
+    if (score < bestScore) {
+      best = tile.z;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 function intersectsView(
