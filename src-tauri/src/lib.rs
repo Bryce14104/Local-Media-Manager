@@ -9,7 +9,7 @@ mod models;
 mod services;
 
 use db::Library;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,7 +22,13 @@ pub fn run() {
                 let boxed: Box<dyn std::error::Error> = Box::new(err);
                 boxed
             })?;
-            app.manage(library);
+            app.manage(library.clone());
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                for ready in services::generate_missing_thumbnails(&library) {
+                    let _ = handle.emit("thumbnail-ready", &ready);
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

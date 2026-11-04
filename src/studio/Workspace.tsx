@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { desktopBridgeAvailable, errorMessage, fetchLibrary, indexPaths, pickImportPaths } from "../lib/api";
+import type { MediaKind, MediaRecord } from "../lib/types";
 import { AddMediaModal } from "../components/drawers/AddMediaModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
 import { PreferencesModal } from "../components/drawers/PreferencesModal";
@@ -8,7 +11,8 @@ import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
 import { MediaStage } from "../components/workspace/MediaStage";
-import { createCatalog, itemFromRecord, itemsFromFiles, mergeItems, nextFlag } from "./catalog";
+import { captureMillis, createCatalog, itemFromRecord, mergeItems, nextFlag } from "./catalog";
+import { itemsFromFiles } from "./previews";
 import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
 import type { MapZoom } from "./mapRegions";
 import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
@@ -57,7 +61,14 @@ export function Workspace() {
   const [telemetry, setTelemetry] = useState<Telemetry>(INITIAL_TELEMETRY);
 
   const visible = useMemo(
-    () => items.filter((item) => matchesFilters(item, filters)),
+    () =>
+      items
+        .filter((item) => matchesFilters(item, filters))
+        .sort(
+          (left, right) =>
+            captureMillis(right.capturedAt) - captureMillis(left.capturedAt) ||
+            left.fileName.localeCompare(right.fileName),
+        ),
     [items, filters],
   );
   const palette = useMemo(() => suggestions(query, items), [query, items]);
@@ -73,11 +84,34 @@ export function Workspace() {
     void fetchLibrary()
       .then(({ media }) => {
         if (cancel || media.length === 0) return;
-        setItems((current) => mergeItems(media.map(itemFromRecord), current));
+        setItems((current) => mergeItems(media.map(presentRecord), current));
       })
       .catch(() => undefined);
     return () => {
       cancel = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!desktopBridgeAvailable()) return;
+    let stop: (() => void) | undefined;
+    let cancel = false;
+    void listen<ThumbnailReady>("thumbnail-ready", (event) => {
+      const ready = event.payload;
+      setItems((current) =>
+        current.map((item) =>
+          item.id === `library-${ready.id}`
+            ? withPreview(item, ready.filePath, ready.thumbnailPath, ready.mediaKind)
+            : item,
+        ),
+      );
+    }).then((unlisten) => {
+      if (cancel) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      cancel = true;
+      stop?.();
     };
   }, []);
 
@@ -254,6 +288,11 @@ export function Workspace() {
     if (preset === "inspect") setPanelMode("docked");
   }
 
+  function inspectItem(id: string) {
+    openItem(id);
+    applyPreset("inspect");
+  }
+
   function toggleItem(id: string) {
     setPrimaryId(id);
     setSelectedIds((current) =>
@@ -339,7 +378,7 @@ export function Workspace() {
       }
       const { media } = await fetchLibrary();
       revealImported(
-        media.map(itemFromRecord),
+        media.map(presentRecord),
         `Indexed ${report.indexed} · ${report.unchanged} already in the library`,
       );
     } catch (error) {
@@ -356,14 +395,21 @@ export function Workspace() {
     }
   }
 
-  function ingestFiles(files: File[]) {
-    const imported = itemsFromFiles(files);
-    if (imported.length === 0) {
-      setImportError("No photos or videos were found in that selection.");
-      setImportMessage(null);
-      return;
+  async function ingestFiles(files: File[]) {
+    setImportBusy(true);
+    setImportError(null);
+    setImportMessage("Reading capture dates…");
+    try {
+      const imported = await itemsFromFiles(files);
+      if (imported.length === 0) {
+        setImportError("No photos or videos were found in that selection.");
+        setImportMessage(null);
+        return;
+      }
+      revealImported(imported, `Added ${imported.length} ${imported.length === 1 ? "frame" : "frames"}`);
+    } finally {
+      setImportBusy(false);
     }
-    revealImported(imported, `Added ${imported.length} ${imported.length === 1 ? "frame" : "frames"}`);
   }
 
   function exportSelection(format: string, destination: string) {
@@ -409,6 +455,7 @@ export function Workspace() {
             selectedIds={selectedIds}
             primaryId={primaryId}
             onOpen={openItem}
+            onInspect={inspectItem}
             onToggle={toggleItem}
             onRate={rate}
             onFlag={flag}
@@ -497,4 +544,23 @@ export function Workspace() {
       ) : null}
     </div>
   );
+}
+
+type ThumbnailReady = {
+  id: number;
+  filePath: string;
+  thumbnailPath: string;
+  mediaKind: MediaKind;
+};
+
+function presentRecord(record: MediaRecord): StudioItem {
+  const item = itemFromRecord(record);
+  if (!record.thumbnailPath || !desktopBridgeAvailable()) return item;
+  return withPreview(item, record.filePath, record.thumbnailPath, record.mediaKind);
+}
+
+function withPreview(item: StudioItem, filePath: string, thumbnailPath: string, kind: MediaKind): StudioItem {
+  const previewUrl = convertFileSrc(thumbnailPath);
+  const inspectUrl = kind === "image" ? convertFileSrc(filePath) : previewUrl;
+  return { ...item, previewUrl, inspectUrl };
 }

@@ -74,7 +74,7 @@ That page is the studio. The grid, command palette, inspector, map, and telemetr
 npm run tauri dev
 ```
 
-`npm run tauri dev` opens the same studio in a desktop window. Add media uses the system folder picker. Shelf scans that folder into `library.sqlite`, then the new frames show up in the grid. In a browser preview, Browse Folders uses the page's folder picker and adds those files to the grid without writing SQLite.
+`npm run tauri dev` opens the same studio in a desktop window. Add media uses the system folder picker. Shelf scans that folder into `library.sqlite`, reads each file's EXIF or XMP capture time, and sorts the grid by that time. A background job writes a small JPEG preview for JPEG and RAW files into the app-data `thumbnails` folder, then the cards pick those up. Clicking a card in the grid opens Inspect with the larger preview. In a browser preview, Browse Folders uses the page's folder picker, reads the same dates and embedded previews in the page, and adds those files to the grid without writing SQLite.
 
 `npm run test:rust` and `npm run check:rust` are the same Cargo commands as above.
 

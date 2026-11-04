@@ -1,7 +1,11 @@
 //! File-system scanning and EXIF reading, then a write into the local catalog.
 
+mod capture;
 mod exif;
 mod scanner;
+mod thumbs;
+
+pub use thumbs::generate_missing_thumbnails;
 
 use crate::db::{DbError, Library, NewMedia};
 use crate::models::ScanReport;
@@ -9,6 +13,8 @@ use std::path::Path;
 use std::time::Instant;
 use thiserror::Error;
 
+use crate::models::ExifSnapshot;
+use capture::{capture_unix, unix_to_iso};
 use exif::read_exif;
 use scanner::{ScanError, describe_file, hash_file, scan_directory};
 
@@ -168,16 +174,30 @@ fn index_one(
             .is_some_and(|size| size == existing.file_size);
         if same_size && existing.modified_at == file.modified_at && existing.content_hash.is_some()
         {
+            if existing.captured_at.is_none()
+                && let Some(unix) = capture_unix(&file.path)
+            {
+                library.set_captured_at(&path, unix)?;
+            }
             return Ok(IndexOutcome::Unchanged);
         }
     }
 
     let hash = hash_file(&file.path)?;
+    let captured_at = capture_unix(&file.path);
     let (exif_json, note) = match read_exif(&file.path) {
-        Ok(Some(snapshot)) if !snapshot.is_empty() => {
-            (Some(serde_json::to_string(&snapshot)?), None)
+        Ok(snapshot) => {
+            let mut snapshot = snapshot.filter(|item| !item.is_empty());
+            if let Some(unix) = captured_at {
+                let entry = snapshot.get_or_insert_with(ExifSnapshot::default);
+                entry.captured_at = Some(unix_to_iso(unix));
+            }
+            let json = match snapshot {
+                Some(snapshot) => Some(serde_json::to_string(&snapshot)?),
+                None => None,
+            };
+            (json, None)
         }
-        Ok(_) => (None, None),
         Err(err) => (None, Some(format!("{path}: {err}"))),
     };
     let Ok(file_size) = i64::try_from(file.file_size) else {
@@ -192,6 +212,7 @@ fn index_one(
         modified_at: file.modified_at,
         media_kind: file.media_kind,
         exif_json: exif_json.as_deref(),
+        captured_at,
     })?;
 
     Ok(IndexOutcome::Indexed { note })
@@ -281,5 +302,32 @@ mod tests {
         names.sort();
         assert!(names.iter().any(|path| path.ends_with("still.jpg")));
         assert!(names.iter().any(|path| path.ends_with("clip.mp4")));
+    }
+
+    #[test]
+    fn index_sorts_by_xmp_capture_time() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("later-import.jpg"),
+            b"plain-bytes-without-a-date",
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("earlier-shot.jpg"),
+            b"junk exif:DateTimeOriginal=\"2018-01-02T03:04:05\" tail",
+        )
+        .unwrap();
+
+        let database = tempfile::tempdir().unwrap();
+        let library = Library::open(database.path().join("library.sqlite")).unwrap();
+        index_directory(&library, root.path()).unwrap();
+
+        let media = library.list_media().unwrap();
+        assert!(media[0].file_path.ends_with("earlier-shot.jpg"));
+        assert_eq!(
+            media[0].exif.as_ref().and_then(|exif| exif.captured_at.as_deref()),
+            Some("2018-01-02T03:04:05")
+        );
+        assert!(media[1].captured_at.is_none());
     }
 }

@@ -1,5 +1,5 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { frameBackground } from "../../studio/catalog";
+import { FrameStill } from "../workspace/FrameStill";
 import { formatLabel, isoFill, shutterFill } from "../../studio/query";
 import type { PanelMode, StudioItem } from "../../studio/types";
 import { formatBytes, formatTimestamp } from "../../lib/format";
@@ -55,7 +55,14 @@ export function InspectorPanel({
       {!collapsed ? (
         item ? (
           <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
-            <div className="aspect-[16/9] rounded-xl" style={{ background: frameBackground(item.id) }} />
+            <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-studio">
+              <FrameStill
+                id={item.id}
+                fileName={item.fileName}
+                src={item.inspectUrl ?? item.previewUrl}
+                fit="contain"
+              />
+            </div>
             <Stars rating={item.rating} onChange={onRate} />
             <div className="flex flex-wrap gap-1.5">
               <Tag>{formatLabel(item.format)}</Tag>

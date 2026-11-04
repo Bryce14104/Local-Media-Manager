@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
-import { frameBackground, placeName } from "../../studio/catalog";
+import { placeName } from "../../studio/catalog";
+import { FrameStill } from "./FrameStill";
 import { formatLabel } from "../../studio/query";
 import type { StudioItem } from "../../studio/types";
 
@@ -56,10 +57,9 @@ export function MediaTray({ items, primaryId, onSelect }: MediaTrayProps) {
                   active ? "border-[#2ee0c5]" : "border-[#2ee0c5]/35 hover:border-[#2ee0c5]/70"
                 }`}
               >
-                <div
-                  className="h-[4.5rem] w-[4.5rem] shrink-0 rounded-xl"
-                  style={{ background: frameBackground(item.id) }}
-                />
+                <div className="h-[4.5rem] w-[4.5rem] shrink-0 overflow-hidden rounded-xl">
+                  <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
+                </div>
                 <span className="min-w-0 py-0.5">
                   <span className={`block truncate text-sm font-medium tracking-tight ${active ? "text-[#2ee0c5]" : "text-foam"}`}>
                     {item.fileName}

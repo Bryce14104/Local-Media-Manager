@@ -24,6 +24,8 @@ export type MediaRecord = {
   indexedAt: number;
   rating: number | null;
   mediaKind: MediaKind;
+  capturedAt: number | null;
+  thumbnailPath: string | null;
   exif: ExifSnapshot | null;
 };
 

@@ -14,6 +14,7 @@ type MediaStageProps = {
   selectedIds: string[];
   primaryId: string | null;
   onOpen: (id: string) => void;
+  onInspect: (id: string) => void;
   onToggle: (id: string) => void;
   onRate: (id: string, rating: number | null) => void;
   onFlag: (id: string) => void;
@@ -35,6 +36,7 @@ export function MediaStage({
   selectedIds,
   primaryId,
   onOpen,
+  onInspect,
   onToggle,
   onRate,
   onFlag,
@@ -101,7 +103,7 @@ export function MediaStage({
             detail="compact"
             selectedIds={selectedIds}
             primaryId={primaryId}
-            onOpen={onOpen}
+            onOpen={onInspect}
             onToggle={onToggle}
             onRate={onRate}
             onFlag={onFlag}
@@ -113,7 +115,7 @@ export function MediaStage({
             detail={viewMode === "cards" ? "card" : "compact"}
             selectedIds={selectedIds}
             primaryId={primaryId}
-            onOpen={onOpen}
+            onOpen={onInspect}
             onToggle={onToggle}
             onRate={onRate}
             onFlag={onFlag}

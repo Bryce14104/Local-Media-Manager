@@ -86,6 +86,7 @@ export function itemFromRecord(record: {
   modifiedAt: number;
   rating: number | null;
   mediaKind: "image" | "video" | "raw";
+  capturedAt: number | null;
   exif: {
     cameraMake: string | null;
     cameraModel: string | null;
@@ -103,11 +104,10 @@ export function itemFromRecord(record: {
   const folder = parentFolder(record.filePath);
   const exif = record.exif;
   const format = formatForKind(record.mediaKind);
-  const captured =
-    exif?.capturedAt ??
-    unixToIso(record.createdAt) ??
-    unixToIso(record.modifiedAt) ??
-    new Date().toISOString();
+  const fromExif = exif?.capturedAt ? normalizeCapture(exif.capturedAt) : null;
+  const captured = isCapture(fromExif)
+    ? fromExif
+    : (unixToIso(record.capturedAt) ?? unixToIso(record.modifiedAt) ?? "1970-01-01T00:00:00");
   const id = `library-${record.id}`;
   const camera = [exif?.cameraMake, exif?.cameraModel].filter(Boolean).join(" ");
   return {
@@ -131,42 +131,6 @@ export function itemFromRecord(record: {
     histogram: histogram(id),
     ...coordinatesFor(folder, id),
   };
-}
-
-export function itemsFromFiles(files: File[]): StudioItem[] {
-  const stamp = new Date().toISOString().slice(0, 19);
-  const items: StudioItem[] = [];
-  for (const file of files) {
-    const relative = file.webkitRelativePath || file.name;
-    const parts = relative.split(/[/\\]/).filter(Boolean);
-    const fileName = parts.pop() ?? file.name;
-    const format = formatForName(fileName);
-    if (!format) continue;
-    const folder = parts.join("/") || "Inbox";
-    const id = `import-${relative}-${file.size}-${file.lastModified}`;
-    items.push({
-      id,
-      fileName,
-      folder,
-      capturedAt: stamp,
-      camera: "Unknown camera",
-      lens: "Unknown lens",
-      rating: null,
-      flag: "unflagged",
-      format,
-      fileSize: file.size,
-      iso: null,
-      shutter: null,
-      aperture: null,
-      focalLength: null,
-      width: null,
-      height: null,
-      hash: fakeHash(id),
-      histogram: histogram(id),
-      ...coordinatesFor(folder, id),
-    });
-  }
-  return items;
 }
 
 export function mergeItems(incoming: StudioItem[], current: StudioItem[]): StudioItem[] {
@@ -198,22 +162,33 @@ function leadingNumber(value: string | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+export function normalizeCapture(value: string): string {
+  const match = /^(\d{4})[:\-](\d{2})[:\-](\d{2})[T ](\d{2}):(\d{2}):(\d{2})/.exec(value.trim());
+  if (!match) return value;
+  return `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}`;
+}
+
+export function captureMillis(value: string): number {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(normalizeCapture(value));
+  if (!match) return Number.NEGATIVE_INFINITY;
+  return Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6]),
+  );
+}
+
+function isCapture(value: string | null): value is string {
+  return value != null && captureMillis(value) !== Number.NEGATIVE_INFINITY;
+}
+
 function formatForKind(kind: "image" | "video" | "raw"): MediaFormat {
   if (kind === "video") return "video";
   if (kind === "raw") return "raw";
   return "jpg";
-}
-
-function formatForName(name: string): MediaFormat | null {
-  const extension = name.split(".").pop()?.toLowerCase() ?? "";
-  if (["raw", "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "raf", "pef", "srw"].includes(extension)) {
-    return "raw";
-  }
-  if (["mp4", "mov", "m4v", "mkv", "avi", "webm"].includes(extension)) return "video";
-  if (["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif", "avif"].includes(extension)) {
-    return "jpg";
-  }
-  return null;
 }
 
 export function inventItems(folder: string, format: MediaFormat): StudioItem[] {
@@ -310,7 +285,7 @@ function seedItem(row: Seed, id: string): StudioItem {
   };
 }
 
-function fakeHash(seed: string): string {
+export function fakeHash(seed: string): string {
   let hash = 2166136261;
   let out = "";
   for (let index = 0; index < seed.length + 8; index += 1) {
@@ -322,7 +297,7 @@ function fakeHash(seed: string): string {
   return out.slice(0, 64);
 }
 
-function histogram(seed: string): number[] {
+export function histogram(seed: string): number[] {
   let state = 0;
   for (const char of seed) state = (Math.imul(state, 33) + char.charCodeAt(0)) >>> 0;
   return Array.from({ length: 16 }, (_, index) => {

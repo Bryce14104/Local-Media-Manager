@@ -1,4 +1,4 @@
-import { frameBackground } from "../../studio/catalog";
+import { FrameStill } from "./FrameStill";
 import { formatLabel } from "../../studio/query";
 import type { StudioItem } from "../../studio/types";
 import { formatBytes, formatTimestamp } from "../../lib/format";
@@ -44,7 +44,14 @@ function CompareFrame({ item }: { item: StudioItem }) {
   const captured = Math.floor(new Date(item.capturedAt).getTime() / 1000);
   return (
     <article className="flex h-full min-h-[28rem] flex-col overflow-hidden rounded-2xl border border-line bg-card md:min-h-0">
-      <div className="min-h-0 flex-1 basis-0" style={{ background: frameBackground(item.id) }} />
+      <div className="min-h-0 flex-1 basis-0 bg-studio">
+        <FrameStill
+          id={item.id}
+          fileName={item.fileName}
+          src={item.inspectUrl ?? item.previewUrl}
+          fit="contain"
+        />
+      </div>
       <div className="shrink-0 space-y-2 px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <h2 className="truncate text-sm font-medium">{item.fileName}</h2>

@@ -1,8 +1,8 @@
-import { frameBackground } from "../../studio/catalog";
 import { gridMetrics } from "../../studio/gridZoom";
 import { formatLabel } from "../../studio/query";
 import type { StudioItem } from "../../studio/types";
 import { formatBytes } from "../../lib/format";
+import { FrameStill } from "./FrameStill";
 import { Stars } from "./Stars";
 
 type MediaCardProps = {
@@ -37,10 +37,9 @@ export function MediaCard({
       }`}
     >
       <button type="button" onClick={onOpen} className="block w-full text-left">
-        <div
-          className={roomy ? "aspect-[4/3]" : "aspect-square"}
-          style={{ background: frameBackground(item.id) }}
-        />
+        <div className={roomy ? "aspect-[4/3]" : "aspect-square"}>
+          <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
+        </div>
         {showMeta ? (
           <div className={roomy ? "space-y-1 px-3 py-3" : "space-y-0.5 px-2 py-2"}>
             <p className={`truncate font-medium ${roomy ? "text-sm" : "text-xs"}`}>{item.fileName}</p>

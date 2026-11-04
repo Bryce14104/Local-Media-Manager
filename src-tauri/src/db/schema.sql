@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 -- rating         0 through 5, or NULL when the file is unrated
 -- media_kind     image, video, or raw
 -- exif_json      selected EXIF fields as JSON, or NULL
+-- captured_at    capture time from EXIF or XMP, unix seconds, or NULL
+-- thumbnail_path low-res JPEG preview written by Shelf, or NULL
 CREATE TABLE IF NOT EXISTS media_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     file_path TEXT NOT NULL UNIQUE,
@@ -30,11 +32,16 @@ CREATE TABLE IF NOT EXISTS media_files (
     indexed_at INTEGER NOT NULL,
     rating INTEGER CHECK (rating IS NULL OR (rating BETWEEN 0 AND 5)),
     media_kind TEXT NOT NULL,
-    exif_json TEXT
+    exif_json TEXT,
+    captured_at INTEGER,
+    thumbnail_path TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_files_modified_at
     ON media_files (modified_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_media_files_captured_at
+    ON media_files (captured_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_media_files_rating
     ON media_files (rating);

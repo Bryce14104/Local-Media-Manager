@@ -24,6 +24,7 @@ pub struct NewMedia<'a> {
     pub modified_at: i64,
     pub media_kind: MediaKind,
     pub exif_json: Option<&'a str>,
+    pub captured_at: Option<i64>,
 }
 
 #[derive(Debug, Error)]
@@ -68,6 +69,7 @@ impl Library {
         conn.pragma_update(None::<&str>, "foreign_keys", "ON")?;
         conn.pragma_update(None::<&str>, "journal_mode", "WAL")?;
         conn.execute_batch(SCHEMA_SQL)?;
+        migrate(&conn)?;
 
         Ok(Self {
             inner: Arc::new(LibraryInner {
@@ -75,6 +77,10 @@ impl Library {
                 path: path.to_path_buf(),
             }),
         })
+    }
+
+    pub fn database_path(&self) -> &Path {
+        &self.inner.path
     }
 
     pub fn summary(&self) -> Result<crate::models::LibrarySummary, DbError> {
@@ -103,9 +109,9 @@ impl Library {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
-                    indexed_at, rating, media_kind, exif_json
+                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path
              FROM media_files
-             ORDER BY modified_at DESC, file_path COLLATE NOCASE ASC",
+             ORDER BY captured_at IS NULL, captured_at DESC, file_path COLLATE NOCASE ASC",
         )?;
         let rows = stmt.query_map([], map_media)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -115,7 +121,7 @@ impl Library {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
-                    indexed_at, rating, media_kind, exif_json
+                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path
              FROM media_files
              WHERE file_path = ?1",
         )?;
@@ -128,8 +134,8 @@ impl Library {
         conn.execute(
             "INSERT INTO media_files (
                 file_path, content_hash, file_size, created_at, modified_at,
-                indexed_at, media_kind, exif_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                indexed_at, media_kind, exif_json, captured_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(file_path) DO UPDATE SET
                 content_hash = excluded.content_hash,
                 file_size = excluded.file_size,
@@ -137,7 +143,8 @@ impl Library {
                 modified_at = excluded.modified_at,
                 indexed_at = excluded.indexed_at,
                 media_kind = excluded.media_kind,
-                exif_json = excluded.exif_json",
+                exif_json = excluded.exif_json,
+                captured_at = excluded.captured_at",
             params![
                 media.file_path,
                 media.content_hash,
@@ -147,6 +154,7 @@ impl Library {
                 unix_now(),
                 media.media_kind.as_str(),
                 media.exif_json,
+                media.captured_at,
             ],
         )?;
         Ok(())
@@ -172,13 +180,34 @@ impl Library {
 
         let record = conn.query_row(
             "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
-                    indexed_at, rating, media_kind, exif_json
+                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path
              FROM media_files
              WHERE file_path = ?1",
             params![path],
             map_media,
         )?;
         Ok(record)
+    }
+
+    pub fn set_thumbnail(&self, path: &str, thumbnail_path: &str) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE media_files SET thumbnail_path = ?1 WHERE file_path = ?2",
+            params![thumbnail_path, path],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound(path.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn set_captured_at(&self, path: &str, captured_at: i64) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE media_files SET captured_at = ?1 WHERE file_path = ?2 AND captured_at IS NULL",
+            params![captured_at, path],
+        )?;
+        Ok(())
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, DbError> {
@@ -201,7 +230,27 @@ fn map_media(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaRecord> {
         rating: row.get(7)?,
         media_kind: MediaKind::parse(&kind),
         exif,
+        captured_at: row.get(10)?,
+        thumbnail_path: row.get(11)?,
     })
+}
+
+fn migrate(conn: &Connection) -> Result<(), DbError> {
+    let mut stmt = conn.prepare("PRAGMA table_info(media_files)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|name| name == "captured_at") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN captured_at INTEGER", [])?;
+    }
+    if !columns.iter().any(|name| name == "thumbnail_path") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN thumbnail_path TEXT", [])?;
+    }
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_media_files_captured_at ON media_files (captured_at DESC)",
+        [],
+    )?;
+    Ok(())
 }
 
 fn unix_now() -> i64 {
@@ -273,6 +322,7 @@ mod tests {
                 modified_at: 10,
                 media_kind: MediaKind::Image,
                 exif_json: None,
+                captured_at: Some(1_700_000_000),
             })
             .unwrap();
 
@@ -287,5 +337,62 @@ mod tests {
 
         let missing = library.set_rating("/missing.jpg", Some(1)).unwrap_err();
         assert!(matches!(missing, DbError::NotFound(_)));
+    }
+
+    #[test]
+    fn list_orders_by_capture_time_not_file_mtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::open(dir.path().join("library.sqlite")).unwrap();
+        library
+            .upsert_media(NewMedia {
+                file_path: "/photos/imported-later.jpg",
+                content_hash: "a",
+                file_size: 4,
+                created_at: Some(1_800_000_000),
+                modified_at: 1_800_000_000,
+                media_kind: MediaKind::Image,
+                exif_json: None,
+                captured_at: Some(1_600_000_000),
+            })
+            .unwrap();
+        library
+            .upsert_media(NewMedia {
+                file_path: "/photos/shot-later.jpg",
+                content_hash: "b",
+                file_size: 4,
+                created_at: Some(1_500_000_000),
+                modified_at: 1_500_000_000,
+                media_kind: MediaKind::Image,
+                exif_json: None,
+                captured_at: Some(1_700_000_000),
+            })
+            .unwrap();
+        library
+            .upsert_media(NewMedia {
+                file_path: "/photos/no-exif.jpg",
+                content_hash: "c",
+                file_size: 4,
+                created_at: Some(1_900_000_000),
+                modified_at: 1_900_000_000,
+                media_kind: MediaKind::Image,
+                exif_json: None,
+                captured_at: None,
+            })
+            .unwrap();
+
+        let names: Vec<_> = library
+            .list_media()
+            .unwrap()
+            .into_iter()
+            .map(|record| record.file_path)
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "/photos/shot-later.jpg",
+                "/photos/imported-later.jpg",
+                "/photos/no-exif.jpg",
+            ]
+        );
     }
 }

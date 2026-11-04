@@ -49,7 +49,7 @@ impl ScannedFile {
 }
 
 /// Camera and capture fields Shelf keeps from an EXIF block.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExifSnapshot {
     pub camera_make: Option<String>,
@@ -78,6 +78,7 @@ impl ExifSnapshot {
             && self.exposure_time.is_none()
             && self.f_number.is_none()
             && self.focal_length.is_none()
+            && self.captured_at.is_none()
     }
 }
 
@@ -95,6 +96,18 @@ pub struct MediaRecord {
     pub rating: Option<i64>,
     pub media_kind: MediaKind,
     pub exif: Option<ExifSnapshot>,
+    pub captured_at: Option<i64>,
+    pub thumbnail_path: Option<String>,
+}
+
+/// A preview JPEG finished on a background thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThumbnailReady {
+    pub id: i64,
+    pub file_path: String,
+    pub thumbnail_path: String,
+    pub media_kind: MediaKind,
 }
 
 /// Result of opening the local catalog.

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { frameBackground, placeName } from "../../studio/catalog";
+import { placeName } from "../../studio/catalog";
+import { FrameStill } from "./FrameStill";
 import {
   clientToWorld,
   fitAustralia,
@@ -465,7 +466,9 @@ export function MediaMap({
           className="absolute z-30 w-60 overflow-hidden rounded-xl border border-line bg-card shadow-2xl shadow-black/40"
           style={{ left: card.left, top: card.top }}
         >
-          <div className="h-16" style={{ background: frameBackground(previewItem.id) }} />
+          <div className="h-16">
+            <FrameStill id={previewItem.id} fileName={previewItem.fileName} src={previewItem.previewUrl} />
+          </div>
           <div className="space-y-1 px-3 py-3">
             <div className="flex items-start justify-between gap-2">
               <h2 className="truncate text-sm font-medium">{previewItem.fileName}</h2>

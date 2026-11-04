@@ -52,6 +52,8 @@ export type StudioItem = {
   histogram: number[];
   latitude: number;
   longitude: number;
+  previewUrl?: string | null;
+  inspectUrl?: string | null;
 };
 
 export type Filter =
