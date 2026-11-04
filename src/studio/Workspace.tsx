@@ -6,7 +6,6 @@ import { InspectorPanel } from "../components/panels/InspectorPanel";
 import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
-import { MediaMap } from "../components/workspace/MediaMap";
 import { MediaStage } from "../components/workspace/MediaStage";
 import { createCatalog, inventItems, nextFlag } from "./catalog";
 import type { MapZoom } from "./mapRegions";
@@ -95,13 +94,26 @@ export function Workspace() {
   function applyPreset(next: LayoutPreset) {
     setPreset(next);
     setPanelCollapsed(false);
-    if (next === "inspect") setPanelMode("docked");
-    else setPanelMode("hidden");
-    if (next === "map") setViewMode("map");
+    if (next === "inspect") {
+      setPanelMode("docked");
+      setViewMode((mode) => (mode === "map" ? "compact" : mode));
+    } else if (next === "map") {
+      setPanelMode("hidden");
+      setViewMode("map");
+    } else {
+      setPanelMode("hidden");
+      if (next === "browse") setViewMode((mode) => (mode === "map" ? "compact" : mode));
+    }
   }
 
   function chooseView(mode: ViewMode) {
     setViewMode(mode);
+    if (mode === "map") {
+      setPreset("map");
+      setPanelMode("hidden");
+      return;
+    }
+    setPreset((current) => (current === "map" || current === "compare" ? "browse" : current));
   }
 
   function openPreferences() {
@@ -113,8 +125,8 @@ export function Workspace() {
     setSelectingCache(true);
     setModal(null);
     setViewMode("map");
+    setPreset("map");
     setPanelMode("hidden");
-    if (preset === "compare") setPreset("browse");
   }
 
   function finishCacheSelect(bounds: GeoBounds) {
@@ -130,6 +142,7 @@ export function Workspace() {
 
   function revealMapGrid() {
     setPreset("map");
+    setViewMode("map");
     setPanelMode("hidden");
     setPanelCollapsed(false);
   }
@@ -299,6 +312,8 @@ export function Workspace() {
         onRemoveFilter={(id) => setFilters((current) => current.filter((filter) => filter.id !== id))}
         onApplySuggestion={applySuggestion}
         onSubmitQuery={submitQuery}
+        viewMode={viewMode}
+        onViewMode={chooseView}
         preset={preset}
         onPreset={applyPreset}
         onAdd={() => setModal("add")}
@@ -312,76 +327,11 @@ export function Workspace() {
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {preset === "compare" ? (
           <ComparePane pair={comparePair} onClear={() => setSelectedIds([])} />
-        ) : preset === "map" && viewMode === "map" ? (
-          <MediaStage
-            items={visible}
-            total={items.length}
-            viewMode={viewMode}
-            onViewMode={chooseView}
-            selectedIds={selectedIds}
-            primaryId={primaryId}
-            onOpen={openItem}
-            onToggle={toggleItem}
-            onRate={rate}
-            onFlag={flag}
-            onClearFilters={() => setFilters([])}
-            filteredEmpty={visible.length === 0}
-            onShowInfo={() => {
-              setPanelMode("docked");
-              setPanelCollapsed(false);
-            }}
-            onRegion={applyRegion}
-            onCluster={applyCluster}
-            selectingCache={selectingCache}
-            onCacheBounds={finishCacheSelect}
-            onCancelCache={cancelCacheSelect}
-          />
-        ) : preset === "map" ? (
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <MediaMap
-              items={visible}
-              primaryId={primaryId}
-              onOpen={openItem}
-              onRegion={applyRegion}
-              onCluster={applyCluster}
-              selectingCache={selectingCache}
-              onCacheBounds={finishCacheSelect}
-              onCancelCache={cancelCacheSelect}
-              className="min-h-[220px] flex-[1.4]"
-            />
-            <MediaStage
-              className={
-                viewMode === "map"
-                  ? "shrink-0 border-t border-line"
-                  : "min-h-0 flex-1 border-t border-line"
-              }
-              items={visible}
-              total={items.length}
-              viewMode={viewMode}
-              onViewMode={chooseView}
-              selectedIds={selectedIds}
-              primaryId={primaryId}
-              onOpen={openItem}
-              onToggle={toggleItem}
-              onRate={rate}
-              onFlag={flag}
-              onClearFilters={() => setFilters([])}
-              filteredEmpty={visible.length === 0}
-              onShowInfo={() => {
-                setPanelMode("docked");
-                setPanelCollapsed(false);
-              }}
-              onRegion={applyRegion}
-              onCluster={applyCluster}
-              mapDocked
-            />
-          </div>
         ) : (
           <MediaStage
             items={visible}
             total={items.length}
             viewMode={viewMode}
-            onViewMode={chooseView}
             selectedIds={selectedIds}
             primaryId={primaryId}
             onOpen={openItem}
@@ -390,10 +340,6 @@ export function Workspace() {
             onFlag={flag}
             onClearFilters={() => setFilters([])}
             filteredEmpty={visible.length === 0}
-            onShowInfo={() => {
-              setPanelMode("docked");
-              setPanelCollapsed(false);
-            }}
             onRegion={applyRegion}
             onCluster={applyCluster}
             selectingCache={selectingCache}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { IndexStatusPopover } from "../drawers/IndexStatusPopover";
 import { filterLabel } from "../../studio/query";
-import type { ActiveFilter, LayoutPreset, Suggestion } from "../../studio/types";
+import type { ActiveFilter, LayoutPreset, Suggestion, ViewMode } from "../../studio/types";
 
 type TopBarProps = {
   query: string;
@@ -11,6 +11,8 @@ type TopBarProps = {
   onRemoveFilter: (id: string) => void;
   onApplySuggestion: (suggestion: Suggestion) => void;
   onSubmitQuery: () => void;
+  viewMode: ViewMode;
+  onViewMode: (mode: ViewMode) => void;
   preset: LayoutPreset;
   onPreset: (preset: LayoutPreset) => void;
   onAdd: () => void;
@@ -21,11 +23,17 @@ type TopBarProps = {
   inputRef: RefObject<HTMLInputElement | null>;
 };
 
+const VIEWS: { id: ViewMode; label: string }[] = [
+  { id: "compact", label: "Compact" },
+  { id: "cards", label: "Cards" },
+  { id: "timeline", label: "Timeline" },
+  { id: "map", label: "Map" },
+];
+
 const PRESETS: { id: LayoutPreset; label: string }[] = [
   { id: "browse", label: "Browse" },
   { id: "inspect", label: "Inspect" },
   { id: "compare", label: "Compare" },
-  { id: "map", label: "Map" },
 ];
 
 export function TopBar({
@@ -36,6 +44,8 @@ export function TopBar({
   onRemoveFilter,
   onApplySuggestion,
   onSubmitQuery,
+  viewMode,
+  onViewMode,
   preset,
   onPreset,
   onAdd,
@@ -167,7 +177,6 @@ export function TopBar({
         </div>
 
         <div className="hidden items-center gap-1 lg:flex">
-          <PresetSwitch preset={preset} onPreset={onPreset} />
           <Action label="Add media" onClick={onAdd} />
           <Action label="Batch export" onClick={onExport} />
           <div ref={desktopIndex} className="relative">
@@ -184,6 +193,16 @@ export function TopBar({
           <Action label="Menu" pressed={menuOpen} onClick={() => setMenuOpen((current) => !current)} />
           {menuOpen ? (
             <div className="absolute right-0 top-[calc(100%+0.4rem)] z-40 w-52 rounded-2xl border border-line bg-card p-2">
+              {VIEWS.map((item) => (
+                <MenuRow
+                  key={item.id}
+                  label={item.label}
+                  onClick={() => {
+                    onViewMode(item.id);
+                    setMenuOpen(false);
+                  }}
+                />
+              ))}
               {PRESETS.map((item) => (
                 <MenuRow
                   key={item.id}
@@ -216,6 +235,11 @@ export function TopBar({
         </div>
       </div>
 
+      <div className="flex items-center gap-2 overflow-x-auto px-3 pb-2">
+        <ViewSwitch viewMode={viewMode} preset={preset} onViewMode={onViewMode} />
+        <PresetSwitch preset={preset} onPreset={onPreset} />
+      </div>
+
       {filters.length > 0 ? (
         <div className="flex gap-2 overflow-x-auto px-3 pb-2">
           {filters.map((filter) => (
@@ -233,6 +257,38 @@ export function TopBar({
         </div>
       ) : null}
     </header>
+  );
+}
+
+function ViewSwitch({
+  viewMode,
+  preset,
+  onViewMode,
+}: {
+  viewMode: ViewMode;
+  preset: LayoutPreset;
+  onViewMode: (mode: ViewMode) => void;
+}) {
+  return (
+    <div role="radiogroup" aria-label="View" className="flex rounded-full border border-line p-0.5">
+      {VIEWS.map((item) => {
+        const active = preset !== "compare" && viewMode === item.id;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onViewMode(item.id)}
+            className={`rounded-full px-2.5 py-1 text-xs ${
+              active ? "bg-teal text-teal-ink" : "text-mute hover:text-foam"
+            }`}
+          >
+            {item.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

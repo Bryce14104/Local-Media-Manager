@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { frameBackground, placeName } from "../../studio/catalog";
+import { formatLabel } from "../../studio/query";
 import type { StudioItem } from "../../studio/types";
 
 type MediaTrayProps = {
@@ -12,21 +13,34 @@ export function MediaTray({ items, primaryId, onSelect }: MediaTrayProps) {
   const scroller = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!primaryId || !scroller.current) return;
-    const node = scroller.current.querySelector(`[data-tray-id="${CSS.escape(primaryId)}"]`);
-    if (node instanceof HTMLElement) node.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+    const box = scroller.current;
+    if (!primaryId || !box) return;
+    const node = box.querySelector(`[data-tray-id="${CSS.escape(primaryId)}"]`);
+    if (!(node instanceof HTMLElement)) return;
+    const nodeRect = node.getBoundingClientRect();
+    const boxRect = box.getBoundingClientRect();
+    const top = box.scrollTop + (nodeRect.top - boxRect.top) - (boxRect.height - nodeRect.height) / 2;
+    box.scrollTo({ top, behavior: "smooth" });
   }, [primaryId, items]);
 
   return (
-    <div className="shrink-0 border-t border-line bg-card/95">
+    <aside className="flex max-h-[46%] min-h-0 w-full shrink-0 flex-col border-t border-[#2ee0c5]/25 bg-[#0f1115] lg:max-h-none lg:w-[22rem] lg:border-t-0 lg:border-l">
+      <div className="px-4 pb-2 pt-4">
+        <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-mute">Library</p>
+        <p className="mt-1 text-sm tracking-tight text-foam">
+          {items.length === 1 ? "1 frame" : `${items.length} frames`}
+        </p>
+      </div>
       <div
         ref={scroller}
         role="listbox"
-        aria-label="Media tray"
-        className="flex gap-2 overflow-x-auto px-3 py-2"
+        aria-label="Frames"
+        className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 pb-4"
       >
         {items.length === 0 ? (
-          <p className="px-1 py-5 text-xs text-mute">No frames in this view.</p>
+          <p className="rounded-2xl border border-dashed border-[#2ee0c5]/25 px-4 py-8 text-center text-sm text-mute">
+            No frames in this view.
+          </p>
         ) : (
           items.map((item) => {
             const active = item.id === primaryId;
@@ -37,19 +51,37 @@ export function MediaTray({ items, primaryId, onSelect }: MediaTrayProps) {
                 role="option"
                 data-tray-id={item.id}
                 aria-selected={active}
-                title={`${item.fileName} · ${placeName(item.folder)}`}
                 onClick={() => onSelect(item.id)}
-                className={`w-24 shrink-0 overflow-hidden rounded-lg border text-left ${
-                  active ? "border-teal ring-1 ring-teal" : "border-line hover:border-mute"
+                className={`flex w-full gap-3 rounded-2xl border bg-[#171b22] p-2 text-left transition-colors ${
+                  active ? "border-[#2ee0c5]" : "border-[#2ee0c5]/35 hover:border-[#2ee0c5]/70"
                 }`}
               >
-                <div className="aspect-[4/3]" style={{ background: frameBackground(item.id) }} />
-                <p className={`truncate px-1.5 py-1 text-[10px] ${active ? "text-teal" : "text-mute"}`}>{item.fileName}</p>
+                <div
+                  className="h-[4.5rem] w-[4.5rem] shrink-0 rounded-xl"
+                  style={{ background: frameBackground(item.id) }}
+                />
+                <span className="min-w-0 py-0.5">
+                  <span className={`block truncate text-sm font-medium tracking-tight ${active ? "text-[#2ee0c5]" : "text-foam"}`}>
+                    {item.fileName}
+                  </span>
+                  <span className="mt-0.5 block truncate text-xs text-mute">
+                    {placeName(item.folder)} · {shortDate(item.capturedAt)}
+                  </span>
+                  <span className="mt-1 block truncate font-mono text-[10px] tracking-wide text-mute">
+                    {item.camera} · {formatLabel(item.format)}
+                  </span>
+                </span>
               </button>
             );
           })
         )}
       </div>
-    </div>
+    </aside>
   );
+}
+
+function shortDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso.slice(0, 10);
+  return new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" }).format(date);
 }
