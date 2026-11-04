@@ -29,6 +29,7 @@ pub fn run() {
             commands::library_summary,
             commands::list_media,
             commands::scan_directory,
+            commands::index_paths,
             commands::set_rating,
         ])
         .run(tauri::generate_context!())

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { desktopBridgeAvailable, errorMessage, fetchLibrary, indexPaths, pickImportPaths } from "../lib/api";
 import { AddMediaModal } from "../components/drawers/AddMediaModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
 import { PreferencesModal } from "../components/drawers/PreferencesModal";
@@ -7,7 +8,7 @@ import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
 import { MediaStage } from "../components/workspace/MediaStage";
-import { createCatalog, inventItems, nextFlag } from "./catalog";
+import { createCatalog, itemFromRecord, itemsFromFiles, mergeItems, nextFlag } from "./catalog";
 import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
 import type { MapZoom } from "./mapRegions";
 import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
@@ -15,7 +16,6 @@ import type {
   ActiveFilter,
   GeoBounds,
   LayoutPreset,
-  MediaFormat,
   PanelMode,
   StudioAction,
   StudioItem,
@@ -35,7 +35,6 @@ const INITIAL_TELEMETRY: Telemetry = {
 
 export function Workspace() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const scanTimer = useRef<number | null>(null);
   const [items, setItems] = useState<StudioItem[]>(() => createCatalog());
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState<ActiveFilter[]>([]);
@@ -48,6 +47,9 @@ export function Workspace() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const [modal, setModal] = useState<"add" | "export" | "preferences" | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [cacheZoom, setCacheZoom] = useState<MapZoom>(12);
   const [cacheBounds, setCacheBounds] = useState<GeoBounds | null>(null);
   const [selectingCache, setSelectingCache] = useState(false);
@@ -66,8 +68,16 @@ export function Workspace() {
   ];
 
   useEffect(() => {
+    if (!desktopBridgeAvailable()) return;
+    let cancel = false;
+    void fetchLibrary()
+      .then(({ media }) => {
+        if (cancel || media.length === 0) return;
+        setItems((current) => mergeItems(media.map(itemFromRecord), current));
+      })
+      .catch(() => undefined);
     return () => {
-      if (scanTimer.current != null) window.clearInterval(scanTimer.current);
+      cancel = true;
     };
   }, []);
 
@@ -116,6 +126,12 @@ export function Workspace() {
       return;
     }
     setPreset((current) => (current === "map" || current === "compare" ? "browse" : current));
+  }
+
+  function openAdd() {
+    setImportError(null);
+    setImportMessage(null);
+    setModal("add");
   }
 
   function openPreferences() {
@@ -168,7 +184,7 @@ export function Workspace() {
   function applyAction(action: StudioAction) {
     switch (action) {
       case "add-media":
-        setModal("add");
+        openAdd();
         break;
       case "batch-export":
         setModal("export");
@@ -257,14 +273,97 @@ export function Workspace() {
     setPrimaryId(id);
   }
 
-  function addMedia(folder: string, format: MediaFormat) {
-    const created = inventItems(folder, format);
-    setItems((current) => [...created, ...current]);
+  function revealImported(imported: StudioItem[], label: string) {
+    if (imported.length === 0) {
+      setImportError("No photos or videos were found.");
+      setImportMessage(null);
+      return;
+    }
+    const known = new Set(items.map((item) => item.id));
+    const added = imported.filter((item) => !known.has(item.id));
+    setItems((current) => mergeItems(imported, current));
+    if (added.length > 0) {
+      setPrimaryId(added[0]?.id ?? null);
+      setSelectedIds(added.map((item) => item.id));
+    }
+    setImportError(null);
+    setImportMessage(null);
     setModal(null);
     applyPreset("browse");
-    setPrimaryId(created[0]?.id ?? null);
-    setSelectedIds(created.map((item) => item.id));
-    runScan(`Reading ${folder}`);
+    setTelemetry((current) => ({
+      ...current,
+      scanLabel: label,
+      scanProgress: 1,
+      syncLabel: desktopBridgeAvailable() ? "SQLite · ready" : "Browser preview",
+    }));
+    window.setTimeout(() => {
+      setTelemetry((current) => ({ ...current, scanProgress: null }));
+    }, 700);
+  }
+
+  async function browseFolders() {
+    setImportError(null);
+    setImportMessage(null);
+    try {
+      const paths = await pickImportPaths();
+      if (!paths) return;
+      await ingestPaths(paths);
+    } catch (error) {
+      setImportError(errorMessage(error));
+    }
+  }
+
+  async function ingestPaths(paths: string[]) {
+    const folderName = paths[0]?.split(/[/\\]/).filter(Boolean).pop() ?? "folder";
+    setImportBusy(true);
+    setImportError(null);
+    setImportMessage(`Indexing ${folderName}…`);
+    setTelemetry((current) => ({
+      ...current,
+      scanLabel: `Indexing ${folderName}`,
+      scanProgress: 0.35,
+      syncLabel: "SQLite · writing",
+    }));
+    try {
+      const report = await indexPaths(paths);
+      if (report.discovered === 0) {
+        setImportMessage(null);
+        setImportError(report.errors[0] ?? "No photos or videos were found in that selection.");
+        setTelemetry((current) => ({
+          ...current,
+          scanLabel: "Idle · catalog ready",
+          scanProgress: null,
+          syncLabel: "SQLite · ready",
+        }));
+        return;
+      }
+      const { media } = await fetchLibrary();
+      revealImported(
+        media.map(itemFromRecord),
+        `Indexed ${report.indexed} · ${report.unchanged} already in the library`,
+      );
+    } catch (error) {
+      setImportError(errorMessage(error));
+      setImportMessage(null);
+      setTelemetry((current) => ({
+        ...current,
+        scanLabel: "Idle · catalog ready",
+        scanProgress: null,
+        syncLabel: "SQLite · ready",
+      }));
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
+  function ingestFiles(files: File[]) {
+    const imported = itemsFromFiles(files);
+    if (imported.length === 0) {
+      setImportError("No photos or videos were found in that selection.");
+      setImportMessage(null);
+      return;
+    }
+    revealImported(imported, `Added ${imported.length} ${imported.length === 1 ? "frame" : "frames"}`);
   }
 
   function exportSelection(format: string, destination: string) {
@@ -274,34 +373,6 @@ export function Workspace() {
       ...current,
       exportLabel: `Export queued · ${count} · ${format} · ${destination}`,
     }));
-  }
-
-  function runScan(label: string) {
-    if (scanTimer.current != null) window.clearInterval(scanTimer.current);
-    let step = 0;
-    setTelemetry((current) => ({
-      ...current,
-      scanLabel: label,
-      scanProgress: 0.08,
-      syncLabel: "SQLite · writing",
-    }));
-    scanTimer.current = window.setInterval(() => {
-      step += 1;
-      const progress = Math.min(1, step / 10);
-      setTelemetry((current) => ({
-        ...current,
-        scanLabel: progress < 1 ? label : "Idle · catalog ready",
-        scanProgress: progress < 1 ? progress : 1,
-        syncLabel: progress < 1 ? "SQLite · writing" : "SQLite · ready",
-      }));
-      if (progress >= 1 && scanTimer.current != null) {
-        window.clearInterval(scanTimer.current);
-        scanTimer.current = null;
-        window.setTimeout(() => {
-          setTelemetry((current) => ({ ...current, scanProgress: null }));
-        }, 700);
-      }
-    }, 140);
   }
 
   return (
@@ -318,7 +389,7 @@ export function Workspace() {
         onViewMode={chooseView}
         preset={preset}
         onPreset={applyPreset}
-        onAdd={() => setModal("add")}
+        onAdd={openAdd}
         onExport={() => setModal("export")}
         indexOpen={indexOpen}
         onIndexOpen={setIndexOpen}
@@ -392,7 +463,22 @@ export function Workspace() {
         onPreferences={openPreferences}
       />
 
-      {modal === "add" ? <AddMediaModal onClose={() => setModal(null)} onAdd={addMedia} /> : null}
+      {modal === "add" ? (
+        <AddMediaModal
+          onClose={() => {
+            if (importBusy) return;
+            setModal(null);
+            setImportError(null);
+            setImportMessage(null);
+          }}
+          busy={importBusy}
+          message={importMessage}
+          error={importError}
+          onBrowse={() => void browseFolders()}
+          onPaths={(paths) => void ingestPaths(paths)}
+          onFiles={ingestFiles}
+        />
+      ) : null}
       {modal === "preferences" ? (
         <PreferencesModal
           onClose={() => setModal(null)}

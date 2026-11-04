@@ -74,7 +74,7 @@ That page is the studio. The grid, command palette, inspector, map, and telemetr
 npm run tauri dev
 ```
 
-`npm run tauri dev` opens the same studio in a desktop window. The Rust catalog in `src-tauri` still creates `library.sqlite` on launch. The studio screen does not read that file yet.
+`npm run tauri dev` opens the same studio in a desktop window. Add media uses the system folder picker. Shelf scans that folder into `library.sqlite`, then the new frames show up in the grid. In a browser preview, Browse Folders uses the page's folder picker and adds those files to the grid without writing SQLite.
 
 `npm run test:rust` and `npm run check:rust` are the same Cargo commands as above.
 

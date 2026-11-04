@@ -77,6 +77,145 @@ export function createCatalog(): StudioItem[] {
   return SEED.map((row) => seedItem(row, row[0]));
 }
 
+export function itemFromRecord(record: {
+  id: number;
+  filePath: string;
+  contentHash: string | null;
+  fileSize: number;
+  createdAt: number | null;
+  modifiedAt: number;
+  rating: number | null;
+  mediaKind: "image" | "video" | "raw";
+  exif: {
+    cameraMake: string | null;
+    cameraModel: string | null;
+    lensModel: string | null;
+    capturedAt: string | null;
+    width: number | null;
+    height: number | null;
+    iso: string | null;
+    exposureTime: string | null;
+    fNumber: string | null;
+    focalLength: string | null;
+  } | null;
+}): StudioItem {
+  const fileName = record.filePath.split(/[/\\]/).filter(Boolean).pop() ?? record.filePath;
+  const folder = parentFolder(record.filePath);
+  const exif = record.exif;
+  const format = formatForKind(record.mediaKind);
+  const captured =
+    exif?.capturedAt ??
+    unixToIso(record.createdAt) ??
+    unixToIso(record.modifiedAt) ??
+    new Date().toISOString();
+  const id = `library-${record.id}`;
+  const camera = [exif?.cameraMake, exif?.cameraModel].filter(Boolean).join(" ");
+  return {
+    id,
+    fileName,
+    folder,
+    capturedAt: captured,
+    camera: camera || "Unknown camera",
+    lens: exif?.lensModel || "Unknown lens",
+    rating: record.rating != null && record.rating > 0 ? record.rating : null,
+    flag: "unflagged",
+    format,
+    fileSize: record.fileSize,
+    iso: leadingNumber(exif?.iso ?? null),
+    shutter: exif?.exposureTime ?? null,
+    aperture: exif?.fNumber ?? null,
+    focalLength: exif?.focalLength ?? null,
+    width: exif?.width ?? null,
+    height: exif?.height ?? null,
+    hash: record.contentHash ?? fakeHash(id),
+    histogram: histogram(id),
+    ...coordinatesFor(folder, id),
+  };
+}
+
+export function itemsFromFiles(files: File[]): StudioItem[] {
+  const stamp = new Date().toISOString().slice(0, 19);
+  const items: StudioItem[] = [];
+  for (const file of files) {
+    const relative = file.webkitRelativePath || file.name;
+    const parts = relative.split(/[/\\]/).filter(Boolean);
+    const fileName = parts.pop() ?? file.name;
+    const format = formatForName(fileName);
+    if (!format) continue;
+    const folder = parts.join("/") || "Inbox";
+    const id = `import-${relative}-${file.size}-${file.lastModified}`;
+    items.push({
+      id,
+      fileName,
+      folder,
+      capturedAt: stamp,
+      camera: "Unknown camera",
+      lens: "Unknown lens",
+      rating: null,
+      flag: "unflagged",
+      format,
+      fileSize: file.size,
+      iso: null,
+      shutter: null,
+      aperture: null,
+      focalLength: null,
+      width: null,
+      height: null,
+      hash: fakeHash(id),
+      histogram: histogram(id),
+      ...coordinatesFor(folder, id),
+    });
+  }
+  return items;
+}
+
+export function mergeItems(incoming: StudioItem[], current: StudioItem[]): StudioItem[] {
+  const replacements = new Map(incoming.map((item) => [item.id, item]));
+  const seen = new Set(current.map((item) => item.id));
+  const added = incoming.filter((item) => !seen.has(item.id));
+  const updated = current.map((item) => replacements.get(item.id) ?? item);
+  return [...added, ...updated];
+}
+
+function parentFolder(path: string): string {
+  const parts = path.split(/[/\\]/).filter(Boolean);
+  parts.pop();
+  return parts.join("/") || "Inbox";
+}
+
+function unixToIso(seconds: number | null): string | null {
+  if (seconds == null) return null;
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function leadingNumber(value: string | null): number | null {
+  if (!value) return null;
+  const match = value.match(/\d+/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatForKind(kind: "image" | "video" | "raw"): MediaFormat {
+  if (kind === "video") return "video";
+  if (kind === "raw") return "raw";
+  return "jpg";
+}
+
+function formatForName(name: string): MediaFormat | null {
+  const extension = name.split(".").pop()?.toLowerCase() ?? "";
+  if (["raw", "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "raf", "pef", "srw"].includes(extension)) {
+    return "raw";
+  }
+  if (["mp4", "mov", "m4v", "mkv", "avi", "webm"].includes(extension)) return "video";
+  if (["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "heic", "heif", "avif"].includes(extension)) {
+    return "jpg";
+  }
+  return null;
+}
+
 export function inventItems(folder: string, format: MediaFormat): StudioItem[] {
   const stamp = Date.now();
   const captured = new Date().toISOString().slice(0, 19);

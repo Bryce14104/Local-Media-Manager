@@ -10,7 +10,7 @@ import type {
 } from "./types";
 
 const ACTIONS: { action: StudioAction; label: string; hint: string; keywords: string }[] = [
-  { action: "add-media", label: "Add media", hint: "Index a folder", keywords: "add media scan import folder" },
+  { action: "add-media", label: "Add media", hint: "Browse a folder into the library", keywords: "add media scan import folder browse" },
   { action: "batch-export", label: "Batch export", hint: "Queue the selection", keywords: "batch export save" },
   { action: "index-status", label: "AI indexing status", hint: "Background jobs", keywords: "ai index indexing status" },
   { action: "preset-browse", label: "Preset: Browse", hint: "Grid only", keywords: "preset browse layout" },

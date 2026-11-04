@@ -32,6 +32,16 @@ pub async fn scan_directory(root: String, state: State<'_, Library>) -> Result<S
 }
 
 #[tauri::command]
+pub async fn index_paths(paths: Vec<String>, state: State<'_, Library>) -> Result<ScanReport, String> {
+    let library = Library::clone(&*state);
+    async_runtime::spawn_blocking(move || {
+        services::index_paths(&library, &paths).map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
 pub fn set_rating(
     path: String,
     rating: Option<u8>,

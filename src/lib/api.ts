@@ -48,6 +48,11 @@ export async function scanDirectory(root: string): Promise<ScanReport> {
   return invoke<ScanReport>("scan_directory", { root });
 }
 
+export async function indexPaths(paths: string[]): Promise<ScanReport> {
+  assertBridge();
+  return invoke<ScanReport>("index_paths", { paths });
+}
+
 export async function setRating(
   path: string,
   rating: number | null,
@@ -56,13 +61,17 @@ export async function setRating(
   return invoke<MediaRecord>("set_rating", { path, rating });
 }
 
-export async function pickFolder(): Promise<string | null> {
+export async function pickImportPaths(): Promise<string[] | null> {
   assertBridge();
   const selected = await open({
+    title: "Browse folders",
     directory: true,
-    multiple: false,
+    multiple: true,
     recursive: true,
-    title: "Choose a media folder",
   });
-  return typeof selected === "string" ? selected : null;
+  if (selected == null) return null;
+  const paths = (Array.isArray(selected) ? selected : [selected]).filter(
+    (path): path is string => typeof path === "string" && path.trim().length > 0,
+  );
+  return paths.length > 0 ? paths : null;
 }

@@ -30,6 +30,8 @@ pub enum ScanError {
         #[source]
         source: std::io::Error,
     },
+    #[error("{0} is not a photo or video Shelf can read")]
+    Unsupported(String),
 }
 
 #[derive(Debug)]
@@ -80,6 +82,20 @@ pub fn scan_directory(root: &Path) -> Result<ScanBatch, ScanError> {
     }
 
     Ok(ScanBatch { files, errors })
+}
+
+/// Read one media file. Directories and other file types are errors.
+pub fn describe_file(path: &Path) -> Result<ScannedFile, ScanError> {
+    if !path.exists() {
+        return Err(ScanError::Missing(path.display().to_string()));
+    }
+    if !path.is_file() {
+        return Err(ScanError::NotDirectory(path.display().to_string()));
+    }
+    let Some(media_kind) = classify(path) else {
+        return Err(ScanError::Unsupported(path.display().to_string()));
+    };
+    scanned_file(path, media_kind)
 }
 
 /// SHA-256 of the file bytes, as lowercase hex.
