@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { frameBackground, placeName } from "../../studio/catalog";
 import {
   clientToWorld,
+  fitAustralia,
   frameBounds,
   fitItems,
   fitWorld,
@@ -24,13 +25,16 @@ type MediaMapProps = {
   items: StudioItem[];
   primaryId: string | null;
   focusRequest?: { id: string; nonce: number } | null;
+  selectingCache?: boolean;
+  onCacheBounds?: (bounds: GeoBounds) => void;
+  onCancelCache?: () => void;
   onOpen: (id: string) => void;
   onRegion: (bounds: GeoBounds) => void;
   onCluster: (ids: string[], label: string) => void;
   className?: string;
 };
 
-type Tool = "pan" | "region";
+type Tool = "pan" | "region" | "cache";
 
 type WorldBox = { x: number; y: number; w: number; h: number };
 
@@ -56,11 +60,23 @@ type Cluster = {
 
 const CLUSTER_RADIUS = 36;
 
-export function MediaMap({ items, primaryId, focusRequest, onOpen, onRegion, onCluster, className }: MediaMapProps) {
+export function MediaMap({
+  items,
+  primaryId,
+  focusRequest,
+  selectingCache = false,
+  onCacheBounds,
+  onCancelCache,
+  onOpen,
+  onRegion,
+  onCluster,
+  className,
+}: MediaMapProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const fitted = useRef<string | null>(null);
+  const opened = useRef(false);
   const [size, setSize] = useState<MapSize>({ width: 0, height: 0 });
-  const [view, setView] = useState<MapView>(() => fitWorld({ width: 16, height: 9 }));
+  const [view, setView] = useState<MapView>(() => fitAustralia({ width: 16, height: 9 }));
   const [tool, setTool] = useState<Tool>("pan");
   const [rubber, setRubber] = useState<WorldBox | null>(null);
   const [preview, setPreview] = useState<Preview | null>(null);
@@ -117,10 +133,16 @@ export function MediaMap({ items, primaryId, focusRequest, onOpen, onRegion, onC
       if (event.key !== "Escape") return;
       setPreview(null);
       setRubber(null);
+      if (selectingCache) onCancelCache?.();
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [onCancelCache, selectingCache]);
+
+  useEffect(() => {
+    if (selectingCache) setTool("cache");
+    else setTool((current) => (current === "cache" ? "pan" : current));
+  }, [selectingCache]);
 
   const ids = items.map((item) => item.id).join("|");
   useEffect(() => {
@@ -136,6 +158,12 @@ export function MediaMap({ items, primaryId, focusRequest, onOpen, onRegion, onC
 
   useEffect(() => {
     if (size.width < 10 || size.height < 10) return;
+    if (!opened.current) {
+      opened.current = true;
+      fitted.current = ids;
+      setView(fitAustralia(size));
+      return;
+    }
     if (fitted.current === ids) return;
     fitted.current = ids;
     if (items.length === 0) return;
@@ -178,7 +206,7 @@ export function MediaMap({ items, primaryId, focusRequest, onOpen, onRegion, onC
     const startWorld = clientToWorld(event.clientX, event.clientY, view, rect);
     if (!startWorld) return;
     drag.current = {
-      mode: tool === "region" || event.shiftKey ? "region" : tool,
+      mode: selectingCache ? (tool === "pan" ? "pan" : "cache") : tool === "region" || event.shiftKey ? "region" : "pan",
       startX: event.clientX,
       startY: event.clientY,
       startWorld,
@@ -231,6 +259,7 @@ export function MediaMap({ items, primaryId, focusRequest, onOpen, onRegion, onC
       setRubber(null);
       return;
     }
+    if (current.mode === "cache") onCacheBounds?.(boundsFromBox(current.box));
     if (current.mode === "region") onRegion(boundsFromBox(current.box));
     setRubber(null);
   }
@@ -248,11 +277,15 @@ export function MediaMap({ items, primaryId, focusRequest, onOpen, onRegion, onC
       <div className="absolute left-3 top-3 z-20 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-2">
         <div className="flex flex-wrap items-center gap-2">
         <div role="radiogroup" aria-label="Map tool" className="flex rounded-full border border-line bg-card/95 p-0.5">
-          {(
-            [
-              ["pan", "Pan", "Pan the map"],
-              ["region", "Region", "Drag a box to filter the grid"],
-            ] as const
+          {(selectingCache
+            ? ([
+                ["pan", "Pan", "Pan the map"],
+                ["cache", "Draw", "Drag a box to choose the cache area"],
+              ] as const)
+            : ([
+                ["pan", "Pan", "Pan the map"],
+                ["region", "Region", "Drag a box to filter the grid"],
+              ] as const)
           ).map(([mode, label, description]) => (
             <button
               key={mode}
@@ -286,9 +319,24 @@ export function MediaMap({ items, primaryId, focusRequest, onOpen, onRegion, onC
         >
           Fit
         </button>
+        {selectingCache ? (
+          <button
+            type="button"
+            onClick={() => onCancelCache?.()}
+            className="rounded-full border border-line bg-card/95 px-3 py-1 text-xs text-mute hover:text-foam"
+          >
+            Cancel
+          </button>
+        ) : null}
         </div>
         <p className="pointer-events-none max-w-xs text-xs text-mute">
-          {tool === "region" ? "Drag a box to filter the grid." : "Click a pin to highlight its frame. Shift-drag selects a region."}
+          {selectingCache
+            ? tool === "pan"
+              ? "Pan to the area, then choose Draw."
+              : "Drag a rectangle to choose the cache area."
+            : tool === "region"
+              ? "Drag a box to filter the grid."
+              : "Click a pin to highlight its frame. Shift-drag selects a region."}
         </p>
       </div>
       {detailNames.length > 0 ? (

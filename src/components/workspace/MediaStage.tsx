@@ -21,6 +21,9 @@ type MediaStageProps = {
   onShowInfo: () => void;
   onRegion: (bounds: GeoBounds) => void;
   onCluster: (ids: string[], label: string) => void;
+  selectingCache?: boolean;
+  onCacheBounds?: (bounds: GeoBounds) => void;
+  onCancelCache?: () => void;
   mapDocked?: boolean;
   className?: string;
 };
@@ -48,6 +51,9 @@ export function MediaStage({
   onShowInfo,
   onRegion,
   onCluster,
+  selectingCache = false,
+  onCacheBounds,
+  onCancelCache,
   mapDocked = false,
   className,
 }: MediaStageProps) {
@@ -106,6 +112,9 @@ export function MediaStage({
               onOpen={selectOnMap}
               onRegion={onRegion}
               onCluster={onCluster}
+              selectingCache={selectingCache}
+              onCacheBounds={onCacheBounds}
+              onCancelCache={onCancelCache}
               className="min-h-0 flex-1"
             />
             <MediaTray items={items} primaryId={primaryId} onSelect={selectOnMap} />

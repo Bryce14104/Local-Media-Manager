@@ -9,6 +9,7 @@ import { ComparePane } from "../components/workspace/ComparePane";
 import { MediaMap } from "../components/workspace/MediaMap";
 import { MediaStage } from "../components/workspace/MediaStage";
 import { createCatalog, inventItems, nextFlag } from "./catalog";
+import type { MapZoom } from "./mapRegions";
 import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
 import type {
   ActiveFilter,
@@ -46,6 +47,9 @@ export function Workspace() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const [modal, setModal] = useState<"add" | "export" | "preferences" | null>(null);
+  const [cacheZoom, setCacheZoom] = useState<MapZoom>(12);
+  const [cacheBounds, setCacheBounds] = useState<GeoBounds | null>(null);
+  const [selectingCache, setSelectingCache] = useState(false);
   const [indexOpen, setIndexOpen] = useState(false);
   const [telemetry, setTelemetry] = useState<Telemetry>(INITIAL_TELEMETRY);
 
@@ -74,6 +78,7 @@ export function Workspace() {
         target instanceof HTMLTextAreaElement ||
         target instanceof HTMLSelectElement;
       if (event.key === "Escape") {
+        if (selectingCache) return;
         setModal(null);
         if (panelMode === "floating") setPanelMode("hidden");
         return;
@@ -85,7 +90,7 @@ export function Workspace() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [modal, panelMode, primaryId]);
+  }, [modal, panelMode, primaryId, selectingCache]);
 
   function applyPreset(next: LayoutPreset) {
     setPreset(next);
@@ -100,6 +105,26 @@ export function Workspace() {
   }
 
   function openPreferences() {
+    setSelectingCache(false);
+    setModal("preferences");
+  }
+
+  function beginCacheSelect() {
+    setSelectingCache(true);
+    setModal(null);
+    setViewMode("map");
+    setPanelMode("hidden");
+    if (preset === "compare") setPreset("browse");
+  }
+
+  function finishCacheSelect(bounds: GeoBounds) {
+    setCacheBounds(bounds);
+    setSelectingCache(false);
+    setModal("preferences");
+  }
+
+  function cancelCacheSelect() {
+    setSelectingCache(false);
     setModal("preferences");
   }
 
@@ -307,6 +332,9 @@ export function Workspace() {
             }}
             onRegion={applyRegion}
             onCluster={applyCluster}
+            selectingCache={selectingCache}
+            onCacheBounds={finishCacheSelect}
+            onCancelCache={cancelCacheSelect}
           />
         ) : preset === "map" ? (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -316,6 +344,9 @@ export function Workspace() {
               onOpen={openItem}
               onRegion={applyRegion}
               onCluster={applyCluster}
+              selectingCache={selectingCache}
+              onCacheBounds={finishCacheSelect}
+              onCancelCache={cancelCacheSelect}
               className="min-h-[220px] flex-[1.4]"
             />
             <MediaStage
@@ -365,6 +396,9 @@ export function Workspace() {
             }}
             onRegion={applyRegion}
             onCluster={applyCluster}
+            selectingCache={selectingCache}
+            onCacheBounds={finishCacheSelect}
+            onCancelCache={cancelCacheSelect}
           />
         )}
         {panelMode === "docked" ? (
@@ -401,7 +435,15 @@ export function Workspace() {
       <TelemetryBar telemetry={telemetry} onPreferences={openPreferences} />
 
       {modal === "add" ? <AddMediaModal onClose={() => setModal(null)} onAdd={addMedia} /> : null}
-      {modal === "preferences" ? <PreferencesModal onClose={() => setModal(null)} /> : null}
+      {modal === "preferences" ? (
+        <PreferencesModal
+          onClose={() => setModal(null)}
+          maxZoom={cacheZoom}
+          onMaxZoom={setCacheZoom}
+          bounds={cacheBounds}
+          onSelectArea={beginCacheSelect}
+        />
+      ) : null}
       {modal === "export" ? (
         <BatchExportModal
           count={selectedIds.length}

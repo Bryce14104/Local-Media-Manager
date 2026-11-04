@@ -24,6 +24,19 @@ export function formatLongitude(value: number, digits = 2): string {
   return `${Math.abs(value).toFixed(digits)}°${value >= 0 ? "E" : "W"}`;
 }
 
+export const AUSTRALIA_CENTER = { latitude: -25.2744, longitude: 133.7751 };
+
+export function fitAustralia(size: MapSize): MapView {
+  const aspect = aspectOf(size);
+  const lonSpan = 52;
+  const latSpan = 36;
+  const w = Math.max(lonSpan, latSpan * aspect);
+  const h = w / aspect;
+  const cx = AUSTRALIA_CENTER.longitude + 180;
+  const cy = 90 - AUSTRALIA_CENTER.latitude;
+  return clampPan({ x: cx - w / 2, y: cy - h / 2, w, h });
+}
+
 export function fitWorld(size: MapSize): MapView {
   const aspect = aspectOf(size);
   if (aspect >= 2) {
