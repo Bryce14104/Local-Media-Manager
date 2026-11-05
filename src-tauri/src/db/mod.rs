@@ -251,11 +251,16 @@ impl Library {
         Ok(removed)
     }
 
-    /// Delete source files, then their catalog rows and previews.
+    /// Delete source files that are already in the catalog, then their rows and previews.
+    /// A path with no library row is left untouched.
     pub fn delete_paths(&self, paths: &[String]) -> Result<(usize, Vec<String>), DbError> {
         let mut removed = 0;
         let mut failed = Vec::new();
         for path in paths {
+            let Some(record) = self.find_by_path(path)? else {
+                failed.push(format!("{path}: not in the library"));
+                continue;
+            };
             match std::fs::remove_file(path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -264,10 +269,7 @@ impl Library {
                     continue;
                 }
             }
-            let thumb = self
-                .find_by_path(path)?
-                .and_then(|record| record.thumbnail_path);
-            delete_owned_thumbnail(thumb.as_deref());
+            delete_owned_thumbnail(record.thumbnail_path.as_deref());
             let conn = self.lock()?;
             removed += conn.execute("DELETE FROM media_files WHERE file_path = ?1", params![path])?;
         }
@@ -654,6 +656,15 @@ mod tests {
         assert_eq!(removed, 1);
         assert!(failed.is_empty());
         assert!(!gone.exists());
+
+        let outsider = dir.path().join("outsider.jpg");
+        std::fs::write(&outsider, b"keep").unwrap();
+        let (removed, failed) = library
+            .delete_paths(&[outsider.display().to_string()])
+            .unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!(failed.len(), 1);
+        assert!(outsider.is_file());
 
         assert_eq!(
             library.set_flag(&[kept.display().to_string()], Some("pick")).unwrap(),
