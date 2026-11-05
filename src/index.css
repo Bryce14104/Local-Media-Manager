@@ -67,3 +67,56 @@ body {
   border-radius: 999px;
   background: #2c3340;
 }
+
+@keyframes lightbox-open {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lightbox-next {
+  from {
+    opacity: 0;
+    transform: translateX(28px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes lightbox-prev {
+  from {
+    opacity: 0;
+    transform: translateX(-28px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lightbox-open {
+  animation: lightbox-open 220ms ease;
+}
+
+.lightbox-next {
+  animation: lightbox-next 240ms ease;
+}
+
+.lightbox-prev {
+  animation: lightbox-prev 240ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lightbox-open,
+  .lightbox-next,
+  .lightbox-prev {
+    animation: none;
+  }
+}

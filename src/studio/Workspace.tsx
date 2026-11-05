@@ -19,11 +19,13 @@ import { InspectorPanel } from "../components/panels/InspectorPanel";
 import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
+import { Lightbox } from "../components/workspace/Lightbox";
 import { MediaStage } from "../components/workspace/MediaStage";
 import { SelectionBar } from "../components/workspace/SelectionBar";
 import { captureMillis, createCatalog, itemFromRecord, mergeItems, nextFlag } from "./catalog";
 import { itemsFromFiles } from "./previews";
 import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
+import { applySelection, type PointerMods } from "./selection";
 import type { MapZoom } from "./mapRegions";
 import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
 import type {
@@ -63,6 +65,8 @@ export function Workspace() {
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const [modal, setModal] = useState<"add" | "export" | "preferences" | null>(null);
   const [selectMode, setSelectMode] = useState(false);
+  const [lightboxId, setLightboxId] = useState<string | null>(null);
+  const [lightboxMotion, setLightboxMotion] = useState<"open" | "next" | "prev">("open");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const anchorRef = useRef<string | null>(null);
   const jobToken = useRef(0);
@@ -88,6 +92,7 @@ export function Workspace() {
   );
   const palette = useMemo(() => suggestions(query, items), [query, items]);
   const primary = items.find((item) => item.id === primaryId) ?? null;
+  const lightboxItem = visible.find((item) => item.id === lightboxId) ?? null;
   const comparePair: [StudioItem | null, StudioItem | null] = [
     items.find((item) => item.id === selectedIds[0]) ?? null,
     items.find((item) => item.id === selectedIds[1]) ?? null,
@@ -182,20 +187,65 @@ export function Workspace() {
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
         target instanceof HTMLSelectElement;
+      const command = event.metaKey || event.ctrlKey;
+      if (command && event.key.toLowerCase() === "a") {
+        if (typing || modal || confirmDelete || lightboxId || viewMode === "map" || preset === "compare") return;
+        event.preventDefault();
+        const ids = visible.map((item) => item.id);
+        setSelectedIds(ids);
+        if (ids[0]) {
+          anchorRef.current = ids[0];
+          setPrimaryId((current) => current ?? ids[0]);
+        }
+        return;
+      }
       if (event.key === "Escape") {
         if (selectingCache) return;
-        setModal(null);
+        if (lightboxId) {
+          event.preventDefault();
+          closeLightbox();
+          return;
+        }
+        if (confirmDelete) {
+          setConfirmDelete(false);
+          return;
+        }
+        if (modal) {
+          setModal(null);
+          return;
+        }
+        if (typing) return;
+        if (selectedIds.length > 0) {
+          setSelectedIds([]);
+          return;
+        }
         if (panelMode === "floating") setPanelMode("hidden");
         return;
       }
-      if (typing || modal) return;
+      if (typing || modal || confirmDelete) return;
+      if (lightboxId) {
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          stepLightbox(1);
+        } else if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          stepLightbox(-1);
+        } else if (/^[1-5]$/.test(event.key)) {
+          rate(lightboxId, Number(event.key));
+        }
+        return;
+      }
       if (/^[1-5]$/.test(event.key) && primaryId) {
         rate(primaryId, Number(event.key));
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [modal, panelMode, primaryId, selectingCache]);
+  }, [confirmDelete, lightboxId, modal, panelMode, preset, primaryId, selectedIds, selectingCache, viewMode, visible]);
+
+  useEffect(() => {
+    if (lightboxId && !visible.some((item) => item.id === lightboxId)) setLightboxId(null);
+  }, [lightboxId, visible]);
 
   function applyPreset(next: LayoutPreset) {
     setPreset(next);
@@ -348,13 +398,39 @@ export function Workspace() {
     if (preset === "inspect") setPanelMode("docked");
   }
 
-  function inspectItem(id: string) {
-    openItem(id);
-    applyPreset("inspect");
+  function viewItem(id: string) {
+    setPrimaryId(id);
+    anchorRef.current = id;
+    setSelectedIds([id]);
+    setLightboxMotion("open");
+    setLightboxId(id);
+  }
+
+  function closeLightbox() {
+    const id = lightboxId;
+    if (!id) return;
+    setLightboxId(null);
+    requestAnimationFrame(() => {
+      const card = document.getElementById(`frame-${id}`);
+      card?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      card?.querySelector<HTMLElement>("[data-open-frame]")?.focus({ preventScroll: true });
+    });
+  }
+
+  function stepLightbox(delta: number) {
+    const index = visible.findIndex((item) => item.id === lightboxId);
+    const next = visible[index + delta];
+    if (!next) return;
+    setLightboxMotion(delta > 0 ? "next" : "prev");
+    setLightboxId(next.id);
+    setPrimaryId(next.id);
+    anchorRef.current = next.id;
+    setSelectedIds([next.id]);
   }
 
   function toggleItem(id: string) {
     setPrimaryId(id);
+    anchorRef.current = id;
     setSelectedIds((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
     );
@@ -372,26 +448,27 @@ export function Workspace() {
     setPrimaryId(id);
   }
 
-  function selectItem(id: string, shift: boolean) {
+  function selectItem(id: string, mods: PointerMods) {
     setPrimaryId(id);
     setSelectedIds((current) => {
-      if (shift && anchorRef.current) {
-        const ids = visible.map((item) => item.id);
-        const start = ids.indexOf(anchorRef.current);
-        const end = ids.indexOf(id);
-        if (start >= 0 && end >= 0) {
-          const [from, to] = start < end ? [start, end] : [end, start];
-          return [...new Set([...current, ...ids.slice(from, to + 1)])];
-        }
-      }
-      anchorRef.current = id;
-      return current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
+      const result = applySelection(
+        current,
+        visible.map((item) => item.id),
+        anchorRef.current,
+        id,
+        mods,
+        selectMode,
+      );
+      anchorRef.current = result.anchor;
+      return result.selected;
     });
   }
 
   function selectVisible() {
     setSelectMode(true);
-    setSelectedIds(visible.map((item) => item.id));
+    const ids = visible.map((item) => item.id);
+    setSelectedIds(ids);
+    if (ids[0]) anchorRef.current = ids[0];
   }
 
   async function flagSelection(flag: FlagStatus) {
@@ -616,7 +693,7 @@ export function Workspace() {
             selectedIds={selectedIds}
             primaryId={primaryId}
             onOpen={openItem}
-            onInspect={inspectItem}
+            onView={viewItem}
             selectMode={selectMode}
             onSelectMode={setSelectMode}
             onSelect={selectItem}
@@ -664,7 +741,7 @@ export function Workspace() {
         />
       ) : null}
 
-      {selectedIds.length > 0 ? (
+      {selectedIds.length > 0 && !lightboxId ? (
         <SelectionBar
           count={selectedIds.length}
           canDelete={desktopBridgeAvailable() && items.some((item) => selectedIds.includes(item.id) && item.sourcePath)}
@@ -738,6 +815,18 @@ export function Workspace() {
           count={selectedIds.length}
           onClose={() => setModal(null)}
           onExport={exportSelection}
+        />
+      ) : null}
+      {lightboxItem ? (
+        <Lightbox
+          item={lightboxItem}
+          index={Math.max(0, visible.findIndex((item) => item.id === lightboxItem.id))}
+          count={visible.length}
+          direction={lightboxMotion}
+          onClose={closeLightbox}
+          onPrev={() => stepLightbox(-1)}
+          onNext={() => stepLightbox(1)}
+          onRate={(rating) => rate(lightboxItem.id, rating)}
         />
       ) : null}
     </div>

@@ -1,5 +1,6 @@
 import { gridMetrics } from "../../studio/gridZoom";
 import { formatLabel } from "../../studio/query";
+import type { PointerMods } from "../../studio/selection";
 import type { StudioItem } from "../../studio/types";
 import { formatBytes } from "../../lib/format";
 import { FrameStill } from "./FrameStill";
@@ -11,7 +12,7 @@ type MediaCardProps = {
   detail: "compact" | "card";
   selected: boolean;
   primary: boolean;
-  onOpen: (shift: boolean) => void;
+  onOpen: (mods: PointerMods) => void;
   onToggle: () => void;
   onRate: (rating: number | null) => void;
   onFlag: () => void;
@@ -32,11 +33,27 @@ export function MediaCard({
   const showMeta = detail === "card" ? !dense : roomy;
   return (
     <article
-      className={`group relative overflow-hidden border bg-card ${dense ? "rounded-lg" : "rounded-xl"} ${
+      id={`frame-${item.id}`}
+      className={`group relative overflow-hidden border bg-card select-none ${dense ? "rounded-lg" : "rounded-xl"} ${
         primary ? "border-teal" : selected ? "border-teal/50" : "border-line"
       }`}
     >
-      <button type="button" onClick={(event) => onOpen(event.shiftKey)} className="block w-full text-left">
+      <button
+        type="button"
+        data-open-frame
+        onMouseDown={(event) => {
+          if (event.shiftKey) event.preventDefault();
+        }}
+        onContextMenu={(event) => {
+          if (event.ctrlKey) event.preventDefault();
+        }}
+        onClick={(event) => {
+          const mods = { shift: event.shiftKey, toggle: event.metaKey || event.ctrlKey };
+          if (mods.shift || mods.toggle) event.preventDefault();
+          onOpen(mods);
+        }}
+        className="block w-full text-left"
+      >
         <div className={roomy ? "aspect-[4/3]" : "aspect-square"}>
           <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
         </div>

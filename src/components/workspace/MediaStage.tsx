@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { gridMetrics } from "../../studio/gridZoom";
 import { formatMonth } from "../../studio/query";
+import type { PointerMods } from "../../studio/selection";
 import type { GeoBounds, StudioItem, ViewMode } from "../../studio/types";
 import { MediaCard } from "./MediaCard";
 import { MediaMap } from "./MediaMap";
@@ -14,10 +15,10 @@ type MediaStageProps = {
   selectedIds: string[];
   primaryId: string | null;
   onOpen: (id: string) => void;
-  onInspect: (id: string) => void;
+  onView: (id: string) => void;
   selectMode: boolean;
   onSelectMode: (enabled: boolean) => void;
-  onSelect: (id: string, shift: boolean) => void;
+  onSelect: (id: string, mods: PointerMods) => void;
   onSelectVisible: () => void;
   onToggle: (id: string) => void;
   onRate: (id: string, rating: number | null) => void;
@@ -40,7 +41,7 @@ export function MediaStage({
   selectedIds,
   primaryId,
   onOpen,
-  onInspect,
+  onView,
   selectMode,
   onSelectMode,
   onSelect,
@@ -62,6 +63,11 @@ export function MediaStage({
   function selectOnMap(id: string) {
     onOpen(id);
     setFocus({ id, nonce: Date.now() });
+  }
+
+  function activate(id: string, mods: PointerMods) {
+    if (selectMode || mods.shift || mods.toggle) onSelect(id, mods);
+    else onView(id);
   }
 
   if (viewMode === "map") {
@@ -126,7 +132,7 @@ export function MediaStage({
             detail="compact"
             selectedIds={selectedIds}
             primaryId={primaryId}
-            onOpen={selectMode ? onSelect : onInspect}
+            onOpen={activate}
             onToggle={onToggle}
             onRate={onRate}
             onFlag={onFlag}
@@ -138,7 +144,7 @@ export function MediaStage({
             detail={viewMode === "cards" ? "card" : "compact"}
             selectedIds={selectedIds}
             primaryId={primaryId}
-            onOpen={selectMode ? onSelect : onInspect}
+            onOpen={activate}
             onToggle={onToggle}
             onRate={onRate}
             onFlag={onFlag}
@@ -165,7 +171,7 @@ function Grid({
   detail: "compact" | "card";
   selectedIds: string[];
   primaryId: string | null;
-  onOpen: (id: string, shift: boolean) => void;
+  onOpen: (id: string, mods: PointerMods) => void;
   onToggle: (id: string) => void;
   onRate: (id: string, rating: number | null) => void;
   onFlag: (id: string) => void;
@@ -187,7 +193,7 @@ function Grid({
           detail={detail}
           selected={selectedIds.includes(item.id)}
           primary={primaryId === item.id}
-          onOpen={(shift) => onOpen(item.id, shift)}
+          onOpen={(mods) => onOpen(item.id, mods)}
           onToggle={() => onToggle(item.id)}
           onRate={(rating) => onRate(item.id, rating)}
           onFlag={() => onFlag(item.id)}
