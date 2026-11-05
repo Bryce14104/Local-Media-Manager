@@ -145,7 +145,8 @@ export function MediaMap({
     else setTool((current) => (current === "cache" ? "pan" : current));
   }, [selectingCache]);
 
-  const ids = items.map((item) => item.id).join("|");
+  const located = useMemo(() => items.filter((item) => item.geotagged), [items]);
+  const ids = located.map((item) => item.id).join("|");
   useEffect(() => {
     if (size.width < 10 || size.height < 10) return;
     setView((current) => {
@@ -167,18 +168,18 @@ export function MediaMap({
     }
     if (fitted.current === ids) return;
     fitted.current = ids;
-    if (items.length === 0) return;
-    setView(fitItems(items, size));
-  }, [ids, items, size]);
+    if (located.length === 0) return;
+    setView(fitItems(located, size));
+  }, [ids, located, size]);
 
   useEffect(() => {
     if (!focusRequest?.id) return;
-    const item = items.find((entry) => entry.id === focusRequest.id);
+    const item = located.find((entry) => entry.id === focusRequest.id);
     const box = sizeRef.current;
-    if (!item || box.width < 10 || box.height < 10) return;
+    if (!item || !item.geotagged || box.width < 10 || box.height < 10) return;
     setView(frameAround(item, box));
     setPreview((current) => (current && current.id !== item.id ? null : current));
-  }, [focusRequest, items]);
+  }, [focusRequest, located]);
 
   const unit = size.width > 0 ? view.w / size.width : 1;
   const detailTiles = useMemo(() => visibleTiles(library.tiles, view, size), [library.tiles, view, size]);
@@ -189,7 +190,7 @@ export function MediaMap({
       ),
     ),
   ];
-  const groups = useMemo(() => groupPins(items, view, size), [items, view, size]);
+  const groups = useMemo(() => groupPins(located, view, size), [located, view, size]);
   const previewItem = preview ? items.find((item) => item.id === preview.id) ?? null : null;
 
   function focusItems(list: StudioItem[]) {

@@ -35,6 +35,8 @@ pub enum DbError {
     Io(#[from] std::io::Error),
     #[error("rating must be from 0 to 5")]
     InvalidRating,
+    #[error("flag must be pick, reject, or empty")]
+    InvalidFlag,
     #[error("no indexed file at {0}")]
     NotFound(String),
     #[error("the library lock was poisoned")]
@@ -109,7 +111,7 @@ impl Library {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
-                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path
+                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path, flag
              FROM media_files
              ORDER BY captured_at IS NULL, captured_at DESC, file_path COLLATE NOCASE ASC",
         )?;
@@ -121,7 +123,7 @@ impl Library {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
-                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path
+                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path, flag
              FROM media_files
              WHERE file_path = ?1",
         )?;
@@ -180,7 +182,7 @@ impl Library {
 
         let record = conn.query_row(
             "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
-                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path
+                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path, flag
              FROM media_files
              WHERE file_path = ?1",
             params![path],
@@ -201,6 +203,73 @@ impl Library {
         Ok(())
     }
 
+    pub fn set_exif_json(&self, path: &str, exif_json: &str) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE media_files SET exif_json = ?1 WHERE file_path = ?2",
+            params![exif_json, path],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound(path.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn set_flag(&self, paths: &[String], flag: Option<&str>) -> Result<usize, DbError> {
+        if let Some(value) = flag
+            && value != "pick"
+            && value != "reject"
+        {
+            return Err(DbError::InvalidFlag);
+        }
+        let conn = self.lock()?;
+        let mut changed = 0;
+        for path in paths {
+            changed += conn.execute(
+                "UPDATE media_files SET flag = ?1 WHERE file_path = ?2",
+                params![flag, path],
+            )?;
+        }
+        Ok(changed)
+    }
+
+    /// Drop catalog rows and Shelf-written previews. Source files stay on disk.
+    pub fn remove_paths(&self, paths: &[String]) -> Result<usize, DbError> {
+        let mut removed = 0;
+        for path in paths {
+            let thumb = self
+                .find_by_path(path)?
+                .and_then(|record| record.thumbnail_path);
+            delete_owned_thumbnail(thumb.as_deref());
+            let conn = self.lock()?;
+            removed += conn.execute("DELETE FROM media_files WHERE file_path = ?1", params![path])?;
+        }
+        Ok(removed)
+    }
+
+    /// Delete source files, then their catalog rows and previews.
+    pub fn delete_paths(&self, paths: &[String]) -> Result<(usize, Vec<String>), DbError> {
+        let mut removed = 0;
+        let mut failed = Vec::new();
+        for path in paths {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    failed.push(format!("{path}: {error}"));
+                    continue;
+                }
+            }
+            let thumb = self
+                .find_by_path(path)?
+                .and_then(|record| record.thumbnail_path);
+            delete_owned_thumbnail(thumb.as_deref());
+            let conn = self.lock()?;
+            removed += conn.execute("DELETE FROM media_files WHERE file_path = ?1", params![path])?;
+        }
+        Ok((removed, failed))
+    }
+
     pub fn set_captured_at(&self, path: &str, captured_at: i64) -> Result<(), DbError> {
         let conn = self.lock()?;
         conn.execute(
@@ -212,6 +281,20 @@ impl Library {
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, DbError> {
         self.inner.conn.lock().map_err(|_| DbError::Poisoned)
+    }
+}
+
+fn delete_owned_thumbnail(path: Option<&str>) {
+    let Some(path) = path else {
+        return;
+    };
+    let file = Path::new(path);
+    let owned = file
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .is_some_and(|name| name == "thumbnails");
+    if owned {
+        let _ = std::fs::remove_file(file);
     }
 }
 
@@ -232,6 +315,7 @@ fn map_media(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaRecord> {
         exif,
         captured_at: row.get(10)?,
         thumbnail_path: row.get(11)?,
+        flag: row.get(12)?,
     })
 }
 
@@ -245,6 +329,9 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     }
     if !columns.iter().any(|name| name == "thumbnail_path") {
         conn.execute("ALTER TABLE media_files ADD COLUMN thumbnail_path TEXT", [])?;
+    }
+    if !columns.iter().any(|name| name == "flag") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN flag TEXT", [])?;
     }
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_media_files_captured_at ON media_files (captured_at DESC)",
@@ -307,6 +394,43 @@ mod tests {
 
         let again = Library::open(dir.path().join("library.sqlite")).unwrap();
         assert_eq!(again.summary().unwrap().schema_version, 1);
+    }
+
+    #[test]
+    fn remove_drops_the_row_and_delete_removes_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::open(dir.path().join("library.sqlite")).unwrap();
+        let kept = dir.path().join("kept.jpg");
+        let gone = dir.path().join("gone.jpg");
+        std::fs::write(&kept, b"kept").unwrap();
+        std::fs::write(&gone, b"gone").unwrap();
+        for path in [&kept, &gone] {
+            library
+                .upsert_media(NewMedia {
+                    file_path: path.to_str().unwrap(),
+                    content_hash: "abc",
+                    file_size: 4,
+                    created_at: None,
+                    modified_at: 10,
+                    media_kind: MediaKind::Image,
+                    exif_json: None,
+                    captured_at: None,
+                })
+                .unwrap();
+        }
+        assert_eq!(library.remove_paths(&[kept.display().to_string()]).unwrap(), 1);
+        assert!(kept.is_file());
+        assert!(library.find_by_path(kept.to_str().unwrap()).unwrap().is_none());
+
+        let (removed, failed) = library.delete_paths(&[gone.display().to_string()]).unwrap();
+        assert_eq!(removed, 1);
+        assert!(failed.is_empty());
+        assert!(!gone.exists());
+
+        assert_eq!(
+            library.set_flag(&[kept.display().to_string()], Some("pick")).unwrap(),
+            0
+        );
     }
 
     #[test]

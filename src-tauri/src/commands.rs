@@ -1,8 +1,9 @@
 //! Tauri commands the React UI calls through `invoke`.
 
 use crate::db::Library;
-use crate::models::{LibrarySummary, MediaRecord, ScanReport};
+use crate::models::{JobProgress, LibrarySummary, MediaRecord, ScanReport};
 use crate::services;
+use serde::Serialize;
 use std::path::Path;
 use tauri::{AppHandle, Emitter, State, async_runtime};
 
@@ -28,9 +29,15 @@ pub async fn scan_directory(
     }
 
     let library = Library::clone(&*state);
+    let progress_app = app.clone();
     let report = async_runtime::spawn_blocking({
         let library = library.clone();
-        move || services::index_directory(&library, Path::new(&root)).map_err(|err| err.to_string())
+        move || {
+            services::index_directory_with(&library, Path::new(&root), |done, total| {
+                emit_progress(&progress_app, "index", done, total, "Indexing");
+            })
+            .map_err(|err| err.to_string())
+        }
     })
     .await
     .map_err(|err| err.to_string())??;
@@ -45,9 +52,15 @@ pub async fn index_paths(
     app: AppHandle,
 ) -> Result<ScanReport, String> {
     let library = Library::clone(&*state);
+    let progress_app = app.clone();
     let report = async_runtime::spawn_blocking({
         let library = library.clone();
-        move || services::index_paths(&library, &paths).map_err(|err| err.to_string())
+        move || {
+            services::index_paths_with(&library, &paths, |done, total| {
+                emit_progress(&progress_app, "index", done, total, "Indexing");
+            })
+            .map_err(|err| err.to_string())
+        }
     })
     .await
     .map_err(|err| err.to_string())??;
@@ -57,10 +70,55 @@ pub async fn index_paths(
 
 fn spawn_thumbnails(library: Library, app: AppHandle) {
     std::thread::spawn(move || {
-        for ready in services::generate_missing_thumbnails(&library) {
-            let _ = app.emit("thumbnail-ready", &ready);
+        let ready = services::generate_missing_thumbnails_with(&library, |done, total| {
+            emit_progress(&app, "thumbnails", done, total, "Writing previews");
+        });
+        for item in &ready {
+            let _ = app.emit("thumbnail-ready", item);
         }
+        emit_progress(&app, "done", 1, 1, "Catalog ready");
     });
+}
+
+fn emit_progress(app: &AppHandle, phase: &str, done: usize, total: usize, label: &str) {
+    let _ = app.emit(
+        "library-progress",
+        JobProgress {
+            phase: phase.to_string(),
+            done,
+            total,
+            label: label.to_string(),
+        },
+    );
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteReport {
+    pub removed: usize,
+    pub failed: Vec<String>,
+}
+
+#[tauri::command]
+pub fn remove_media(paths: Vec<String>, state: State<'_, Library>) -> Result<usize, String> {
+    state.remove_paths(&paths).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn delete_media(paths: Vec<String>, state: State<'_, Library>) -> Result<DeleteReport, String> {
+    let (removed, failed) = state.delete_paths(&paths).map_err(|err| err.to_string())?;
+    Ok(DeleteReport { removed, failed })
+}
+
+#[tauri::command]
+pub fn set_flags(
+    paths: Vec<String>,
+    flag: Option<String>,
+    state: State<'_, Library>,
+) -> Result<usize, String> {
+    state
+        .set_flag(&paths, flag.as_deref())
+        .map_err(|err| err.to_string())
 }
 
 #[tauri::command]

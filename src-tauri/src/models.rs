@@ -63,6 +63,9 @@ pub struct ExifSnapshot {
     pub exposure_time: Option<String>,
     pub f_number: Option<String>,
     pub focal_length: Option<String>,
+    /// Decimal degrees times 1_000_000. South and west are negative.
+    pub latitude: Option<i32>,
+    pub longitude: Option<i32>,
 }
 
 impl ExifSnapshot {
@@ -79,6 +82,8 @@ impl ExifSnapshot {
             && self.f_number.is_none()
             && self.focal_length.is_none()
             && self.captured_at.is_none()
+            && self.latitude.is_none()
+            && self.longitude.is_none()
     }
 }
 
@@ -98,6 +103,17 @@ pub struct MediaRecord {
     pub exif: Option<ExifSnapshot>,
     pub captured_at: Option<i64>,
     pub thumbnail_path: Option<String>,
+    pub flag: Option<String>,
+}
+
+/// Progress for indexing or thumbnail generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobProgress {
+    pub phase: String,
+    pub done: usize,
+    pub total: usize,
+    pub label: String,
 }
 
 /// A preview JPEG finished on a background thread.

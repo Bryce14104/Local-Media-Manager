@@ -40,34 +40,52 @@ pub fn thumbnail_dir(library: &Library) -> PathBuf {
         .join("thumbnails")
 }
 
-/// Write a JPEG preview for `source` and return the records that changed.
-pub fn generate_missing_thumbnails(library: &Library) -> Vec<ThumbnailReady> {
+/// Write a JPEG preview for each file that does not have one yet.
+pub fn generate_missing_thumbnails_with<F>(library: &Library, mut progress: F) -> Vec<ThumbnailReady>
+where
+    F: FnMut(usize, usize),
+{
     let Ok(media) = library.list_media() else {
+        progress(0, 0);
         return Vec::new();
     };
     let directory = thumbnail_dir(library);
     if std::fs::create_dir_all(&directory).is_err() {
+        progress(0, 0);
         return Vec::new();
     }
 
+    let pending: Vec<_> = media
+        .into_iter()
+        .filter(|record| {
+            if record.media_kind == MediaKind::Video || record.content_hash.is_none() {
+                return false;
+            }
+            !record
+                .thumbnail_path
+                .as_deref()
+                .is_some_and(|path| Path::new(path).is_file())
+        })
+        .collect();
+    let total = pending.len();
+    progress(0, total);
+
     let mut ready = Vec::new();
-    for record in media {
-        if record.media_kind == MediaKind::Video {
-            continue;
-        }
-        if let Some(path) = record.thumbnail_path.as_deref()
-            && Path::new(path).is_file()
-        {
-            continue;
-        }
+    for (index, record) in pending.into_iter().enumerate() {
         let Some(hash) = record.content_hash.as_deref() else {
+            progress(index + 1, total);
             continue;
         };
         let destination = directory.join(format!("{hash}.jpg"));
         if write_thumbnail(Path::new(&record.file_path), &destination).is_err() {
+            progress(index + 1, total);
             continue;
         }
-        if library.set_thumbnail(&record.file_path, &destination.to_string_lossy()).is_err() {
+        if library
+            .set_thumbnail(&record.file_path, &destination.to_string_lossy())
+            .is_err()
+        {
+            progress(index + 1, total);
             continue;
         }
         ready.push(ThumbnailReady {
@@ -76,6 +94,7 @@ pub fn generate_missing_thumbnails(library: &Library) -> Vec<ThumbnailReady> {
             thumbnail_path: destination.to_string_lossy().into_owned(),
             media_kind: record.media_kind,
         });
+        progress(index + 1, total);
     }
     ready
 }

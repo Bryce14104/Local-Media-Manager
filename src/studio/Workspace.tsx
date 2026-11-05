@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { desktopBridgeAvailable, errorMessage, fetchLibrary, indexPaths, pickImportPaths } from "../lib/api";
+import {
+  deleteFromDisk,
+  desktopBridgeAvailable,
+  errorMessage,
+  fetchLibrary,
+  indexPaths,
+  pickImportPaths,
+  removeFromLibrary,
+  setFlags,
+} from "../lib/api";
 import type { MediaKind, MediaRecord } from "../lib/types";
-import { AddMediaModal } from "../components/drawers/AddMediaModal";
+import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
 import { PreferencesModal } from "../components/drawers/PreferencesModal";
 import { InspectorPanel } from "../components/panels/InspectorPanel";
@@ -11,6 +20,7 @@ import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
 import { MediaStage } from "../components/workspace/MediaStage";
+import { SelectionBar } from "../components/workspace/SelectionBar";
 import { captureMillis, createCatalog, itemFromRecord, mergeItems, nextFlag } from "./catalog";
 import { itemsFromFiles } from "./previews";
 import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
@@ -19,6 +29,7 @@ import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
 import type {
   ActiveFilter,
   GeoBounds,
+  FlagStatus,
   LayoutPreset,
   PanelMode,
   StudioAction,
@@ -51,6 +62,10 @@ export function Workspace() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
   const [modal, setModal] = useState<"add" | "export" | "preferences" | null>(null);
+  const [selectMode, setSelectMode] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const anchorRef = useRef<string | null>(null);
+  const jobToken = useRef(0);
   const [importBusy, setImportBusy] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
@@ -105,6 +120,51 @@ export function Workspace() {
             : item,
         ),
       );
+    }).then((unlisten) => {
+      if (cancel) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      cancel = true;
+      stop?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!desktopBridgeAvailable()) return;
+    let stop: (() => void) | undefined;
+    let cancel = false;
+    void listen<JobProgress>("library-progress", (event) => {
+      const job = event.payload;
+      if (job.phase === "done") {
+        const token = jobToken.current;
+        setTelemetry((current) => ({
+          ...current,
+          scanLabel: job.label,
+          scanProgress: 1,
+          syncLabel: "SQLite · ready",
+        }));
+        window.setTimeout(() => {
+          if (jobToken.current !== token) return;
+          setTelemetry((current) => ({
+            ...current,
+            scanLabel: "Idle · catalog ready",
+            scanProgress: null,
+          }));
+          setImportMessage(null);
+          setImportBusy(false);
+        }, 1200);
+        return;
+      }
+      const ratio = job.total > 0 ? Math.min(1, job.done / job.total) : 0;
+      const percent = Math.round(ratio * 100);
+      setTelemetry((current) => ({
+        ...current,
+        scanLabel: job.total > 0 ? `${job.label} · ${job.done} of ${job.total}` : job.label,
+        scanProgress: ratio,
+        syncLabel: "SQLite · writing",
+      }));
+      setImportMessage(job.total > 0 ? `${job.label} · ${percent}%` : job.label);
     }).then((unlisten) => {
       if (cancel) unlisten();
       else stop = unlisten;
@@ -312,6 +372,79 @@ export function Workspace() {
     setPrimaryId(id);
   }
 
+  function selectItem(id: string, shift: boolean) {
+    setPrimaryId(id);
+    setSelectedIds((current) => {
+      if (shift && anchorRef.current) {
+        const ids = visible.map((item) => item.id);
+        const start = ids.indexOf(anchorRef.current);
+        const end = ids.indexOf(id);
+        if (start >= 0 && end >= 0) {
+          const [from, to] = start < end ? [start, end] : [end, start];
+          return [...new Set([...current, ...ids.slice(from, to + 1)])];
+        }
+      }
+      anchorRef.current = id;
+      return current.includes(id) ? current.filter((item) => item !== id) : [...current, id];
+    });
+  }
+
+  function selectVisible() {
+    setSelectMode(true);
+    setSelectedIds(visible.map((item) => item.id));
+  }
+
+  async function flagSelection(flag: FlagStatus) {
+    const chosen = new Set(selectedIds);
+    setItems((current) => current.map((item) => (chosen.has(item.id) ? { ...item, flag } : item)));
+    const paths = items
+      .filter((item) => chosen.has(item.id) && item.sourcePath)
+      .map((item) => item.sourcePath as string);
+    if (!desktopBridgeAvailable() || paths.length === 0) return;
+    try {
+      await setFlags(paths, flag === "unflagged" ? null : flag);
+    } catch (error) {
+      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+    }
+  }
+
+  async function removeSelected() {
+    const drop = new Set(selectedIds);
+    const paths = items
+      .filter((item) => drop.has(item.id) && item.sourcePath)
+      .map((item) => item.sourcePath as string);
+    if (desktopBridgeAvailable() && paths.length > 0) {
+      try {
+        await removeFromLibrary(paths);
+      } catch (error) {
+        setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+        return;
+      }
+    }
+    setItems((current) => current.filter((item) => !drop.has(item.id)));
+    setSelectedIds([]);
+    setPrimaryId((current) => (current && drop.has(current) ? null : current));
+  }
+
+  async function deleteSelected() {
+    const chosen = items.filter((item) => selectedIds.includes(item.id) && item.sourcePath);
+    const paths = chosen.map((item) => item.sourcePath as string);
+    setConfirmDelete(false);
+    if (!desktopBridgeAvailable() || paths.length === 0) return;
+    try {
+      const report = await deleteFromDisk(paths);
+      const removed = new Set(chosen.map((item) => item.id));
+      setItems((current) => current.filter((item) => !removed.has(item.id)));
+      setSelectedIds([]);
+      setPrimaryId((current) => (current && removed.has(current) ? null : current));
+      if (report.failed.length > 0) {
+        setTelemetry((current) => ({ ...current, scanLabel: report.failed[0] ?? "Some files stayed on disk" }));
+      }
+    } catch (error) {
+      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+    }
+  }
+
   function revealImported(imported: StudioItem[], label: string) {
     if (imported.length === 0) {
       setImportError("No photos or videos were found.");
@@ -323,21 +456,15 @@ export function Workspace() {
     setItems((current) => mergeItems(imported, current));
     if (added.length > 0) {
       setPrimaryId(added[0]?.id ?? null);
-      setSelectedIds(added.map((item) => item.id));
     }
     setImportError(null);
-    setImportMessage(null);
     setModal(null);
     applyPreset("browse");
     setTelemetry((current) => ({
       ...current,
-      scanLabel: label,
-      scanProgress: 1,
       syncLabel: desktopBridgeAvailable() ? "SQLite · ready" : "Browser preview",
+      scanLabel: label,
     }));
-    window.setTimeout(() => {
-      setTelemetry((current) => ({ ...current, scanProgress: null }));
-    }, 700);
   }
 
   async function browseFolders() {
@@ -356,11 +483,12 @@ export function Workspace() {
     const folderName = paths[0]?.split(/[/\\]/).filter(Boolean).pop() ?? "folder";
     setImportBusy(true);
     setImportError(null);
-    setImportMessage(`Indexing ${folderName}…`);
+    jobToken.current += 1;
+    setImportMessage(`Indexing ${folderName} · 0%`);
     setTelemetry((current) => ({
       ...current,
       scanLabel: `Indexing ${folderName}`,
-      scanProgress: 0.35,
+      scanProgress: 0,
       syncLabel: "SQLite · writing",
     }));
     try {
@@ -374,6 +502,7 @@ export function Workspace() {
           scanProgress: null,
           syncLabel: "SQLite · ready",
         }));
+        setImportBusy(false);
         return;
       }
       const { media } = await fetchLibrary();
@@ -396,17 +525,49 @@ export function Workspace() {
   }
 
   async function ingestFiles(files: File[]) {
+    const token = (jobToken.current += 1);
     setImportBusy(true);
     setImportError(null);
-    setImportMessage("Reading capture dates…");
+    setImportMessage("Reading files · 0%");
+    setTelemetry((current) => ({
+      ...current,
+      scanLabel: "Reading files",
+      scanProgress: 0,
+      syncLabel: "Browser preview",
+    }));
     try {
-      const imported = await itemsFromFiles(files);
+      const imported = await itemsFromFiles(files, (done, total) => {
+        if (jobToken.current !== token) return;
+        const ratio = total > 0 ? done / total : 0;
+        const percent = Math.round(ratio * 100);
+        setTelemetry((current) => ({
+          ...current,
+          scanLabel: `Reading files · ${done} of ${total}`,
+          scanProgress: ratio,
+        }));
+        setImportMessage(`Reading files · ${percent}%`);
+      });
       if (imported.length === 0) {
         setImportError("No photos or videos were found in that selection.");
         setImportMessage(null);
+        setTelemetry((current) => ({
+          ...current,
+          scanLabel: "Idle · catalog ready",
+          scanProgress: null,
+        }));
         return;
       }
       revealImported(imported, `Added ${imported.length} ${imported.length === 1 ? "frame" : "frames"}`);
+      setTelemetry((current) => ({ ...current, scanProgress: 1 }));
+      window.setTimeout(() => {
+        if (jobToken.current !== token) return;
+        setTelemetry((current) => ({
+          ...current,
+          scanLabel: "Idle · catalog ready",
+          scanProgress: null,
+        }));
+        setImportMessage(null);
+      }, 1200);
     } finally {
       setImportBusy(false);
     }
@@ -422,7 +583,7 @@ export function Workspace() {
   }
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-studio text-foam">
+    <div className="relative flex h-dvh flex-col overflow-hidden bg-studio text-foam">
       <TopBar
         query={query}
         onQuery={setQuery}
@@ -456,6 +617,10 @@ export function Workspace() {
             primaryId={primaryId}
             onOpen={openItem}
             onInspect={inspectItem}
+            selectMode={selectMode}
+            onSelectMode={setSelectMode}
+            onSelect={selectItem}
+            onSelectVisible={selectVisible}
             onToggle={toggleItem}
             onRate={rate}
             onFlag={flag}
@@ -499,6 +664,17 @@ export function Workspace() {
         />
       ) : null}
 
+      {selectedIds.length > 0 ? (
+        <SelectionBar
+          count={selectedIds.length}
+          canDelete={desktopBridgeAvailable() && items.some((item) => selectedIds.includes(item.id) && item.sourcePath)}
+          onFlag={(flag) => void flagSelection(flag)}
+          onRemove={() => void removeSelected()}
+          onDelete={() => setConfirmDelete(true)}
+          onClear={() => setSelectedIds([])}
+        />
+      ) : null}
+
       <TelemetryBar
         telemetry={telemetry}
         gridZoom={gridZoom}
@@ -520,6 +696,7 @@ export function Workspace() {
           }}
           busy={importBusy}
           message={importMessage}
+          progress={importBusy ? telemetry.scanProgress : null}
           error={importError}
           onBrowse={() => void browseFolders()}
           onPaths={(paths) => void ingestPaths(paths)}
@@ -535,6 +712,27 @@ export function Workspace() {
           onSelectArea={beginCacheSelect}
         />
       ) : null}
+      {confirmDelete ? (
+        <Modal title="Delete from disk" onClose={() => setConfirmDelete(false)}>
+          <p className="text-sm text-mute">
+            Permanently delete{" "}
+            {items.filter((item) => selectedIds.includes(item.id) && item.sourcePath).length} files from disk? Shelf
+            drops those catalog rows too. The originals cannot be restored.
+          </p>
+          <div className="mt-4 flex justify-end gap-2">
+            <button type="button" onClick={() => setConfirmDelete(false)} className="rounded-full px-3 py-2 text-sm text-mute">
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void deleteSelected()}
+              className="rounded-full bg-danger px-3 py-2 text-sm text-white"
+            >
+              Delete files
+            </button>
+          </div>
+        </Modal>
+      ) : null}
       {modal === "export" ? (
         <BatchExportModal
           count={selectedIds.length}
@@ -545,6 +743,13 @@ export function Workspace() {
     </div>
   );
 }
+
+type JobProgress = {
+  phase: string;
+  done: number;
+  total: number;
+  label: string;
+};
 
 type ThumbnailReady = {
   id: number;

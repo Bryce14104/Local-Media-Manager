@@ -12,6 +12,8 @@ export type ExifSnapshot = {
   exposureTime: string | null;
   fNumber: string | null;
   focalLength: string | null;
+  latitude: number | null;
+  longitude: number | null;
 };
 
 export type MediaRecord = {
@@ -26,6 +28,7 @@ export type MediaRecord = {
   mediaKind: MediaKind;
   capturedAt: number | null;
   thumbnailPath: string | null;
+  flag: string | null;
   exif: ExifSnapshot | null;
 };
 

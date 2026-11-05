@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 -- exif_json      selected EXIF fields as JSON, or NULL
 -- captured_at    capture time from EXIF or XMP, unix seconds, or NULL
 -- thumbnail_path low-res JPEG preview written by Shelf, or NULL
+-- flag           pick, reject, or NULL
 CREATE TABLE IF NOT EXISTS media_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     file_path TEXT NOT NULL UNIQUE,
@@ -34,7 +35,8 @@ CREATE TABLE IF NOT EXISTS media_files (
     media_kind TEXT NOT NULL,
     exif_json TEXT,
     captured_at INTEGER,
-    thumbnail_path TEXT
+    thumbnail_path TEXT,
+    flag TEXT CHECK (flag IS NULL OR flag IN ('pick', 'reject'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_files_modified_at

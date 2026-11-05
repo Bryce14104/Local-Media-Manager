@@ -5,7 +5,7 @@ mod exif;
 mod scanner;
 mod thumbs;
 
-pub use thumbs::generate_missing_thumbnails;
+pub use thumbs::generate_missing_thumbnails_with;
 
 use crate::db::{DbError, Library, NewMedia};
 use crate::models::ScanReport;
@@ -42,10 +42,19 @@ enum IndexOutcome {
 /// A directory is scanned recursively. A file is stored only when Shelf
 /// recognizes its extension. Other paths are reported and skipped.
 pub fn index_paths(library: &Library, paths: &[String]) -> Result<ScanReport, ServiceError> {
+    index_paths_with(library, paths, |_, _| {})
+}
+
+pub fn index_paths_with<F>(
+    library: &Library,
+    paths: &[String],
+    mut progress: F,
+) -> Result<ScanReport, ServiceError>
+where
+    F: FnMut(usize, usize),
+{
     let started = Instant::now();
-    let mut discovered = 0;
-    let mut indexed = 0;
-    let mut unchanged = 0;
+    let mut files = Vec::new();
     let mut failed = 0;
     let mut errors = Vec::new();
     let mut roots = Vec::new();
@@ -58,45 +67,24 @@ pub fn index_paths(library: &Library, paths: &[String]) -> Result<ScanReport, Se
         }
         saw_path = true;
         let path = Path::new(trimmed);
+        roots.push(path.display().to_string());
         if path.is_dir() {
-            match index_directory(library, path) {
-                Ok(report) => {
-                    discovered += report.discovered;
-                    indexed += report.indexed;
-                    unchanged += report.unchanged;
-                    failed += report.failed;
-                    for note in report.errors {
+            match scan_directory(path) {
+                Ok(batch) => {
+                    for note in batch.errors {
                         push_note(&mut errors, note);
                     }
-                    roots.push(report.root);
+                    files.extend(batch.files);
                 }
                 Err(err) => {
                     failed += 1;
                     push_note(&mut errors, err.to_string());
-                    roots.push(path.display().to_string());
                 }
             }
             continue;
         }
-
-        roots.push(path.display().to_string());
         match describe_file(path) {
-            Ok(file) => {
-                discovered += 1;
-                match index_one(library, &file) {
-                    Ok(IndexOutcome::Indexed { note }) => {
-                        indexed += 1;
-                        if let Some(note) = note {
-                            push_note(&mut errors, note);
-                        }
-                    }
-                    Ok(IndexOutcome::Unchanged) => unchanged += 1,
-                    Err(err) => {
-                        failed += 1;
-                        push_note(&mut errors, err.to_string());
-                    }
-                }
-            }
+            Ok(file) => files.push(file),
             Err(err) => {
                 failed += 1;
                 push_note(&mut errors, err.to_string());
@@ -106,6 +94,14 @@ pub fn index_paths(library: &Library, paths: &[String]) -> Result<ScanReport, Se
 
     if !saw_path {
         return Err(ServiceError::Empty);
+    }
+
+    let discovered = files.len();
+    let (indexed, unchanged, loop_failed, loop_errors) =
+        index_files(library, &files, &mut progress);
+    failed += loop_failed;
+    for note in loop_errors {
+        push_note(&mut errors, note);
     }
 
     Ok(ScanReport {
@@ -128,16 +124,53 @@ pub fn index_paths(library: &Library, paths: &[String]) -> Result<ScanReport, Se
 /// A file is left untouched when its size and modification time still match
 /// the catalog and a hash is already stored. That path keeps the rating.
 pub fn index_directory(library: &Library, root: &Path) -> Result<ScanReport, ServiceError> {
+    index_directory_with(library, root, |_, _| {})
+}
+
+pub fn index_directory_with<F>(
+    library: &Library,
+    root: &Path,
+    mut progress: F,
+) -> Result<ScanReport, ServiceError>
+where
+    F: FnMut(usize, usize),
+{
     let started = Instant::now();
     let batch = scan_directory(root)?;
     let discovered = batch.files.len();
+    let mut errors = batch.errors;
+    let (indexed, unchanged, failed, loop_errors) = index_files(library, &batch.files, &mut progress);
+    for note in loop_errors {
+        push_note(&mut errors, note);
+    }
+
+    Ok(ScanReport {
+        root: root.display().to_string(),
+        discovered,
+        indexed,
+        unchanged,
+        failed,
+        errors,
+        duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    })
+}
+
+fn index_files<F>(
+    library: &Library,
+    files: &[crate::models::ScannedFile],
+    progress: &mut F,
+) -> (usize, usize, usize, Vec<String>)
+where
+    F: FnMut(usize, usize),
+{
+    let total = files.len();
+    progress(0, total);
     let mut indexed = 0;
     let mut unchanged = 0;
     let mut failed = 0;
-    let mut errors = batch.errors;
-
-    for file in batch.files {
-        match index_one(library, &file) {
+    let mut errors = Vec::new();
+    for (index, file) in files.iter().enumerate() {
+        match index_one(library, file) {
             Ok(IndexOutcome::Indexed { note }) => {
                 indexed += 1;
                 if let Some(note) = note {
@@ -150,17 +183,9 @@ pub fn index_directory(library: &Library, root: &Path) -> Result<ScanReport, Ser
                 push_note(&mut errors, err.to_string());
             }
         }
+        progress(index + 1, total);
     }
-
-    Ok(ScanReport {
-        root: root.display().to_string(),
-        discovered,
-        indexed,
-        unchanged,
-        failed,
-        errors,
-        duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-    })
+    (indexed, unchanged, failed, errors)
 }
 
 fn index_one(
@@ -178,6 +203,18 @@ fn index_one(
                 && let Some(unix) = capture_unix(&file.path)
             {
                 library.set_captured_at(&path, unix)?;
+            }
+            let missing_gps = existing
+                .exif
+                .as_ref()
+                .is_none_or(|exif| exif.latitude.is_none() || exif.longitude.is_none());
+            if missing_gps
+                && let Ok(Some(fresh)) = read_exif(&file.path)
+                && fresh.latitude.is_some()
+                && fresh.longitude.is_some()
+                && let Ok(json) = serde_json::to_string(&fresh)
+            {
+                library.set_exif_json(&path, &json)?;
             }
             return Ok(IndexOutcome::Unchanged);
         }

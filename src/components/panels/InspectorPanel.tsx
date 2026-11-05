@@ -1,5 +1,6 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { FrameStill } from "../workspace/FrameStill";
+import { formatLatitude, formatLongitude } from "../../studio/geo";
 import { formatLabel, isoFill, shutterFill } from "../../studio/query";
 import type { PanelMode, StudioItem } from "../../studio/types";
 import { formatBytes, formatTimestamp } from "../../lib/format";
@@ -77,6 +78,9 @@ export function InspectorPanel({
             </div>
             <dl className="space-y-2 text-xs">
               <Fact label="Path" value={`${item.folder}/${item.fileName}`} />
+              {item.geotagged ? (
+                <Fact label="GPS" value={`${formatLatitude(item.latitude)} ${formatLongitude(item.longitude)}`} />
+              ) : null}
               <Fact label="Lens" value={item.lens} />
               <Fact label="Size" value={formatBytes(item.fileSize)} />
               <Fact

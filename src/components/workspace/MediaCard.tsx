@@ -11,7 +11,7 @@ type MediaCardProps = {
   detail: "compact" | "card";
   selected: boolean;
   primary: boolean;
-  onOpen: () => void;
+  onOpen: (shift: boolean) => void;
   onToggle: () => void;
   onRate: (rating: number | null) => void;
   onFlag: () => void;
@@ -36,7 +36,7 @@ export function MediaCard({
         primary ? "border-teal" : selected ? "border-teal/50" : "border-line"
       }`}
     >
-      <button type="button" onClick={onOpen} className="block w-full text-left">
+      <button type="button" onClick={(event) => onOpen(event.shiftKey)} className="block w-full text-left">
         <div className={roomy ? "aspect-[4/3]" : "aspect-square"}>
           <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
         </div>

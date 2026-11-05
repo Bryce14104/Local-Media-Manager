@@ -53,6 +53,21 @@ export async function indexPaths(paths: string[]): Promise<ScanReport> {
   return invoke<ScanReport>("index_paths", { paths });
 }
 
+export async function setFlags(paths: string[], flag: "pick" | "reject" | null): Promise<number> {
+  assertBridge();
+  return invoke<number>("set_flags", { paths, flag });
+}
+
+export async function removeFromLibrary(paths: string[]): Promise<number> {
+  assertBridge();
+  return invoke<number>("remove_media", { paths });
+}
+
+export async function deleteFromDisk(paths: string[]): Promise<{ removed: number; failed: string[] }> {
+  assertBridge();
+  return invoke<{ removed: number; failed: string[] }>("delete_media", { paths });
+}
+
 export async function setRating(
   path: string,
   rating: number | null,

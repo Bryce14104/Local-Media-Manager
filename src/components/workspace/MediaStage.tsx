@@ -15,6 +15,10 @@ type MediaStageProps = {
   primaryId: string | null;
   onOpen: (id: string) => void;
   onInspect: (id: string) => void;
+  selectMode: boolean;
+  onSelectMode: (enabled: boolean) => void;
+  onSelect: (id: string, shift: boolean) => void;
+  onSelectVisible: () => void;
   onToggle: (id: string) => void;
   onRate: (id: string, rating: number | null) => void;
   onFlag: (id: string) => void;
@@ -37,6 +41,10 @@ export function MediaStage({
   primaryId,
   onOpen,
   onInspect,
+  selectMode,
+  onSelectMode,
+  onSelect,
+  onSelectVisible,
   onToggle,
   onRate,
   onFlag,
@@ -78,10 +86,25 @@ export function MediaStage({
 
   return (
     <section className={`flex min-h-0 min-w-0 flex-1 flex-col ${className ?? ""}`}>
-      <header className="px-4 py-3">
+      <header className="flex items-center gap-3 px-4 py-3">
         <p className="text-xs text-mute">
           {items.length === total ? `${total} frames on this machine` : `${items.length} of ${total} frames`}
         </p>
+        <button
+          type="button"
+          aria-pressed={selectMode}
+          onClick={() => onSelectMode(!selectMode)}
+          className={`rounded-full px-3 py-1 text-xs ${
+            selectMode ? "bg-teal text-teal-ink" : "border border-line text-foam hover:border-teal"
+          }`}
+        >
+          {selectMode ? "Selecting" : "Select"}
+        </button>
+        {selectMode ? (
+          <button type="button" onClick={onSelectVisible} className="text-xs text-teal hover:underline">
+            Select visible
+          </button>
+        ) : null}
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto px-4 pb-4">
@@ -103,7 +126,7 @@ export function MediaStage({
             detail="compact"
             selectedIds={selectedIds}
             primaryId={primaryId}
-            onOpen={onInspect}
+            onOpen={selectMode ? onSelect : onInspect}
             onToggle={onToggle}
             onRate={onRate}
             onFlag={onFlag}
@@ -115,7 +138,7 @@ export function MediaStage({
             detail={viewMode === "cards" ? "card" : "compact"}
             selectedIds={selectedIds}
             primaryId={primaryId}
-            onOpen={onInspect}
+            onOpen={selectMode ? onSelect : onInspect}
             onToggle={onToggle}
             onRate={onRate}
             onFlag={onFlag}
@@ -142,7 +165,7 @@ function Grid({
   detail: "compact" | "card";
   selectedIds: string[];
   primaryId: string | null;
-  onOpen: (id: string) => void;
+  onOpen: (id: string, shift: boolean) => void;
   onToggle: (id: string) => void;
   onRate: (id: string, rating: number | null) => void;
   onFlag: (id: string) => void;
@@ -164,7 +187,7 @@ function Grid({
           detail={detail}
           selected={selectedIds.includes(item.id)}
           primary={primaryId === item.id}
-          onOpen={() => onOpen(item.id)}
+          onOpen={(shift) => onOpen(item.id, shift)}
           onToggle={() => onToggle(item.id)}
           onRate={(rating) => onRate(item.id, rating)}
           onFlag={() => onFlag(item.id)}

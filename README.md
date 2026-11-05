@@ -74,7 +74,7 @@ That page is the studio. The grid, command palette, inspector, map, and telemetr
 npm run tauri dev
 ```
 
-`npm run tauri dev` opens the same studio in a desktop window. Add media uses the system folder picker. Shelf scans that folder into `library.sqlite`, reads each file's EXIF or XMP capture time, and sorts the grid by that time. A background job writes a small JPEG preview for JPEG and RAW files into the app-data `thumbnails` folder, then the cards pick those up. Clicking a card in the grid opens Inspect with the larger preview. In a browser preview, Browse Folders uses the page's folder picker, reads the same dates and embedded previews in the page, and adds those files to the grid without writing SQLite.
+`npm run tauri dev` opens the same studio in a desktop window. Add media uses the system folder picker. Shelf scans that folder into `library.sqlite`, reads each file's EXIF or XMP capture time, and sorts the grid by that time. GPS latitude and longitude from the same metadata place the map pin. The status bar shows a percentage while the folder is indexed and while previews are written. A background job writes a small JPEG preview for JPEG and RAW files into the app-data `thumbnails` folder, then the cards pick those up. Clicking a card in the grid opens Inspect with the larger preview. Select turns on checkboxes so several frames can be flagged together, removed from the catalog, or deleted from disk after a confirmation. In a browser preview, Browse Folders uses the page's folder picker, reads the same dates, GPS, and embedded previews in the page, and adds those files to the grid without writing SQLite.
 
 `npm run test:rust` and `npm run check:rust` are the same Cargo commands as above.
 
@@ -89,6 +89,7 @@ For each JPEG, PNG, HEIC, common raw file, and video under the folder, Shelf sto
 - the time the row was written
 - an optional rating from 0 to 5
 - `image`, `video`, or `raw`
-- a small JSON document of EXIF fields, when the file has them
+- a small JSON document of EXIF fields, including GPS latitude and longitude when the file has them
+- a pick or reject flag, when one has been set
 
 Hidden names are skipped. Symbolic links are not followed. A later scan leaves a file alone when the size and modification time are unchanged, and it does not clear the rating.

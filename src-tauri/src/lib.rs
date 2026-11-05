@@ -25,9 +25,29 @@ pub fn run() {
             app.manage(library.clone());
             let handle = app.handle().clone();
             std::thread::spawn(move || {
-                for ready in services::generate_missing_thumbnails(&library) {
-                    let _ = handle.emit("thumbnail-ready", &ready);
+                let ready = services::generate_missing_thumbnails_with(&library, |done, total| {
+                    let _ = handle.emit(
+                        "library-progress",
+                        crate::models::JobProgress {
+                            phase: "thumbnails".to_string(),
+                            done,
+                            total,
+                            label: "Writing previews".to_string(),
+                        },
+                    );
+                });
+                for item in &ready {
+                    let _ = handle.emit("thumbnail-ready", item);
                 }
+                let _ = handle.emit(
+                    "library-progress",
+                    crate::models::JobProgress {
+                        phase: "done".to_string(),
+                        done: 1,
+                        total: 1,
+                        label: "Catalog ready".to_string(),
+                    },
+                );
             });
             Ok(())
         })
@@ -37,6 +57,9 @@ pub fn run() {
             commands::scan_directory,
             commands::index_paths,
             commands::set_rating,
+            commands::set_flags,
+            commands::remove_media,
+            commands::delete_media,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Shelf");

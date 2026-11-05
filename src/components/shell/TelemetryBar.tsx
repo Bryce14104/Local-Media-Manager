@@ -13,17 +13,26 @@ export function TelemetryBar({
   onPreferences: () => void;
 }) {
   const scanning = telemetry.scanProgress != null && telemetry.scanProgress < 1;
+  const percent = telemetry.scanProgress == null ? null : Math.round(telemetry.scanProgress * 100);
   return (
     <footer className="relative border-t border-line bg-card">
-      {telemetry.scanProgress != null ? (
-        <div className="absolute inset-x-0 top-0 h-px bg-line">
-          <div className="h-full bg-teal" style={{ width: `${Math.round(telemetry.scanProgress * 100)}%` }} />
+      {percent != null ? (
+        <div
+          className="absolute inset-x-0 top-0 h-1.5 bg-line"
+          role="progressbar"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+          aria-label={telemetry.scanLabel}
+        >
+          <div className="h-full bg-teal transition-[width] duration-150" style={{ width: `${percent}%` }} />
         </div>
       ) : null}
       <div className="flex items-center gap-4 overflow-hidden px-4 py-2 text-[11px] text-mute">
         <span className="flex min-w-0 items-center gap-2">
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${scanning ? "bg-teal" : "bg-mute/50"}`} />
           <span className="truncate">{telemetry.scanLabel}</span>
+          {percent != null ? <span className="font-mono text-teal">{percent}%</span> : null}
         </span>
         <span className="hidden truncate sm:inline">{telemetry.syncLabel}</span>
         <span className="ml-auto hidden truncate md:inline">

@@ -6,13 +6,14 @@ type AddMediaModalProps = {
   onClose: () => void;
   busy: boolean;
   message: string | null;
+  progress: number | null;
   error: string | null;
   onBrowse: () => void;
   onPaths: (paths: string[]) => void;
   onFiles: (files: File[]) => void;
 };
 
-export function AddMediaModal({ onClose, busy, message, error, onBrowse, onPaths, onFiles }: AddMediaModalProps) {
+export function AddMediaModal({ onClose, busy, message, progress, error, onBrowse, onPaths, onFiles }: AddMediaModalProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const onPathsRef = useRef(onPaths);
   onPathsRef.current = onPaths;
@@ -97,6 +98,14 @@ export function AddMediaModal({ onClose, busy, message, error, onBrowse, onPaths
         />
       </div>
       {message ? <p className="mt-3 text-sm text-mute">{message}</p> : null}
+      {progress != null ? (
+        <div className="mt-3" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)}>
+          <div className="h-1.5 overflow-hidden rounded-full bg-line">
+            <div className="h-full bg-teal" style={{ width: `${Math.round(progress * 100)}%` }} />
+          </div>
+          <p className="mt-1 text-right font-mono text-xs text-teal">{Math.round(progress * 100)}%</p>
+        </div>
+      ) : null}
       {error ? <p className="mt-3 text-sm text-danger">{error}</p> : null}
       <div className="mt-4 flex justify-end">
         <button type="button" onClick={onClose} disabled={busy} className="rounded-full px-3 py-2 text-sm text-mute disabled:opacity-40">

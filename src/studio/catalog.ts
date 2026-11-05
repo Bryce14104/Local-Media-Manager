@@ -98,7 +98,10 @@ export function itemFromRecord(record: {
     exposureTime: string | null;
     fNumber: string | null;
     focalLength: string | null;
+    latitude: number | null;
+    longitude: number | null;
   } | null;
+  flag: string | null;
 }): StudioItem {
   const fileName = record.filePath.split(/[/\\]/).filter(Boolean).pop() ?? record.filePath;
   const folder = parentFolder(record.filePath);
@@ -118,7 +121,6 @@ export function itemFromRecord(record: {
     camera: camera || "Unknown camera",
     lens: exif?.lensModel || "Unknown lens",
     rating: record.rating != null && record.rating > 0 ? record.rating : null,
-    flag: "unflagged",
     format,
     fileSize: record.fileSize,
     iso: leadingNumber(exif?.iso ?? null),
@@ -129,7 +131,9 @@ export function itemFromRecord(record: {
     height: exif?.height ?? null,
     hash: record.contentHash ?? fakeHash(id),
     histogram: histogram(id),
-    ...coordinatesFor(folder, id),
+    sourcePath: record.filePath,
+    flag: record.flag === "pick" || record.flag === "reject" ? record.flag : "unflagged",
+    ...placed(folder, id, exif?.latitude, exif?.longitude),
   };
 }
 
@@ -222,6 +226,8 @@ export function inventItems(folder: string, format: MediaFormat): StudioItem[] {
       height: format === "video" ? 2160 : 4000,
       hash: fakeHash(id),
       histogram: histogram(id),
+      sourcePath: null,
+      geotagged: false,
       ...coordinatesFor(folder.trim() || "Inbox", id),
     };
   });
@@ -281,8 +287,22 @@ function seedItem(row: Seed, id: string): StudioItem {
     folder,
     hash: fakeHash(id),
     histogram: histogram(id),
+    sourcePath: null,
+    geotagged: true,
     ...coordinatesFor(folder, id),
   };
+}
+
+function placed(
+  folder: string,
+  id: string,
+  latitude: number | null | undefined,
+  longitude: number | null | undefined,
+): { latitude: number; longitude: number; geotagged: boolean } {
+  if (latitude != null && longitude != null && Number.isFinite(latitude) && Number.isFinite(longitude)) {
+    return { latitude: latitude / 1_000_000, longitude: longitude / 1_000_000, geotagged: true };
+  }
+  return { ...coordinatesFor(folder, id), geotagged: false };
 }
 
 export function fakeHash(seed: string): string {
