@@ -5,11 +5,15 @@ import {
   deleteFromDisk,
   desktopBridgeAvailable,
   errorMessage,
+  fetchInsights,
   fetchLibrary,
   indexPaths,
+  mergePeople,
   pickImportPaths,
   removeFromLibrary,
+  renamePerson,
   setFlags,
+  splitFace,
 } from "../lib/api";
 import type { MediaKind, MediaRecord } from "../lib/types";
 import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
@@ -21,10 +25,12 @@ import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
 import { Lightbox } from "../components/workspace/Lightbox";
 import { MediaStage } from "../components/workspace/MediaStage";
+import { PeopleBoard } from "../components/workspace/PeopleBoard";
 import { SelectionBar } from "../components/workspace/SelectionBar";
 import { captureMillis, createCatalog, itemFromRecord, mergeItems, nextFlag } from "./catalog";
 import { itemsFromFiles } from "./previews";
 import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
+import { applyInsights, mergeFaces, moveFace, numericSuffix, renameFaces } from "./insights";
 import { applySelection, type PointerMods } from "./selection";
 import type { MapZoom } from "./mapRegions";
 import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
@@ -102,9 +108,14 @@ export function Workspace() {
     if (!desktopBridgeAvailable()) return;
     let cancel = false;
     void fetchLibrary()
-      .then(({ media }) => {
+      .then(async ({ media }) => {
         if (cancel || media.length === 0) return;
-        setItems((current) => mergeItems(media.map(presentRecord), current));
+        const snapshot = await fetchInsights().catch(() => null);
+        if (cancel) return;
+        setItems((current) => {
+          const merged = mergeItems(media.map(presentRecord), current);
+          return snapshot ? applyInsights(merged, snapshot) : merged;
+        });
       })
       .catch(() => undefined);
     return () => {
@@ -142,6 +153,11 @@ export function Workspace() {
     void listen<JobProgress>("library-progress", (event) => {
       const job = event.payload;
       if (job.phase === "done") {
+        void fetchInsights()
+          .then((snapshot) => {
+            setItems((current) => applyInsights(current, snapshot));
+          })
+          .catch(() => undefined);
         const token = jobToken.current;
         setTelemetry((current) => ({
           ...current,
@@ -189,7 +205,7 @@ export function Workspace() {
         target instanceof HTMLSelectElement;
       const command = event.metaKey || event.ctrlKey;
       if (command && event.key.toLowerCase() === "a") {
-        if (typing || modal || confirmDelete || lightboxId || viewMode === "map" || preset === "compare") return;
+        if (typing || modal || confirmDelete || lightboxId || viewMode === "map" || viewMode === "people" || preset === "compare") return;
         event.preventDefault();
         const ids = visible.map((item) => item.id);
         setSelectedIds(ids);
@@ -361,6 +377,9 @@ export function Workspace() {
       case "view-map":
         chooseView("map");
         break;
+      case "view-people":
+        chooseView("people");
+        break;
       case "preferences":
         openPreferences();
         break;
@@ -381,15 +400,17 @@ export function Workspace() {
       applyAction(suggestion.action);
     } else {
       setFilters((current) => suggestion.filters.reduce(upsertFilter, current));
+      if (viewMode === "people") chooseView("compact");
     }
     setQuery("");
   }
 
   function submitQuery() {
-    const parsed = parseQuery(query);
+    const parsed = parseQuery(query, items);
     if (parsed.length === 0) return;
     setFilters((current) => parsed.reduce(upsertFilter, current));
     setQuery("");
+    if (viewMode === "people") chooseView("compact");
   }
 
   function openItem(id: string) {
@@ -650,6 +671,41 @@ export function Workspace() {
     }
   }
 
+  function renameCluster(personId: string, name: string) {
+    setItems((current) => renameFaces(current, personId, name));
+    const id = numericSuffix(personId, "person-");
+    if (id != null && desktopBridgeAvailable()) {
+      void renamePerson(id, name.trim() || null).catch(() => undefined);
+    }
+  }
+
+  function mergeClusters(keepId: string, dropId: string) {
+    setItems((current) => mergeFaces(current, keepId, dropId));
+    const keep = numericSuffix(keepId, "person-");
+    const drop = numericSuffix(dropId, "person-");
+    if (keep != null && drop != null && desktopBridgeAvailable()) {
+      void mergePeople(keep, drop).catch(() => undefined);
+    }
+  }
+
+  function splitClusterFace(faceId: string) {
+    const face = numericSuffix(faceId, "face-");
+    if (face != null && desktopBridgeAvailable()) {
+      void splitFace(face)
+        .then((id) => {
+          setItems((current) => moveFace(current, faceId, `person-${id}`));
+        })
+        .catch(() => undefined);
+      return;
+    }
+    setItems((current) => moveFace(current, faceId, `person-local-${Date.now()}`));
+  }
+
+  function showSubject(label: string) {
+    setFilters((current) => upsertFilter(current, { kind: "subject", value: label }));
+    chooseView("compact");
+  }
+
   function exportSelection(format: string, destination: string) {
     const count = selectedIds.length > 0 ? selectedIds.length : visible.length;
     setModal(null);
@@ -684,6 +740,15 @@ export function Workspace() {
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {preset === "compare" ? (
           <ComparePane pair={comparePair} onClear={() => setSelectedIds([])} />
+        ) : viewMode === "people" ? (
+          <PeopleBoard
+            items={visible}
+            onRename={renameCluster}
+            onMerge={mergeClusters}
+            onSplit={splitClusterFace}
+            onOpen={(item) => viewItem(item.id)}
+            onSubject={showSubject}
+          />
         ) : (
           <MediaStage
             items={visible}

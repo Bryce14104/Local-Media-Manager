@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { LibrarySummary, MediaRecord, ScanReport } from "./types";
+import type { InsightSnapshot, LibrarySummary, MediaRecord, ScanReport } from "./types";
 
 export class BridgeError extends Error {
   readonly offline: boolean;
@@ -66,6 +66,26 @@ export async function removeFromLibrary(paths: string[]): Promise<number> {
 export async function deleteFromDisk(paths: string[]): Promise<{ removed: number; failed: string[] }> {
   assertBridge();
   return invoke<{ removed: number; failed: string[] }>("delete_media", { paths });
+}
+
+export async function fetchInsights(): Promise<InsightSnapshot> {
+  assertBridge();
+  return invoke<InsightSnapshot>("list_insights");
+}
+
+export async function renamePerson(id: number, name: string | null): Promise<void> {
+  assertBridge();
+  return invoke("rename_person", { id, name });
+}
+
+export async function mergePeople(keepId: number, dropId: number): Promise<void> {
+  assertBridge();
+  return invoke("merge_people", { keepId, dropId });
+}
+
+export async function splitFace(faceId: number): Promise<number> {
+  assertBridge();
+  return invoke<number>("split_face", { faceId });
 }
 
 export async function setRating(

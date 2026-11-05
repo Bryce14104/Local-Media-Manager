@@ -50,3 +50,33 @@ export type ScanReport = {
 };
 
 export type ViewId = "library" | "scan" | "storage";
+
+export type PersonInsight = {
+  id: number;
+  name: string | null;
+  faceCount: number;
+};
+
+export type FaceInsight = {
+  id: number;
+  mediaId: number;
+  personId: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence: number;
+};
+
+export type LabelInsight = {
+  mediaId: number;
+  kind: string;
+  label: string;
+  score: number;
+};
+
+export type InsightSnapshot = {
+  people: PersonInsight[];
+  faces: FaceInsight[];
+  labels: LabelInsight[];
+};

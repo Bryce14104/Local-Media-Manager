@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 -- captured_at    capture time from EXIF or XMP, unix seconds, or NULL
 -- thumbnail_path low-res JPEG preview written by Shelf, or NULL
 -- flag           pick, reject, or NULL
+-- vision_at      when the local vision pass last finished, unix seconds, or NULL
 CREATE TABLE IF NOT EXISTS media_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     file_path TEXT NOT NULL UNIQUE,
@@ -36,7 +37,40 @@ CREATE TABLE IF NOT EXISTS media_files (
     exif_json TEXT,
     captured_at INTEGER,
     thumbnail_path TEXT,
-    flag TEXT CHECK (flag IS NULL OR flag IN ('pick', 'reject'))
+    flag TEXT CHECK (flag IS NULL OR flag IN ('pick', 'reject')),
+    vision_at INTEGER
+);
+
+-- A person cluster. `name` stays NULL until someone names the cluster.
+CREATE TABLE IF NOT EXISTS people (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    created_at INTEGER NOT NULL
+);
+
+-- One detected face. The embedding is 128 little-endian f32 values from SFace.
+CREATE TABLE IF NOT EXISTS faces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    person_id INTEGER REFERENCES people(id) ON DELETE SET NULL,
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    width REAL NOT NULL,
+    height REAL NOT NULL,
+    confidence REAL NOT NULL,
+    embedding BLOB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_faces_media_id ON faces (media_id);
+CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id);
+
+-- Subject and scene tags. kind is pet, wildlife, animal, or scene.
+CREATE TABLE IF NOT EXISTS media_labels (
+    media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    score REAL NOT NULL,
+    PRIMARY KEY (media_id, kind, label)
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_files_modified_at

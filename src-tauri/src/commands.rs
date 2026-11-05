@@ -41,7 +41,7 @@ pub async fn scan_directory(
     })
     .await
     .map_err(|err| err.to_string())??;
-    spawn_thumbnails(library, app);
+    spawn_catalog_jobs(library, app);
     Ok(report)
 }
 
@@ -64,17 +64,22 @@ pub async fn index_paths(
     })
     .await
     .map_err(|err| err.to_string())??;
-    spawn_thumbnails(library, app);
+    spawn_catalog_jobs(library, app);
     Ok(report)
 }
 
-fn spawn_thumbnails(library: Library, app: AppHandle) {
+pub fn spawn_catalog_jobs(library: Library, app: AppHandle) {
     std::thread::spawn(move || {
         let ready = services::generate_missing_thumbnails_with(&library, |done, total| {
             emit_progress(&app, "thumbnails", done, total, "Writing previews");
         });
         for item in &ready {
             let _ = app.emit("thumbnail-ready", item);
+        }
+        if let Err(error) = services::recognize_library(&library, |done, total, label| {
+            emit_progress(&app, "vision", done, total, label);
+        }) {
+            eprintln!("shelf vision: {error}");
         }
         emit_progress(&app, "done", 1, 1, "Catalog ready");
     });
@@ -119,6 +124,27 @@ pub fn set_flags(
     state
         .set_flag(&paths, flag.as_deref())
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn list_insights(state: State<'_, Library>) -> Result<crate::models::InsightSnapshot, String> {
+    state.insights().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn rename_person(id: i64, name: Option<String>, state: State<'_, Library>) -> Result<(), String> {
+    let trimmed = name.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    state.rename_person(id, trimmed).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn merge_people(keep_id: i64, drop_id: i64, state: State<'_, Library>) -> Result<(), String> {
+    state.merge_people(keep_id, drop_id).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn split_face(face_id: i64, state: State<'_, Library>) -> Result<i64, String> {
+    state.split_face(face_id).map_err(|err| err.to_string())
 }
 
 #[tauri::command]

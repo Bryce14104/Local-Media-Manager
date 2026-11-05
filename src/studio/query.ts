@@ -21,18 +21,93 @@ const ACTIONS: { action: StudioAction; label: string; hint: string; keywords: st
   { action: "view-cards", label: "View: Detailed cards", hint: "Larger frames", keywords: "view card detailed" },
   { action: "view-timeline", label: "View: Timeline", hint: "Group by month", keywords: "view timeline date" },
   { action: "view-map", label: "View: Map", hint: "Pins and the frame panel", keywords: "view map geo gps" },
+  { action: "view-people", label: "People and pets", hint: "Name faces and browse subjects", keywords: "people pets faces animals dogs wildlife insights" },
   { action: "toggle-inspector", label: "Toggle info panel", hint: "Dock, float, or hide", keywords: "toggle inspector info panel exif" },
   { action: "clear-filters", label: "Clear filters", hint: "Show the full roll", keywords: "clear filters reset" },
   { action: "preferences", label: "Preferences", hint: "Draw a map area to cache, or clear tiles", keywords: "preferences settings map tiles download cache zoom area" },
 ];
 
-export function parseQuery(input: string): Filter[] {
-  return input
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(parseToken)
-    .filter((filter): filter is Filter => filter !== null);
+const STOP_WORDS = new Set([
+  "photo",
+  "photos",
+  "picture",
+  "pictures",
+  "pic",
+  "pics",
+  "shot",
+  "shots",
+  "image",
+  "images",
+  "of",
+  "with",
+  "and",
+  "the",
+  "a",
+  "an",
+  "in",
+  "on",
+  "my",
+  "me",
+  "some",
+  "for",
+  "from",
+  "featuring",
+  "together",
+  "near",
+  "at",
+  "to",
+]);
+
+const SUBJECT_WORDS: { words: string[]; value: string }[] = [
+  { words: ["puppies", "puppy", "dogs", "dog"], value: "dog" },
+  { words: ["kittens", "kitten", "cats", "cat"], value: "cat" },
+  { words: ["wildlife", "wild"], value: "wildlife" },
+  { words: ["birds", "bird"], value: "bird" },
+  { words: ["horses", "horse"], value: "horse" },
+  { words: ["sunsets", "sunset"], value: "sunset" },
+  { words: ["drones", "drone", "aerial"], value: "drone" },
+];
+
+const STRUCTURED = /\b(?:rating:(?:>=|=)?[0-5]|type:(?:raw|jpg|jpeg|video)|flag:(?:pick|reject|unflagged)|date:\d{4}(?:-\d{2})?|camera:[^\s]+)/gi;
+
+export function parseQuery(input: string, items: StudioItem[] = []): Filter[] {
+  return parseSearch(input, items);
+}
+
+export function parseSearch(input: string, items: StudioItem[]): Filter[] {
+  const filters: Filter[] = [];
+  const structured = input.match(STRUCTURED) ?? [];
+  for (const token of structured) {
+    const filter = parseToken(token);
+    if (filter) filters.push(filter);
+  }
+  let rest = input.replace(STRUCTURED, " ");
+  const people = namedPeople(items).sort((left, right) => right.name.length - left.name.length);
+  for (const person of people) {
+    const taken = takePhrase(rest, person.name);
+    if (!taken.found) continue;
+    rest = taken.rest;
+    filters.push({ kind: "person", personId: person.personId, name: person.name });
+  }
+  const phrases = [
+    ...SUBJECT_WORDS.flatMap((entry) => entry.words.map((word) => ({ phrase: word, value: entry.value }))),
+    ...subjectLabels(items).map((label) => ({ phrase: label, value: label })),
+  ].sort((left, right) => right.phrase.length - left.phrase.length);
+  const seenSubjects = new Set<string>();
+  for (const entry of phrases) {
+    if (entry.phrase.length < 3 || seenSubjects.has(entry.value)) continue;
+    const taken = takePhrase(rest, entry.phrase);
+    if (!taken.found) continue;
+    rest = taken.rest;
+    seenSubjects.add(entry.value);
+    filters.push({ kind: "subject", value: entry.value });
+  }
+  for (const word of rest.split(/\s+/)) {
+    const token = word.trim();
+    if (token.length < 2 || STOP_WORDS.has(token.toLowerCase()) || token.includes(":")) continue;
+    filters.push({ kind: "text", value: token });
+  }
+  return filters;
 }
 
 export function suggestions(query: string, items: StudioItem[]): Suggestion[] {
@@ -64,26 +139,23 @@ export function suggestions(query: string, items: StudioItem[]): Suggestion[] {
 
   ranked.sort((left, right) => right.score - left.score);
   const list = ranked.map((entry) => entry.suggestion).slice(0, 8);
-  const parsed = parseQuery(trimmed);
-  if (parsed.length > 0 && trimmed.includes(":")) {
+  const parsed = parseSearch(trimmed, items);
+  if (parsed.length === 1 && parsed[0]?.kind === "text") {
     list.unshift({
-      id: "apply-typed",
+      id: `text-${needle}`,
       type: "filters",
       filters: parsed,
-      label: parsed.length === 1 ? "Apply filter" : `Apply ${parsed.length} filters`,
+      label: `Filename contains “${trimmed}”`,
+      hint: "Plain text",
+    });
+  } else if (parsed.length > 0) {
+    list.unshift({
+      id: "apply-search",
+      type: "filters",
+      filters: parsed,
+      label: parsed.map((filter) => filterLabel({ ...filter, id: "preview" })).join(" · "),
       hint: trimmed,
     });
-  } else if (parsed.length === 1 && parsed[0]?.kind === "text" && !trimmed.includes(":")) {
-    const already = list.some((item) => item.type === "filters" && item.filters[0]?.kind === "text");
-    if (!already) {
-      list.unshift({
-        id: `text-${needle}`,
-        type: "filters",
-        filters: parsed,
-        label: `Filename contains “${trimmed}”`,
-        hint: "Plain text",
-      });
-    }
   }
   return list.slice(0, 8);
 }
@@ -91,7 +163,9 @@ export function suggestions(query: string, items: StudioItem[]): Suggestion[] {
 export function upsertFilter(current: ActiveFilter[], filter: Filter): ActiveFilter[] {
   const id = filterKey(filter);
   const kept = current.filter((item) =>
-    filter.kind === "text" ? item.id !== id : item.kind !== filter.kind,
+    filter.kind === "text" || filter.kind === "subject" || filter.kind === "person"
+      ? item.id !== id
+      : item.kind !== filter.kind,
   );
   return [...kept, { ...filter, id }];
 }
@@ -121,6 +195,10 @@ export function filterLabel(filter: ActiveFilter): string {
     }
     case "cluster":
       return filter.label;
+    case "person":
+      return filter.name;
+    case "subject":
+      return subjectTitle(filter.value);
   }
 }
 
@@ -284,6 +362,17 @@ function matchesOne(item: StudioItem, filter: Filter): boolean {
       );
     case "cluster":
       return filter.ids.includes(item.id);
+    case "person":
+      return item.faces.some((face) => face.personId === filter.personId);
+    case "subject": {
+      const value = filter.value.toLowerCase();
+      return item.subjects.some(
+        (tag) =>
+          tag.label.toLowerCase() === value ||
+          (value === "wildlife" && tag.kind === "wildlife") ||
+          (value === "pet" && tag.kind === "pet"),
+      );
+    }
   }
 }
 
@@ -305,7 +394,39 @@ function filterKey(filter: Filter): string {
       return "region";
     case "cluster":
       return "cluster";
+    case "person":
+      return `person:${filter.personId}`;
+    case "subject":
+      return `subject:${filter.value.toLowerCase()}`;
   }
+}
+
+function namedPeople(items: StudioItem[]): { personId: string; name: string }[] {
+  const people = new Map<string, string>();
+  for (const item of items) {
+    for (const face of item.faces) {
+      if (face.name && face.name.trim()) people.set(face.personId, face.name.trim());
+    }
+  }
+  return [...people.entries()].map(([personId, name]) => ({ personId, name }));
+}
+
+function subjectLabels(items: StudioItem[]): string[] {
+  return [...new Set(items.flatMap((item) => item.subjects.map((tag) => tag.label.toLowerCase())))];
+}
+
+function takePhrase(haystack: string, phrase: string): { found: boolean; rest: string } {
+  const pattern = new RegExp(`\\b${escapeRegExp(phrase)}\\b`, "i");
+  if (!pattern.test(haystack)) return { found: false, rest: haystack };
+  return { found: true, rest: haystack.replace(pattern, " ") };
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function subjectTitle(value: string): string {
+  return value.replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function matchScore(haystack: string, needle: string): number {

@@ -2,7 +2,7 @@ export type MediaFormat = "raw" | "jpg" | "video";
 
 export type FlagStatus = "unflagged" | "pick" | "reject";
 
-export type ViewMode = "compact" | "cards" | "timeline" | "map";
+export type ViewMode = "compact" | "cards" | "timeline" | "map" | "people";
 
 export type LayoutPreset = "browse" | "inspect" | "compare" | "map";
 
@@ -27,6 +27,7 @@ export type StudioAction =
   | "view-cards"
   | "view-timeline"
   | "view-map"
+  | "view-people"
   | "toggle-inspector"
   | "clear-filters"
   | "preferences";
@@ -56,6 +57,25 @@ export type StudioItem = {
   sourcePath?: string | null;
   previewUrl?: string | null;
   inspectUrl?: string | null;
+  faces: FaceMark[];
+  subjects: SubjectTag[];
+};
+
+export type FaceMark = {
+  id: string;
+  personId: string;
+  name: string | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  score: number;
+};
+
+export type SubjectTag = {
+  kind: "pet" | "wildlife" | "scene" | "animal";
+  label: string;
+  score: number;
 };
 
 export type Filter =
@@ -66,7 +86,9 @@ export type Filter =
   | { kind: "flag"; value: Exclude<FlagStatus, "unflagged"> | "unflagged" }
   | { kind: "text"; value: string }
   | ({ kind: "region" } & GeoBounds)
-  | { kind: "cluster"; ids: string[]; label: string };
+  | { kind: "cluster"; ids: string[]; label: string }
+  | { kind: "person"; personId: string; name: string }
+  | { kind: "subject"; value: string };
 
 export type ActiveFilter = Filter & { id: string };
 

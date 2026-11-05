@@ -3,7 +3,7 @@
 //! The SQL in `schema.sql` is the initialization script. It is compiled into
 //! the binary and executed whenever a library file is opened.
 
-use crate::models::{ExifSnapshot, MediaKind, MediaRecord};
+use crate::models::{ExifSnapshot, FaceRecord, InsightSnapshot, LabelRecord, MediaKind, MediaRecord, PersonRecord};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -146,7 +146,11 @@ impl Library {
                 indexed_at = excluded.indexed_at,
                 media_kind = excluded.media_kind,
                 exif_json = excluded.exif_json,
-                captured_at = excluded.captured_at",
+                captured_at = excluded.captured_at,
+                vision_at = CASE
+                    WHEN media_files.content_hash IS NOT excluded.content_hash THEN NULL
+                    ELSE media_files.vision_at
+                END",
             params![
                 media.file_path,
                 media.content_hash,
@@ -270,6 +274,205 @@ impl Library {
         Ok((removed, failed))
     }
 
+    pub fn pending_vision(&self) -> Result<Vec<VisionTarget>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, file_path, thumbnail_path, media_kind, exif_json
+             FROM media_files
+             WHERE vision_at IS NULL
+             ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(VisionTarget {
+                id: row.get(0)?,
+                file_path: row.get(1)?,
+                thumbnail_path: row.get(2)?,
+                media_kind: row.get(3)?,
+                exif_json: row.get(4)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn face_embeddings(&self) -> Result<Vec<(i64, Vec<f32>)>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT person_id, embedding FROM faces WHERE person_id IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let person_id: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((person_id, blob_to_embedding(&blob)))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
+    }
+
+    pub fn create_person(&self, name: Option<&str>) -> Result<i64, DbError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO people (name, created_at) VALUES (?1, ?2)",
+            params![name, unix_now()],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn clear_file_vision(&self, media_id: i64) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM faces WHERE media_id = ?1", params![media_id])?;
+        conn.execute("DELETE FROM media_labels WHERE media_id = ?1", params![media_id])?;
+        Ok(())
+    }
+
+    pub fn insert_face(
+        &self,
+        media_id: i64,
+        person_id: i64,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        confidence: f32,
+        embedding: &[f32],
+    ) -> Result<(), DbError> {
+        let blob = embedding_to_blob(embedding);
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO faces (media_id, person_id, x, y, width, height, confidence, embedding)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![media_id, person_id, x, y, width, height, confidence, blob],
+        )?;
+        Ok(())
+    }
+
+    pub fn replace_labels(&self, media_id: i64, labels: &[(String, String, f32)]) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        for (kind, label, score) in labels {
+            conn.execute(
+                "INSERT INTO media_labels (media_id, kind, label, score) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(media_id, kind, label) DO UPDATE SET score = excluded.score",
+                params![media_id, kind, label, score],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub fn mark_vision(&self, media_id: i64) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE media_files SET vision_at = ?1 WHERE id = ?2",
+            params![unix_now(), media_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn insights(&self) -> Result<InsightSnapshot, DbError> {
+        let conn = self.lock()?;
+        let mut people_stmt = conn.prepare(
+            "SELECT p.id, p.name, COUNT(f.id)
+             FROM people p
+             LEFT JOIN faces f ON f.person_id = p.id
+             GROUP BY p.id
+             HAVING COUNT(f.id) > 0 OR p.name IS NOT NULL
+             ORDER BY COUNT(f.id) DESC, p.id",
+        )?;
+        let people = people_stmt
+            .query_map([], |row| {
+                Ok(PersonRecord {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    face_count: row.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut face_stmt = conn.prepare(
+            "SELECT id, media_id, person_id, x, y, width, height, confidence
+             FROM faces
+             WHERE person_id IS NOT NULL
+             ORDER BY id",
+        )?;
+        let faces = face_stmt
+            .query_map([], |row| {
+                Ok(FaceRecord {
+                    id: row.get(0)?,
+                    media_id: row.get(1)?,
+                    person_id: row.get(2)?,
+                    x: row.get(3)?,
+                    y: row.get(4)?,
+                    width: row.get(5)?,
+                    height: row.get(6)?,
+                    confidence: row.get(7)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut label_stmt = conn.prepare(
+            "SELECT media_id, kind, label, score FROM media_labels ORDER BY score DESC",
+        )?;
+        let labels = label_stmt
+            .query_map([], |row| {
+                Ok(LabelRecord {
+                    media_id: row.get(0)?,
+                    kind: row.get(1)?,
+                    label: row.get(2)?,
+                    score: row.get(3)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(InsightSnapshot {
+            people,
+            faces,
+            labels,
+        })
+    }
+
+    pub fn rename_person(&self, id: i64, name: Option<&str>) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE people SET name = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound(format!("person {id}")));
+        }
+        Ok(())
+    }
+
+    pub fn merge_people(&self, keep_id: i64, drop_id: i64) -> Result<(), DbError> {
+        if keep_id == drop_id {
+            return Ok(());
+        }
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE faces SET person_id = ?1 WHERE person_id = ?2",
+            params![keep_id, drop_id],
+        )?;
+        conn.execute("DELETE FROM people WHERE id = ?1", params![drop_id])?;
+        Ok(())
+    }
+
+    pub fn split_face(&self, face_id: i64) -> Result<i64, DbError> {
+        let conn = self.lock()?;
+        let exists: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM faces WHERE id = ?1",
+                params![face_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
+            return Err(DbError::NotFound(format!("face {face_id}")));
+        }
+        conn.execute(
+            "INSERT INTO people (name, created_at) VALUES (NULL, ?1)",
+            params![unix_now()],
+        )?;
+        let person_id = conn.last_insert_rowid();
+        conn.execute(
+            "UPDATE faces SET person_id = ?1 WHERE id = ?2",
+            params![person_id, face_id],
+        )?;
+        Ok(person_id)
+    }
+
     pub fn set_captured_at(&self, path: &str, captured_at: i64) -> Result<(), DbError> {
         let conn = self.lock()?;
         conn.execute(
@@ -333,11 +536,36 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     if !columns.iter().any(|name| name == "flag") {
         conn.execute("ALTER TABLE media_files ADD COLUMN flag TEXT", [])?;
     }
+    if !columns.iter().any(|name| name == "vision_at") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN vision_at INTEGER", [])?;
+    }
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_media_files_captured_at ON media_files (captured_at DESC)",
         [],
     )?;
     Ok(())
+}
+
+pub struct VisionTarget {
+    pub id: i64,
+    pub file_path: String,
+    pub thumbnail_path: Option<String>,
+    pub media_kind: String,
+    pub exif_json: Option<String>,
+}
+
+fn embedding_to_blob(values: &[f32]) -> Vec<u8> {
+    let mut blob = Vec::with_capacity(values.len() * 4);
+    for value in values {
+        blob.extend_from_slice(&value.to_le_bytes());
+    }
+    blob
+}
+
+fn blob_to_embedding(blob: &[u8]) -> Vec<f32> {
+    blob.chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
 }
 
 fn unix_now() -> i64 {
@@ -518,5 +746,71 @@ mod tests {
                 "/photos/no-exif.jpg",
             ]
         );
+    }
+
+    #[test]
+    fn faces_cluster_merge_and_split_without_touching_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::open(dir.path().join("library.sqlite")).unwrap();
+        library
+            .upsert_media(NewMedia {
+                file_path: "/photos/portrait.jpg",
+                content_hash: "abc",
+                file_size: 10,
+                created_at: None,
+                modified_at: 10,
+                media_kind: MediaKind::Image,
+                exif_json: None,
+                captured_at: Some(20),
+            })
+            .unwrap();
+        let media_id = library.list_media().unwrap()[0].id;
+        let first = library.create_person(Some("Bryce")).unwrap();
+        let second = library.create_person(None).unwrap();
+        library
+            .insert_face(media_id, first, 0.2, 0.1, 0.3, 0.4, 0.9, &[1.0, 0.0, 0.0, 0.0])
+            .unwrap();
+        library
+            .insert_face(media_id, second, 0.6, 0.2, 0.2, 0.3, 0.8, &[0.0, 1.0, 0.0, 0.0])
+            .unwrap();
+        library
+            .replace_labels(media_id, &[("pet".into(), "dog".into(), 0.7)])
+            .unwrap();
+        library.mark_vision(media_id).unwrap();
+
+        let snapshot = library.insights().unwrap();
+        assert_eq!(snapshot.people.len(), 2);
+        assert_eq!(snapshot.faces.len(), 2);
+        assert_eq!(snapshot.labels[0].label, "dog");
+        assert!(library.pending_vision().unwrap().is_empty());
+
+        let guest = snapshot
+            .faces
+            .iter()
+            .find(|face| face.person_id == second)
+            .unwrap();
+        let split = library.split_face(guest.id).unwrap();
+        assert_ne!(split, second);
+        library.merge_people(first, split).unwrap();
+        let after = library.insights().unwrap();
+        assert!(after.faces.iter().all(|face| face.person_id == first));
+        library.rename_person(first, Some("Bryce Hill")).unwrap();
+        assert_eq!(
+            library
+                .insights()
+                .unwrap()
+                .people
+                .iter()
+                .find(|person| person.id == first)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("Bryce Hill")
+        );
+
+        library
+            .remove_paths(&["/photos/portrait.jpg".into()])
+            .unwrap();
+        assert!(library.insights().unwrap().faces.is_empty());
     }
 }

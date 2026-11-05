@@ -4,8 +4,10 @@ mod capture;
 mod exif;
 mod scanner;
 mod thumbs;
+mod vision;
 
 pub use thumbs::generate_missing_thumbnails_with;
+pub use vision::recognize_library;
 
 use crate::db::{DbError, Library, NewMedia};
 use crate::models::ScanReport;

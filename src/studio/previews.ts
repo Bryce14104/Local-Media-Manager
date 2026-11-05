@@ -43,6 +43,8 @@ export async function itemsFromFiles(
       previewUrl: meta.previewUrl,
       inspectUrl: meta.inspectUrl,
       sourcePath: null,
+      faces: [],
+      subjects: [],
       ...(meta.gps
         ? { latitude: meta.gps.latitude, longitude: meta.gps.longitude, geotagged: true }
         : { ...coordinatesFor(folder, id), geotagged: false }),

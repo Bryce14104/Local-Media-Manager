@@ -136,6 +136,48 @@ pub struct LibrarySummary {
     pub columns: Vec<String>,
 }
 
+/// A named or still-unnamed person cluster.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonRecord {
+    pub id: i64,
+    pub name: Option<String>,
+    pub face_count: i64,
+}
+
+/// A face box in normalized image coordinates, without the embedding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceRecord {
+    pub id: i64,
+    pub media_id: i64,
+    pub person_id: i64,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub confidence: f32,
+}
+
+/// A pet, wildlife, or scene tag written by the local vision pass.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LabelRecord {
+    pub media_id: i64,
+    pub kind: String,
+    pub label: String,
+    pub score: f32,
+}
+
+/// People, faces, and subject tags for the open library.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InsightSnapshot {
+    pub people: Vec<PersonRecord>,
+    pub faces: Vec<FaceRecord>,
+    pub labels: Vec<LabelRecord>,
+}
+
 /// What a folder scan changed in the catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

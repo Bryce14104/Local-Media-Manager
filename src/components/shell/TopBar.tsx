@@ -28,6 +28,7 @@ const VIEWS: { id: ViewMode; label: string }[] = [
   { id: "cards", label: "Cards" },
   { id: "timeline", label: "Timeline" },
   { id: "map", label: "Map" },
+  { id: "people", label: "People" },
 ];
 
 const PRESETS: { id: LayoutPreset; label: string }[] = [
@@ -136,7 +137,7 @@ export function TopBar({
             aria-expanded={open}
             aria-controls="command-suggestions"
             aria-activedescendant={open ? suggestions[highlight]?.id : undefined}
-            placeholder="Filter or run a command"
+            placeholder="Search people, pets, or a command"
             onChange={(event) => {
               onQuery(event.target.value);
               setOpen(true);

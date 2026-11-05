@@ -9,7 +9,7 @@ mod models;
 mod services;
 
 use db::Library;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,33 +22,15 @@ pub fn run() {
                 let boxed: Box<dyn std::error::Error> = Box::new(err);
                 boxed
             })?;
-            app.manage(library.clone());
-            let handle = app.handle().clone();
-            std::thread::spawn(move || {
-                let ready = services::generate_missing_thumbnails_with(&library, |done, total| {
-                    let _ = handle.emit(
-                        "library-progress",
-                        crate::models::JobProgress {
-                            phase: "thumbnails".to_string(),
-                            done,
-                            total,
-                            label: "Writing previews".to_string(),
-                        },
-                    );
-                });
-                for item in &ready {
-                    let _ = handle.emit("thumbnail-ready", item);
+            if let Ok(resources) = app.path().resource_dir() {
+                let models = resources.join("models");
+                if models.join("yunet.onnx").is_file() {
+                    // The vision worker reads this before the first session is built.
+                    unsafe { std::env::set_var("SHELF_MODELS", models) };
                 }
-                let _ = handle.emit(
-                    "library-progress",
-                    crate::models::JobProgress {
-                        phase: "done".to_string(),
-                        done: 1,
-                        total: 1,
-                        label: "Catalog ready".to_string(),
-                    },
-                );
-            });
+            }
+            app.manage(library.clone());
+            commands::spawn_catalog_jobs(library, app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -60,6 +42,10 @@ pub fn run() {
             commands::set_flags,
             commands::remove_media,
             commands::delete_media,
+            commands::list_insights,
+            commands::rename_person,
+            commands::merge_people,
+            commands::split_face,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Shelf");
