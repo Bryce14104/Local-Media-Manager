@@ -99,9 +99,13 @@ where
     }
 
     let discovered = files.len();
+    eprintln!("shelf index: scanning {}", roots.join(", "));
     let (indexed, unchanged, loop_failed, loop_errors) =
         index_files(library, &files, &mut progress);
     failed += loop_failed;
+    eprintln!(
+        "shelf index: scan finished, indexed {indexed}, unchanged {unchanged}, failed {failed}"
+    );
     for note in loop_errors {
         push_note(&mut errors, note);
     }
@@ -138,6 +142,7 @@ where
     F: FnMut(usize, usize),
 {
     let started = Instant::now();
+    eprintln!("shelf index: scanning {}", root.display());
     let batch = scan_directory(root)?;
     let discovered = batch.files.len();
     let mut errors = batch.errors;
@@ -145,6 +150,9 @@ where
     for note in loop_errors {
         push_note(&mut errors, note);
     }
+    eprintln!(
+        "shelf index: scan finished, indexed {indexed}, unchanged {unchanged}, failed {failed}"
+    );
 
     Ok(ScanReport {
         root: root.display().to_string(),
@@ -175,6 +183,7 @@ where
         match index_one(library, file) {
             Ok(IndexOutcome::Indexed { note }) => {
                 indexed += 1;
+                eprintln!("shelf index: cataloged {}", file.path_string());
                 if let Some(note) = note {
                     push_note(&mut errors, note);
                 }

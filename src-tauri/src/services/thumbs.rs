@@ -77,7 +77,9 @@ where
             continue;
         };
         let destination = directory.join(format!("{hash}.jpg"));
-        if write_thumbnail(Path::new(&record.file_path), &destination).is_err() {
+        eprintln!("shelf index: writing preview {}", record.file_path);
+        if let Err(error) = write_thumbnail(Path::new(&record.file_path), &destination) {
+            eprintln!("shelf index: preview failed for {}: {error}", record.file_path);
             progress(index + 1, total);
             continue;
         }
@@ -100,7 +102,7 @@ where
 }
 
 pub fn write_thumbnail(source: &Path, destination: &Path) -> Result<(), ThumbError> {
-    let image = load_preview(source)?;
+    let image = decode_preview(source)?;
     let thumb = image.resize(MAX_EDGE, MAX_EDGE, FilterType::Triangle);
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|err| ThumbError::Io(err.to_string()))?;
@@ -110,7 +112,7 @@ pub fn write_thumbnail(source: &Path, destination: &Path) -> Result<(), ThumbErr
         .map_err(|err| ThumbError::Decode(err.to_string()))
 }
 
-fn load_preview(source: &Path) -> Result<DynamicImage, ThumbError> {
+pub fn decode_preview(source: &Path) -> Result<DynamicImage, ThumbError> {
     let kind = source
         .extension()
         .and_then(|ext| ext.to_str())

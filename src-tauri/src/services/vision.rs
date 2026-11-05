@@ -71,44 +71,114 @@ pub fn recognize_library<F>(library: &Library, mut progress: F) -> Result<(), Vi
 where
     F: FnMut(usize, usize, &str),
 {
-    let pending = library.pending_vision().unwrap_or_default();
-    let mut workable = Vec::new();
-    for item in pending {
-        if source_path(&item).is_some() {
-            workable.push(item);
-        } else {
-            let _ = library.mark_vision(item.id);
+    let pending = match library.pending_vision() {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("shelf index: could not read the vision queue: {error}");
+            return Ok(());
         }
-    }
-    if workable.is_empty() {
+    };
+    if pending.is_empty() {
+        eprintln!("shelf index: no frames waiting for visual tags");
         return Ok(());
     }
-    progress(0, workable.len(), "Loading vision models");
-    let mut engine = Engine::load()?;
-    for (index, target) in workable.iter().enumerate() {
-        progress(index, workable.len(), "Reading faces and subjects");
-        if let Err(error) = recognize_one(&mut engine, library, target) {
-            eprintln!("shelf vision: {error}");
+    eprintln!("shelf index: {} frames waiting for visual tags", pending.len());
+    progress(0, pending.len(), "Loading vision models");
+    let threads = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(2)
+        .clamp(1, 8);
+    let mut engine = match Engine::load(threads) {
+        Ok(engine) => {
+            eprintln!("shelf index: visual model ready on cpu ({threads} threads)");
+            Some(engine)
         }
-        let _ = library.mark_vision(target.id);
+        Err(error) => {
+            eprintln!("shelf index: visual model unavailable ({error}); tagging from pixel colors");
+            None
+        }
+    };
+    for (index, target) in pending.iter().enumerate() {
+        progress(index, pending.len(), "Reading faces and subjects");
+        match analyze_frame(&mut engine, library, target) {
+            Ok(labels) => {
+                if labels.is_empty() {
+                    eprintln!("shelf index: analyzed {} (no visual tags)", target.file_path);
+                } else {
+                    let names = labels
+                        .iter()
+                        .map(|(_, label, _)| label.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    eprintln!("shelf index: analyzed {} -> {names}", target.file_path);
+                }
+            }
+            Err(error) => eprintln!("shelf index: {} failed: {error}", target.file_path),
+        }
+        if let Err(error) = library.mark_vision(target.id) {
+            eprintln!("shelf index: could not record vision for {}: {error}", target.file_path);
+        }
     }
-    progress(workable.len(), workable.len(), "Reading faces and subjects");
+    progress(pending.len(), pending.len(), "Reading faces and subjects");
     Ok(())
 }
 
-fn recognize_one(engine: &mut Engine, library: &Library, target: &VisionTarget) -> Result<(), VisionError> {
-    let Some(path) = source_path(target) else {
-        return Ok(());
+fn analyze_frame(
+    engine: &mut Option<Engine>,
+    library: &Library,
+    target: &VisionTarget,
+) -> Result<Vec<(String, String, f32)>, VisionError> {
+    let Some(image) = load_pixels(target) else {
+        eprintln!("shelf index: no decodable pixels in {}", target.file_path);
+        return Ok(Vec::new());
     };
-    let Some(image) = image::open(path).ok().map(|image| image.to_rgb8()) else {
-        return Ok(());
-    };
+    eprintln!(
+        "shelf index: analyzing pixels ({}) {}",
+        target.media_kind, target.file_path
+    );
     let _ = library.clear_file_vision(target.id);
     let resized = image::imageops::resize(&image, INPUT, INPUT, FilterType::Triangle);
-    let faces = engine.detect(&resized)?;
+    if let Some(engine) = engine.as_mut() {
+        if let Err(error) = read_faces(engine, library, target, &resized) {
+            eprintln!("shelf index: faces failed for {}: {error}", target.file_path);
+        }
+    }
+
+    let mut tags = scene_tags(&resized);
+    if let Some(engine) = engine.as_mut() {
+        match engine.subjects(&resized) {
+            Ok(found) => tags.extend(found),
+            Err(error) => eprintln!("shelf index: classifier failed for {}: {error}", target.file_path),
+        }
+    }
+    if drone_camera(&camera_text(target)) {
+        tags.push(Tag {
+            kind: "scene",
+            label: "drone".into(),
+            score: 1.0,
+        });
+    }
+    let labels: Vec<(String, String, f32)> = dedupe_tags(tags)
+        .into_iter()
+        .map(|tag| (tag.kind.to_string(), tag.label, tag.score))
+        .collect();
+    library.replace_labels(target.id, &labels).map_err(|error| {
+        eprintln!("shelf index: could not store tags for {}: {error}", target.file_path);
+        VisionError::MissingModel(error.to_string())
+    })?;
+    Ok(labels)
+}
+
+fn read_faces(
+    engine: &mut Engine,
+    library: &Library,
+    target: &VisionTarget,
+    image: &RgbImage,
+) -> Result<(), VisionError> {
+    let faces = engine.detect(image)?;
     let mut known = library.face_embeddings().unwrap_or_default();
     for face in faces {
-        let aligned = align_or_crop(&resized, &face);
+        let aligned = align_or_crop(image, &face);
         let mut embedding = engine.embed(&aligned)?;
         l2_normalize(&mut embedding);
         let person_id = match nearest(&embedding, &known) {
@@ -130,40 +200,22 @@ fn recognize_one(engine: &mut Engine, library: &Library, target: &VisionTarget) 
         );
         known.push((person_id, embedding));
     }
-
-    let mut tags = engine.subjects(&resized)?;
-    if let Some(score) = sunset_score(&resized) {
-        tags.push(Tag {
-            kind: "scene",
-            label: "sunset".into(),
-            score,
-        });
-    }
-    if drone_camera(&camera_text(target)) {
-        tags.push(Tag {
-            kind: "scene",
-            label: "drone".into(),
-            score: 1.0,
-        });
-    }
-    let labels: Vec<(String, String, f32)> = dedupe_tags(tags)
-        .into_iter()
-        .map(|tag| (tag.kind.to_string(), tag.label, tag.score))
-        .collect();
-    let _ = library.replace_labels(target.id, &labels);
     Ok(())
 }
 
-fn source_path(target: &VisionTarget) -> Option<&Path> {
+fn load_pixels(target: &VisionTarget) -> Option<RgbImage> {
     if let Some(thumb) = target.thumbnail_path.as_deref()
-        && Path::new(thumb).is_file()
+        && let Ok(image) = image::open(thumb)
     {
-        return Some(Path::new(thumb));
+        return Some(image.to_rgb8());
     }
-    if target.media_kind == "image" && Path::new(&target.file_path).is_file() {
-        return Some(Path::new(&target.file_path));
+    let path = Path::new(&target.file_path);
+    if !path.is_file() {
+        return None;
     }
-    None
+    super::thumbs::decode_preview(path)
+        .ok()
+        .map(|image| image.to_rgb8())
 }
 
 fn camera_text(target: &VisionTarget) -> String {
@@ -181,12 +233,12 @@ fn camera_text(target: &VisionTarget) -> String {
 }
 
 impl Engine {
-    fn load() -> Result<Self, VisionError> {
+    fn load(threads: usize) -> Result<Self, VisionError> {
         let environment = environment()?;
         Ok(Self {
-            yunet: session(environment, "yunet.onnx")?,
-            sface: session(environment, "sface.onnx")?,
-            mobilenet: session(environment, "mobilenet.onnx")?,
+            yunet: session(environment, "yunet.onnx", threads)?,
+            sface: session(environment, "sface.onnx", threads)?,
+            mobilenet: session(environment, "mobilenet.onnx", threads)?,
         })
     }
 
@@ -231,6 +283,11 @@ impl Engine {
 
 fn environment() -> Result<&'static ort::environment::Environment, VisionError> {
     static ENV: OnceLock<ort::environment::Environment> = OnceLock::new();
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    if let Some(existing) = ENV.get() {
+        return Ok(existing);
+    }
+    let _guard = LOCK.lock().unwrap_or_else(|err| err.into_inner());
     if let Some(existing) = ENV.get() {
         return Ok(existing);
     }
@@ -239,13 +296,17 @@ fn environment() -> Result<&'static ort::environment::Environment, VisionError> 
     Ok(ENV.get().expect("vision environment"))
 }
 
-fn session(environment: &ort::environment::Environment, file_name: &str) -> Result<Session, VisionError> {
+fn session(
+    environment: &ort::environment::Environment,
+    file_name: &str,
+    threads: usize,
+) -> Result<Session, VisionError> {
     let path = model_path(file_name);
     if !path.is_file() {
         return Err(VisionError::MissingModel(path.display().to_string()));
     }
     Ok(Session::builder(environment)?
-        .with_intra_threads(2)
+        .with_intra_threads(threads)
         .map_err(ort::Error::from)?
         .commit_from_file(path)?)
 }
@@ -456,6 +517,156 @@ fn nearest(embedding: &[f32], known: &[(i64, Vec<f32>)]) -> Option<(i64, f32)> {
         .iter()
         .map(|(person_id, other)| (*person_id, cosine(embedding, other)))
         .max_by(|left, right| left.1.partial_cmp(&right.1).unwrap_or(std::cmp::Ordering::Equal))
+}
+
+fn scene_tags(image: &RgbImage) -> Vec<Tag> {
+    let width = image.width();
+    let height = image.height();
+    if width == 0 || height == 0 {
+        return Vec::new();
+    }
+    let sample = if width > 160 {
+        image::imageops::resize(
+            image,
+            160,
+            (height * 160 / width).max(1),
+            FilterType::Nearest,
+        )
+    } else {
+        image.clone()
+    };
+    let sample_width = sample.width();
+    let sample_height = sample.height();
+    let mut sky_blue = 0.0;
+    let mut sky_count = 0.0;
+    let mut sand = 0.0;
+    let mut ground_count = 0.0;
+    let mut water = 0.0;
+    let mut total = 0.0;
+    let sky_end = ((sample_height as f32) * 0.45).max(1.0) as u32;
+    let ground_start = ((sample_height as f32) * 0.62).min(sample_height.saturating_sub(1) as f32) as u32;
+    let tower_bottom = ((sample_height as f32) * 0.78) as u32;
+    let mut columns = vec![0.0f32; sample_width as usize];
+    let mut column_count = vec![0.0f32; sample_width as usize];
+
+    for y in 0..sample_height {
+        for x in 0..sample_width {
+            let pixel = sample.get_pixel(x, y);
+            let red = pixel[0] as f32;
+            let green = pixel[1] as f32;
+            let blue = pixel[2] as f32;
+            total += 1.0;
+            let blueish = blue > 80.0 && blue > red * 1.12 && blue >= green * 0.95;
+            let sandy = red > 140.0 && green > 105.0 && blue < 180.0 && red > blue * 1.15 && (red - blue) > 25.0;
+            if blueish {
+                water += 1.0;
+            }
+            if y < sky_end {
+                sky_count += 1.0;
+                if blueish {
+                    sky_blue += 1.0;
+                }
+            }
+            if y >= ground_start {
+                ground_count += 1.0;
+                if sandy {
+                    sand += 1.0;
+                }
+            }
+            if y < tower_bottom {
+                columns[x as usize] += (red + green + blue) / 3.0;
+                column_count[x as usize] += 1.0;
+            }
+        }
+    }
+
+    let mut tags = Vec::new();
+    if let Some(score) = sunset_score(image) {
+        tags.push(Tag {
+            kind: "scene",
+            label: "sunset".into(),
+            score,
+        });
+    }
+    let water_ratio: f32 = if total > 0.0 { water / total } else { 0.0 };
+    if water_ratio > 0.18 {
+        tags.push(Tag {
+            kind: "scene",
+            label: "water".into(),
+            score: water_ratio.min(1.0),
+        });
+    }
+    let sand_ratio: f32 = if ground_count > 0.0 { sand / ground_count } else { 0.0 };
+    let sky_ratio: f32 = if sky_count > 0.0 { sky_blue / sky_count } else { 0.0 };
+    if sand_ratio > 0.45 && (sky_ratio > 0.35 || water_ratio > 0.12) {
+        let score = ((sand_ratio + sky_ratio) / 2.0).clamp(0.0, 1.0);
+        tags.push(Tag {
+            kind: "scene",
+            label: "beach".into(),
+            score,
+        });
+        if !tags.iter().any(|tag| tag.label == "water") {
+            tags.push(Tag {
+                kind: "scene",
+                label: "water".into(),
+                score: score * 0.8,
+            });
+        }
+    }
+    if let Some(score) = lighthouse_score(&columns, &column_count) {
+        tags.push(Tag {
+            kind: "object",
+            label: "lighthouse".into(),
+            score,
+        });
+    }
+    tags
+}
+
+fn lighthouse_score(columns: &[f32], counts: &[f32]) -> Option<f32> {
+    if columns.is_empty() {
+        return None;
+    }
+    let means: Vec<f32> = columns
+        .iter()
+        .zip(counts)
+        .map(|(sum, count)| if *count > 0.0 { sum / count } else { 0.0 })
+        .collect();
+    let average = means.iter().copied().sum::<f32>() / means.len() as f32;
+    let mut run_start: Option<usize> = None;
+    let mut best: Option<(usize, usize, f32)> = None;
+    for (index, value) in means.iter().copied().enumerate() {
+        let tower = value >= 170.0 && value >= average + 35.0;
+        if tower {
+            if run_start.is_none() {
+                run_start = Some(index);
+            }
+        } else if let Some(start) = run_start.take() {
+            note_run(&mut best, start, index, &means);
+        }
+    }
+    if let Some(start) = run_start {
+        note_run(&mut best, start, means.len(), &means);
+    }
+    let (start, end, mean) = best?;
+    let width = end.saturating_sub(start);
+    let min_width = ((means.len() as f32) * 0.02).max(2.0) as usize;
+    let max_width = ((means.len() as f32) * 0.16).max(min_width as f32) as usize;
+    if width < min_width || width > max_width {
+        return None;
+    }
+    Some(((mean - average) / 255.0).clamp(0.35, 0.95))
+}
+
+fn note_run(best: &mut Option<(usize, usize, f32)>, start: usize, end: usize, means: &[f32]) {
+    if end <= start {
+        return;
+    }
+    let mean = means[start..end].iter().copied().sum::<f32>() / (end - start) as f32;
+    let replace = best.is_none_or(|(_, _, current)| mean > current);
+    if replace {
+        *best = Some((start, end, mean));
+    }
 }
 
 pub fn sunset_score(image: &RgbImage) -> Option<f32> {
@@ -717,8 +928,76 @@ mod tests {
     }
 
     #[test]
+    fn pixel_colors_tag_beach_water_sunset_and_lighthouse() {
+        let mut shore = RgbImage::new(80, 80);
+        for y in 0..48 {
+            for x in 0..80 {
+                shore.put_pixel(x, y, Rgb([70, 140, 220]));
+            }
+        }
+        for y in 48..80 {
+            for x in 0..80 {
+                shore.put_pixel(x, y, Rgb([214, 176, 112]));
+            }
+        }
+        for y in 6..64 {
+            for x in 36..44 {
+                shore.put_pixel(x, y, Rgb([248, 246, 236]));
+            }
+        }
+        let tags = scene_tags(&shore);
+        assert!(tags.iter().any(|tag| tag.label == "beach"), "{tags:?}");
+        assert!(tags.iter().any(|tag| tag.label == "water"), "{tags:?}");
+        assert!(tags.iter().any(|tag| tag.label == "lighthouse"), "{tags:?}");
+
+        let mut sky = RgbImage::new(24, 16);
+        for pixel in sky.pixels_mut() {
+            *pixel = Rgb([210, 110, 60]);
+        }
+        assert!(scene_tags(&sky).iter().any(|tag| tag.label == "sunset"));
+    }
+
+    #[test]
+    fn analyzed_pixels_are_stored_for_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = crate::db::Library::open(dir.path().join("library.sqlite")).unwrap();
+        let photo = dir.path().join("shore.png");
+        let mut shore = RgbImage::new(64, 48);
+        for y in 0..28 {
+            for x in 0..64 {
+                shore.put_pixel(x, y, Rgb([60, 130, 220]));
+            }
+        }
+        for y in 28..48 {
+            for x in 0..64 {
+                shore.put_pixel(x, y, Rgb([210, 170, 100]));
+            }
+        }
+        shore.save(&photo).unwrap();
+        library
+            .upsert_media(crate::db::NewMedia {
+                file_path: photo.to_str().unwrap(),
+                content_hash: "abc",
+                file_size: 12,
+                created_at: None,
+                modified_at: 10,
+                media_kind: crate::models::MediaKind::Image,
+                exif_json: None,
+                captured_at: None,
+            })
+            .unwrap();
+        recognize_library(&library, |_, _, _| {}).unwrap();
+        let labels = library.insights().unwrap().labels;
+        assert!(
+            labels.iter().any(|label| label.label == "beach"),
+            "stored labels: {labels:?}"
+        );
+        assert!(library.pending_vision().unwrap().is_empty());
+    }
+
+    #[test]
     fn models_run_on_a_plain_frame() {
-        let mut engine = Engine::load().expect("models");
+        let mut engine = Engine::load(2).expect("models");
         let frame = RgbImage::from_pixel(64, 48, Rgb([20, 40, 80]));
         let resized = image::imageops::resize(&frame, INPUT, INPUT, FilterType::Triangle);
         let faces = engine.detect(&resized).expect("yunet");

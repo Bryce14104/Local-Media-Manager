@@ -5,7 +5,10 @@ use crate::models::{JobProgress, LibrarySummary, MediaRecord, ScanReport};
 use crate::services;
 use serde::Serialize;
 use std::path::Path;
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State, async_runtime};
+
+static CATALOG_JOB: Mutex<()> = Mutex::new(());
 
 #[tauri::command]
 pub fn library_summary(state: State<'_, Library>) -> Result<LibrarySummary, String> {
@@ -70,18 +73,22 @@ pub async fn index_paths(
 
 pub fn spawn_catalog_jobs(library: Library, app: AppHandle) {
     std::thread::spawn(move || {
+        let _guard = CATALOG_JOB.lock().unwrap_or_else(|err| err.into_inner());
+        eprintln!("shelf index: catalog job started");
         let ready = services::generate_missing_thumbnails_with(&library, |done, total| {
             emit_progress(&app, "thumbnails", done, total, "Writing previews");
         });
+        eprintln!("shelf index: wrote {} previews", ready.len());
         for item in &ready {
             let _ = app.emit("thumbnail-ready", item);
         }
         if let Err(error) = services::recognize_library(&library, |done, total, label| {
             emit_progress(&app, "vision", done, total, label);
         }) {
-            eprintln!("shelf vision: {error}");
+            eprintln!("shelf index: visual tagging failed: {error}");
         }
         emit_progress(&app, "done", 1, 1, "Catalog ready");
+        eprintln!("shelf index: catalog job finished");
     });
 }
 

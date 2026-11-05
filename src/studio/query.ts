@@ -112,6 +112,11 @@ export function parseSearch(input: string, items: StudioItem[]): Filter[] {
   for (const word of rest.split(/\s+/)) {
     const token = word.trim();
     if (token.length < 2 || STOP_WORDS.has(token.toLowerCase()) || token.includes(":")) continue;
+    const visual = subjectValueForToken(token, items);
+    if (visual) {
+      filters.push({ kind: "subject", value: visual });
+      continue;
+    }
     filters.push({ kind: "text", value: token });
   }
   return filters;
@@ -357,6 +362,7 @@ function matchesOne(item: StudioItem, filter: Filter): boolean {
     case "flag":
       return item.flag === filter.value;
     case "text": {
+      if (visualTagMatch(item, filter.value)) return true;
       const haystack = `${item.fileName} ${item.folder} ${item.camera}`.toLowerCase();
       return haystack.includes(filter.value.toLowerCase());
     }
@@ -421,6 +427,35 @@ function namedPeople(items: StudioItem[]): { personId: string; name: string }[] 
 
 function subjectLabels(items: StudioItem[]): string[] {
   return [...new Set(items.flatMap((item) => item.subjects.map((tag) => tag.label.toLowerCase())))];
+}
+
+function wordForms(word: string): string[] {
+  const lower = word.toLowerCase();
+  const forms = [lower];
+  if (lower.endsWith("ies") && lower.length > 4) forms.push(`${lower.slice(0, -3)}y`);
+  if (lower.endsWith("s") && lower.length > 3) forms.push(lower.slice(0, -1));
+  if (lower.endsWith("es") && lower.length > 4) forms.push(lower.slice(0, -2));
+  return forms;
+}
+
+function subjectValueForToken(token: string, items: StudioItem[]): string | null {
+  const known = new Set<string>([
+    ...SUBJECT_WORDS.flatMap((entry) => [entry.value, ...entry.words]),
+    ...subjectLabels(items),
+  ]);
+  const hit = wordForms(token).find((form) => known.has(form));
+  if (!hit) return null;
+  const entry = SUBJECT_WORDS.find((candidate) => candidate.value === hit || candidate.words.includes(hit));
+  return entry ? entry.value : hit;
+}
+
+function visualTagMatch(item: StudioItem, word: string): boolean {
+  const forms = new Set(wordForms(word));
+  return item.subjects.some((tag) => {
+    const label = tag.label.toLowerCase();
+    if (forms.has(label)) return true;
+    return label.split(/[^a-z0-9]+/).some((part) => forms.has(part));
+  });
 }
 
 function takePhrase(haystack: string, phrase: string): { found: boolean; rest: string } {
