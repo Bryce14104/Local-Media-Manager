@@ -512,9 +512,13 @@ fn tags_from_logits(logits: &[f32]) -> Vec<Tag> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let mut tags = Vec::new();
-    for index in order.into_iter().take(5) {
+    for (rank, index) in order.into_iter().take(8).enumerate() {
         let score = probabilities[index];
-        if score < 0.05 {
+        let useful = is_family(index) || !nouns_for_class(index).is_empty();
+        if score < 0.05 && !(useful && score >= 0.02) {
+            continue;
+        }
+        if rank >= 5 && !useful {
             continue;
         }
         tags.extend(tags_for_class(index, score));
@@ -522,34 +526,96 @@ fn tags_from_logits(logits: &[f32]) -> Vec<Tag> {
     dedupe_tags(tags)
 }
 
+fn is_family(index: usize) -> bool {
+    (151..=268).contains(&index)
+        || (281..=285).contains(&index)
+        || (80..=100).contains(&index)
+        || index == 145
+        || index == 146
+        || (269..=297).contains(&index)
+        || index == 340
+        || (342..=344).contains(&index)
+        || (346..=355).contains(&index)
+        || index == 339
+}
+
+fn kind_for_index(index: usize) -> &'static str {
+    if (151..=268).contains(&index) || (281..=285).contains(&index) {
+        "pet"
+    } else if (80..=100).contains(&index)
+        || index == 145
+        || index == 146
+        || (269..=297).contains(&index)
+        || index == 340
+        || (342..=344).contains(&index)
+        || (346..=355).contains(&index)
+    {
+        "wildlife"
+    } else if index == 339 {
+        "animal"
+    } else if nouns_for_class(index)
+        .iter()
+        .any(|noun| *noun == "beach" || *noun == "water")
+    {
+        "scene"
+    } else {
+        "object"
+    }
+}
+
+fn kind_for_noun(noun: &str) -> &'static str {
+    match noun {
+        "dog" | "cat" => "pet",
+        "bird" | "wildlife" => "wildlife",
+        "horse" => "animal",
+        "beach" | "water" => "scene",
+        _ => "object",
+    }
+}
+
+/// Everyday words a photo of this ImageNet class should match in search.
+fn nouns_for_class(index: usize) -> &'static [&'static str] {
+    match index {
+        460 | 972 | 973 | 975 | 976 | 977 | 978 => &["beach", "water"],
+        525 | 562 | 974 => &["water"],
+        536 | 718 => &["water", "boat"],
+        437 => &["lighthouse"],
+        449 => &["boat", "architecture"],
+        472 | 484 | 554 | 576 | 625 | 694 | 780 | 814 | 871 | 913 | 914 => &["boat"],
+        425 | 483 | 497 | 538 | 663 | 668 | 698 | 708 | 821 | 832 | 839 | 888 | 900 => &["architecture"],
+        407 | 436 | 468 | 511 | 555 | 565 | 609 | 656 | 705 | 717 | 751 | 757 | 817 | 829 => &["vehicle"],
+        _ => &[],
+    }
+}
+
 fn tags_for_class(index: usize, score: f32) -> Vec<Tag> {
-    let name = imagenet_name(index).unwrap_or("");
-    let (kind, family) = if (151..=268).contains(&index) {
-        ("pet", "dog")
+    let mut tags = Vec::new();
+    if (151..=268).contains(&index) {
+        tags.push(Tag { kind: "pet", label: "dog".into(), score });
     } else if (281..=285).contains(&index) {
-        ("pet", "cat")
+        tags.push(Tag { kind: "pet", label: "cat".into(), score });
     } else if (80..=100).contains(&index) || index == 145 || index == 146 {
-        ("wildlife", "bird")
+        tags.push(Tag { kind: "wildlife", label: "bird".into(), score });
     } else if (269..=297).contains(&index)
         || index == 340
         || (342..=344).contains(&index)
         || (346..=355).contains(&index)
     {
-        ("wildlife", "wildlife")
+        tags.push(Tag { kind: "wildlife", label: "wildlife".into(), score });
     } else if index == 339 {
-        ("animal", "horse")
-    } else {
-        return Vec::new();
-    };
-    let mut tags = vec![Tag {
-        kind,
-        label: family.into(),
-        score,
-    }];
-    let specific = name.to_ascii_lowercase();
-    if specific != family && !specific.is_empty() {
+        tags.push(Tag { kind: "animal", label: "horse".into(), score });
+    }
+    for noun in nouns_for_class(index) {
         tags.push(Tag {
-            kind,
+            kind: kind_for_noun(noun),
+            label: (*noun).into(),
+            score,
+        });
+    }
+    let specific = imagenet_name(index).unwrap_or("").to_ascii_lowercase();
+    if !specific.is_empty() && tags.iter().all(|tag| tag.label != specific) {
+        tags.push(Tag {
+            kind: kind_for_index(index),
             label: specific,
             score,
         });
@@ -638,6 +704,16 @@ mod tests {
         let lion = tags_for_class(291, 0.5);
         assert!(lion.iter().any(|tag| tag.kind == "wildlife" && tag.label == "lion"));
         assert_eq!(imagenet_name(151), Some("Chihuahua"));
+        let shore = tags_for_class(978, 0.4);
+        assert!(shore.iter().any(|tag| tag.label == "beach" && tag.kind == "scene"));
+        assert!(shore.iter().any(|tag| tag.label == "water"));
+        assert!(shore.iter().any(|tag| tag.label == "seashore"));
+        let boat = tags_for_class(814, 0.4);
+        assert!(boat.iter().any(|tag| tag.label == "boat" && tag.kind == "object"));
+        let tower = tags_for_class(437, 0.4);
+        assert!(tower.iter().any(|tag| tag.label == "lighthouse"));
+        let hall = tags_for_class(483, 0.4);
+        assert!(hall.iter().any(|tag| tag.label == "architecture"));
     }
 
     #[test]

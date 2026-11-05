@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { IndexStatusPopover } from "../drawers/IndexStatusPopover";
+import { InsightsMenu } from "./InsightsMenu";
 import { filterLabel } from "../../studio/query";
-import type { ActiveFilter, LayoutPreset, Suggestion, ViewMode } from "../../studio/types";
+import type { ActiveFilter, LayoutPreset, StudioItem, Suggestion, ViewMode } from "../../studio/types";
 
 type TopBarProps = {
   query: string;
@@ -21,6 +22,14 @@ type TopBarProps = {
   onIndexOpen: (open: boolean) => void;
   onPreferences: () => void;
   inputRef: RefObject<HTMLInputElement | null>;
+  items: StudioItem[];
+  insightsOpen: boolean;
+  onInsightsOpen: (open: boolean) => void;
+  onInsightSubject: (value: string) => void;
+  onInsightPerson: (personId: string, name: string) => void;
+  onRenamePerson: (personId: string, name: string) => void;
+  onMergePeople: (keepId: string, dropId: string) => void;
+  onSplitFace: (faceId: string) => void;
 };
 
 const VIEWS: { id: ViewMode; label: string }[] = [
@@ -28,7 +37,6 @@ const VIEWS: { id: ViewMode; label: string }[] = [
   { id: "cards", label: "Cards" },
   { id: "timeline", label: "Timeline" },
   { id: "map", label: "Map" },
-  { id: "people", label: "People" },
 ];
 
 const PRESETS: { id: LayoutPreset; label: string }[] = [
@@ -55,12 +63,21 @@ export function TopBar({
   onIndexOpen,
   onPreferences,
   inputRef,
+  items,
+  insightsOpen,
+  onInsightsOpen,
+  onInsightSubject,
+  onInsightPerson,
+  onRenamePerson,
+  onMergePeople,
+  onSplitFace,
 }: TopBarProps) {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const desktopIndex = useRef<HTMLDivElement>(null);
   const mobileIndex = useRef<HTMLDivElement>(null);
+  const insightsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setHighlight(0);
@@ -77,6 +94,17 @@ export function TopBar({
     window.addEventListener("pointerdown", onPointer);
     return () => window.removeEventListener("pointerdown", onPointer);
   }, [indexOpen, onIndexOpen]);
+
+  useEffect(() => {
+    if (!insightsOpen) return;
+    function onPointer(event: PointerEvent) {
+      const target = event.target as Node;
+      if (insightsRef.current?.contains(target)) return;
+      onInsightsOpen(false);
+    }
+    window.addEventListener("pointerdown", onPointer);
+    return () => window.removeEventListener("pointerdown", onPointer);
+  }, [insightsOpen, onInsightsOpen]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -116,7 +144,7 @@ export function TopBar({
   }
 
   return (
-    <header className="border-b border-line bg-studio/95">
+    <header className="relative z-30 border-b border-line bg-studio/95">
       <div className="flex items-center gap-2 px-3 py-2">
         <div className="hidden items-center gap-2 pr-1 sm:flex">
           <span className="grid h-7 w-7 place-items-center rounded-md border border-teal/40 text-teal" aria-hidden>
@@ -137,7 +165,7 @@ export function TopBar({
             aria-expanded={open}
             aria-controls="command-suggestions"
             aria-activedescendant={open ? suggestions[highlight]?.id : undefined}
-            placeholder="Search people, pets, or a command"
+            placeholder="Search people, objects, or a command"
             onChange={(event) => {
               onQuery(event.target.value);
               setOpen(true);
@@ -224,6 +252,13 @@ export function TopBar({
                 }}
               />
               <MenuRow
+                label="AI Insights"
+                onClick={() => {
+                  onInsightsOpen(true);
+                  setMenuOpen(false);
+                }}
+              />
+              <MenuRow
                 label="Preferences"
                 onClick={() => {
                   onPreferences();
@@ -236,8 +271,34 @@ export function TopBar({
         </div>
       </div>
 
-      <div className="flex items-center gap-2 overflow-x-auto px-3 pb-2">
-        <ViewSwitch viewMode={viewMode} preset={preset} onViewMode={onViewMode} />
+      <div className="flex flex-wrap items-center gap-2 px-3 pb-2">
+        <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
+          <ViewSwitch viewMode={viewMode} preset={preset} onViewMode={onViewMode} />
+        </div>
+        <div ref={insightsRef} className="relative shrink-0">
+          <button
+            type="button"
+            data-insights-button
+            aria-expanded={insightsOpen}
+            aria-haspopup="menu"
+            onClick={() => onInsightsOpen(!insightsOpen)}
+            className={`rounded-full border px-2.5 py-1 text-xs ${
+              insightsOpen ? "border-teal bg-teal text-teal-ink" : "border-line text-mute hover:text-foam"
+            }`}
+          >
+            AI Insights
+          </button>
+          {insightsOpen ? (
+            <InsightsMenu
+              items={items}
+              onSubject={onInsightSubject}
+              onPerson={onInsightPerson}
+              onRename={onRenamePerson}
+              onMerge={onMergePeople}
+              onSplit={onSplitFace}
+            />
+          ) : null}
+        </div>
         <PresetSwitch preset={preset} onPreset={onPreset} />
       </div>
 

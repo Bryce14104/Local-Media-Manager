@@ -73,7 +73,7 @@ export type FaceMark = {
 };
 
 export type SubjectTag = {
-  kind: "pet" | "wildlife" | "scene" | "animal";
+  kind: "pet" | "wildlife" | "scene" | "animal" | "object";
   label: string;
   score: number;
 };

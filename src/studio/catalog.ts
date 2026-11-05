@@ -309,19 +309,53 @@ const SEED_FACES: Record<string, { personId: string; name: string | null; x: num
   "R5_0904.JPG": [{ personId: "person-guest", name: null, x: 0.42, y: 0.15, width: 0.25, height: 0.33 }],
 };
 
-const SEED_SUBJECTS: Record<string, { kind: "pet" | "wildlife" | "scene"; label: string }[]> = {
+const SEED_SUBJECTS: Record<string, { kind: "pet" | "wildlife" | "scene" | "object"; label: string }[]> = {
   "A7_05040.JPG": [{ kind: "pet", label: "dog" }],
-  "A7_04112.ARW": [{ kind: "pet", label: "dog" }],
+  "A7_04112.ARW": [
+    { kind: "pet", label: "dog" },
+    { kind: "scene", label: "beach" },
+  ],
+  "A7_04118.ARW": [
+    { kind: "object", label: "lighthouse" },
+    { kind: "scene", label: "beach" },
+    { kind: "scene", label: "water" },
+  ],
+  "A7_04140.JPG": [
+    { kind: "scene", label: "beach" },
+    { kind: "scene", label: "water" },
+  ],
   "Q3_0152.DNG": [{ kind: "pet", label: "cat" }],
+  "Q3_0144.DNG": [
+    { kind: "object", label: "boat" },
+    { kind: "scene", label: "water" },
+    { kind: "object", label: "architecture" },
+  ],
   "A7_05018.ARW": [
     { kind: "wildlife", label: "oryx" },
+    { kind: "wildlife", label: "wildlife" },
     { kind: "scene", label: "drone" },
   ],
   "A7_05002.ARW": [{ kind: "wildlife", label: "wildlife" }],
   "A7_04188.JPG": [{ kind: "scene", label: "sunset" }],
   "XT5_2288.JPG": [{ kind: "scene", label: "sunset" }],
   "R5_0904.JPG": [{ kind: "scene", label: "sunset" }],
-  "Q3_0160.JPG": [{ kind: "scene", label: "sunset" }],
+  "Q3_0160.JPG": [
+    { kind: "scene", label: "sunset" },
+    { kind: "scene", label: "water" },
+  ],
+  "XT5_2201.RAF": [
+    { kind: "object", label: "boat" },
+    { kind: "scene", label: "water" },
+  ],
+  "XT5_2208.RAF": [{ kind: "object", label: "architecture" }],
+  "Z8_1180.NEF": [{ kind: "object", label: "architecture" }],
+  "Z8_1194.NEF": [{ kind: "object", label: "architecture" }],
+  "Z8_2408.NEF": [{ kind: "object", label: "architecture" }],
+  "R5_0890.CR3": [{ kind: "object", label: "vehicle" }],
+  "R5_1022.CR3": [
+    { kind: "wildlife", label: "bird" },
+    { kind: "wildlife", label: "wildlife" },
+  ],
 };
 
 function attachSeed(item: StudioItem): StudioItem {

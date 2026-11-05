@@ -21,7 +21,7 @@ const ACTIONS: { action: StudioAction; label: string; hint: string; keywords: st
   { action: "view-cards", label: "View: Detailed cards", hint: "Larger frames", keywords: "view card detailed" },
   { action: "view-timeline", label: "View: Timeline", hint: "Group by month", keywords: "view timeline date" },
   { action: "view-map", label: "View: Map", hint: "Pins and the frame panel", keywords: "view map geo gps" },
-  { action: "view-people", label: "People and pets", hint: "Name faces and browse subjects", keywords: "people pets faces animals dogs wildlife insights" },
+  { action: "view-people", label: "AI Insights", hint: "People, pets, scenes, and objects", keywords: "ai insights people pets faces animals dogs wildlife scenes objects lighthouse beach" },
   { action: "toggle-inspector", label: "Toggle info panel", hint: "Dock, float, or hide", keywords: "toggle inspector info panel exif" },
   { action: "clear-filters", label: "Clear filters", hint: "Show the full roll", keywords: "clear filters reset" },
   { action: "preferences", label: "Preferences", hint: "Draw a map area to cache, or clear tiles", keywords: "preferences settings map tiles download cache zoom area" },
@@ -61,11 +61,18 @@ const STOP_WORDS = new Set([
 const SUBJECT_WORDS: { words: string[]; value: string }[] = [
   { words: ["puppies", "puppy", "dogs", "dog"], value: "dog" },
   { words: ["kittens", "kitten", "cats", "cat"], value: "cat" },
-  { words: ["wildlife", "wild"], value: "wildlife" },
+  { words: ["wildlife", "fauna", "wild"], value: "wildlife" },
   { words: ["birds", "bird"], value: "bird" },
   { words: ["horses", "horse"], value: "horse" },
   { words: ["sunsets", "sunset"], value: "sunset" },
-  { words: ["drones", "drone", "aerial"], value: "drone" },
+  { words: ["drones", "drone", "aerials", "aerial"], value: "drone" },
+  { words: ["beaches", "beach", "seashore", "shore"], value: "beach" },
+  { words: ["boats", "boat", "speedboat", "sailboat"], value: "boat" },
+  { words: ["lighthouses", "lighthouse", "beacon"], value: "lighthouse" },
+  { words: ["water", "waters", "ocean", "sea", "lake"], value: "water" },
+  { words: ["vehicles", "vehicle", "cars", "car"], value: "vehicle" },
+  { words: ["architecture", "buildings", "building"], value: "architecture" },
+  { words: ["people", "persons", "person"], value: "person" },
 ];
 
 const STRUCTURED = /\b(?:rating:(?:>=|=)?[0-5]|type:(?:raw|jpg|jpeg|video)|flag:(?:pick|reject|unflagged)|date:\d{4}(?:-\d{2})?|camera:[^\s]+)/gi;
@@ -366,6 +373,7 @@ function matchesOne(item: StudioItem, filter: Filter): boolean {
       return item.faces.some((face) => face.personId === filter.personId);
     case "subject": {
       const value = filter.value.toLowerCase();
+      if (value === "person") return item.faces.length > 0;
       return item.subjects.some(
         (tag) =>
           tag.label.toLowerCase() === value ||

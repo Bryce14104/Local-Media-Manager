@@ -66,7 +66,7 @@ function libraryMediaId(id: string): number | null {
 }
 
 function subjectKind(kind: string): SubjectTag["kind"] {
-  if (kind === "pet" || kind === "wildlife" || kind === "scene" || kind === "animal") return kind;
+  if (kind === "pet" || kind === "wildlife" || kind === "scene" || kind === "animal" || kind === "object") return kind;
   return "animal";
 }
 

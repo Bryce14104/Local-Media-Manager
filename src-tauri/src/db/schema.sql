@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS faces (
 CREATE INDEX IF NOT EXISTS idx_faces_media_id ON faces (media_id);
 CREATE INDEX IF NOT EXISTS idx_faces_person_id ON faces (person_id);
 
--- Subject and scene tags. kind is pet, wildlife, animal, or scene.
+-- Subject and scene tags. kind is pet, wildlife, animal, scene, or object.
 CREATE TABLE IF NOT EXISTS media_labels (
     media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
     kind TEXT NOT NULL,

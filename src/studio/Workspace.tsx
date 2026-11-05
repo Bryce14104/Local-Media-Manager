@@ -83,6 +83,7 @@ export function Workspace() {
   const [cacheBounds, setCacheBounds] = useState<GeoBounds | null>(null);
   const [selectingCache, setSelectingCache] = useState(false);
   const [indexOpen, setIndexOpen] = useState(false);
+  const [insightsOpen, setInsightsOpen] = useState(false);
   const [telemetry, setTelemetry] = useState<Telemetry>(INITIAL_TELEMETRY);
 
   const visible = useMemo(
@@ -378,7 +379,7 @@ export function Workspace() {
         chooseView("map");
         break;
       case "view-people":
-        chooseView("people");
+        setInsightsOpen(true);
         break;
       case "preferences":
         openPreferences();
@@ -704,6 +705,13 @@ export function Workspace() {
   function showSubject(label: string) {
     setFilters((current) => upsertFilter(current, { kind: "subject", value: label }));
     chooseView("compact");
+    setInsightsOpen(false);
+  }
+
+  function showPerson(personId: string, name: string) {
+    setFilters((current) => upsertFilter(current, { kind: "person", personId, name }));
+    chooseView("compact");
+    setInsightsOpen(false);
   }
 
   function exportSelection(format: string, destination: string) {
@@ -735,6 +743,14 @@ export function Workspace() {
         onIndexOpen={setIndexOpen}
         onPreferences={openPreferences}
         inputRef={inputRef}
+        items={items}
+        insightsOpen={insightsOpen}
+        onInsightsOpen={setInsightsOpen}
+        onInsightSubject={showSubject}
+        onInsightPerson={showPerson}
+        onRenamePerson={renameCluster}
+        onMergePeople={mergeClusters}
+        onSplitFace={splitClusterFace}
       />
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
