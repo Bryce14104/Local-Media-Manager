@@ -5,6 +5,7 @@ import {
   deleteFromDisk,
   desktopBridgeAvailable,
   errorMessage,
+  logSearch,
   fetchInsights,
   fetchLibrary,
   indexPaths,
@@ -33,7 +34,7 @@ import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
 import { applyInsights, mergeFaces, moveFace, numericSuffix, renameFaces } from "./insights";
 import { applySelection, type PointerMods } from "./selection";
 import type { MapZoom } from "./mapRegions";
-import { matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
+import { applySearchMode, filterLabel, matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
 import type {
   ActiveFilter,
   GeoBounds,
@@ -60,6 +61,7 @@ export function Workspace() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [items, setItems] = useState<StudioItem[]>(() => createCatalog());
   const [query, setQuery] = useState("");
+  const [aiSearch, setAiSearch] = useState(storedAiSearch);
   const [filters, setFilters] = useState<ActiveFilter[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("compact");
   const [gridZoom, setGridZoom] = useState(readGridZoom);
@@ -97,7 +99,7 @@ export function Workspace() {
         ),
     [items, filters],
   );
-  const palette = useMemo(() => suggestions(query, items), [query, items]);
+  const palette = useMemo(() => suggestions(query, items, aiSearch), [query, items, aiSearch]);
   const primary = items.find((item) => item.id === primaryId) ?? null;
   const lightboxItem = visible.find((item) => item.id === lightboxId) ?? null;
   const comparePair: [StudioItem | null, StudioItem | null] = [
@@ -402,16 +404,45 @@ export function Workspace() {
     } else {
       setFilters((current) => suggestion.filters.reduce(upsertFilter, current));
       if (viewMode === "people") chooseView("compact");
+      void logSearch(
+        aiSearch,
+        suggestion.label,
+        suggestion.filters.map((filter) => filterLabel({ ...filter, id: "logged" })).join(", "),
+      );
     }
     setQuery("");
   }
 
   function submitQuery() {
-    const parsed = parseQuery(query, items);
-    if (parsed.length === 0) return;
+    const parsed = parseQuery(query, items, aiSearch);
+    if (parsed.length === 0) {
+      void logSearch(aiSearch, query, "no filter");
+      return;
+    }
     setFilters((current) => parsed.reduce(upsertFilter, current));
+    void logSearch(
+      aiSearch,
+      query,
+      parsed.map((filter) => filterLabel({ ...filter, id: "logged" })).join(", "),
+    );
     setQuery("");
     if (viewMode === "people") chooseView("compact");
+  }
+
+  function changeAiSearch(next: boolean) {
+    setAiSearch(next);
+    try {
+      localStorage.setItem("shelf-ai-search", next ? "1" : "0");
+    } catch {
+      // The choice still applies for this visit when storage is blocked.
+    }
+    const nextFilters = applySearchMode(filters, next, items);
+    setFilters(nextFilters);
+    void logSearch(
+      next,
+      query,
+      nextFilters.map((filter) => filterLabel(filter)).join(", ") || "no active filter",
+    );
   }
 
   function openItem(id: string) {
@@ -728,6 +759,8 @@ export function Workspace() {
       <TopBar
         query={query}
         onQuery={setQuery}
+        aiSearch={aiSearch}
+        onAiSearch={changeAiSearch}
         suggestions={palette}
         filters={filters}
         onRemoveFilter={(id) => setFilters((current) => current.filter((filter) => filter.id !== id))}
@@ -927,6 +960,14 @@ type ThumbnailReady = {
   thumbnailPath: string;
   mediaKind: MediaKind;
 };
+
+function storedAiSearch(): boolean {
+  try {
+    return localStorage.getItem("shelf-ai-search") !== "0";
+  } catch {
+    return true;
+  }
+}
 
 function presentRecord(record: MediaRecord): StudioItem {
   const item = itemFromRecord(record);

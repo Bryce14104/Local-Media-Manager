@@ -34,6 +34,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::log_search,
             commands::library_summary,
             commands::list_media,
             commands::scan_directory,

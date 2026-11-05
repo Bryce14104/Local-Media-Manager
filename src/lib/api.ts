@@ -88,6 +88,19 @@ export async function splitFace(faceId: number): Promise<number> {
   return invoke<number>("split_face", { faceId });
 }
 
+export async function logSearch(ai: boolean, query: string, summary: string): Promise<void> {
+  const line = `AI search ${ai ? "on, visual tags" : "off, file names and paths"} | query ${JSON.stringify(query.trim())} | ${summary || "no filter"}`;
+  if (!desktopBridgeAvailable()) {
+    console.info(`shelf search: ${line}`);
+    return;
+  }
+  try {
+    await invoke("log_search", { ai, query, summary });
+  } catch {
+    console.info(`shelf search: ${line}`);
+  }
+}
+
 export async function setRating(
   path: string,
   rating: number | null,

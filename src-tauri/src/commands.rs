@@ -11,6 +11,20 @@ use tauri::{AppHandle, Emitter, State, async_runtime};
 static CATALOG_JOB: Mutex<()> = Mutex::new(());
 
 #[tauri::command]
+pub fn log_search(ai: bool, query: String, summary: String) {
+    let mode = if ai {
+        "on, visual tags"
+    } else {
+        "off, file names and paths"
+    };
+    eprintln!(
+        "shelf search: AI search {mode} | query {:?} | {}",
+        query.trim(),
+        if summary.trim().is_empty() { "no filter" } else { summary.trim() }
+    );
+}
+
+#[tauri::command]
 pub fn library_summary(state: State<'_, Library>) -> Result<LibrarySummary, String> {
     state.summary().map_err(|err| err.to_string())
 }

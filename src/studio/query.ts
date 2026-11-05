@@ -77,11 +77,11 @@ const SUBJECT_WORDS: { words: string[]; value: string }[] = [
 
 const STRUCTURED = /\b(?:rating:(?:>=|=)?[0-5]|type:(?:raw|jpg|jpeg|video)|flag:(?:pick|reject|unflagged)|date:\d{4}(?:-\d{2})?|camera:[^\s]+)/gi;
 
-export function parseQuery(input: string, items: StudioItem[] = []): Filter[] {
-  return parseSearch(input, items);
+export function parseQuery(input: string, items: StudioItem[] = [], aiSearch = true): Filter[] {
+  return parseSearch(input, items, aiSearch);
 }
 
-export function parseSearch(input: string, items: StudioItem[]): Filter[] {
+export function parseSearch(input: string, items: StudioItem[], aiSearch = true): Filter[] {
   const filters: Filter[] = [];
   const structured = input.match(STRUCTURED) ?? [];
   for (const token of structured) {
@@ -89,40 +89,56 @@ export function parseSearch(input: string, items: StudioItem[]): Filter[] {
     if (filter) filters.push(filter);
   }
   let rest = input.replace(STRUCTURED, " ");
-  const people = namedPeople(items).sort((left, right) => right.name.length - left.name.length);
-  for (const person of people) {
-    const taken = takePhrase(rest, person.name);
-    if (!taken.found) continue;
-    rest = taken.rest;
-    filters.push({ kind: "person", personId: person.personId, name: person.name });
-  }
-  const phrases = [
-    ...SUBJECT_WORDS.flatMap((entry) => entry.words.map((word) => ({ phrase: word, value: entry.value }))),
-    ...subjectLabels(items).map((label) => ({ phrase: label, value: label })),
-  ].sort((left, right) => right.phrase.length - left.phrase.length);
-  const seenSubjects = new Set<string>();
-  for (const entry of phrases) {
-    if (entry.phrase.length < 3 || seenSubjects.has(entry.value)) continue;
-    const taken = takePhrase(rest, entry.phrase);
-    if (!taken.found) continue;
-    rest = taken.rest;
-    seenSubjects.add(entry.value);
-    filters.push({ kind: "subject", value: entry.value });
+  if (aiSearch) {
+    const people = namedPeople(items).sort((left, right) => right.name.length - left.name.length);
+    for (const person of people) {
+      const taken = takePhrase(rest, person.name);
+      if (!taken.found) continue;
+      rest = taken.rest;
+      filters.push({ kind: "person", personId: person.personId, name: person.name });
+    }
+    const phrases = [
+      ...SUBJECT_WORDS.flatMap((entry) => entry.words.map((word) => ({ phrase: word, value: entry.value }))),
+      ...subjectLabels(items).map((label) => ({ phrase: label, value: label })),
+    ].sort((left, right) => right.phrase.length - left.phrase.length);
+    const seenSubjects = new Set<string>();
+    for (const entry of phrases) {
+      if (entry.phrase.length < 3 || seenSubjects.has(entry.value)) continue;
+      const taken = takePhrase(rest, entry.phrase);
+      if (!taken.found) continue;
+      rest = taken.rest;
+      seenSubjects.add(entry.value);
+      filters.push({ kind: "subject", value: entry.value });
+    }
   }
   for (const word of rest.split(/\s+/)) {
     const token = word.trim();
     if (token.length < 2 || STOP_WORDS.has(token.toLowerCase()) || token.includes(":")) continue;
-    const visual = subjectValueForToken(token, items);
-    if (visual) {
-      filters.push({ kind: "subject", value: visual });
-      continue;
+    if (aiSearch) {
+      const visual = subjectValueForToken(token, items);
+      if (visual) {
+        filters.push({ kind: "subject", value: visual });
+        continue;
+      }
     }
     filters.push({ kind: "text", value: token });
   }
   return filters;
 }
 
-export function suggestions(query: string, items: StudioItem[]): Suggestion[] {
+export function applySearchMode(filters: ActiveFilter[], aiSearch: boolean, items: StudioItem[]): ActiveFilter[] {
+  const next: ActiveFilter[] = [];
+  const seen = new Set<string>();
+  for (const filter of filters) {
+    const mapped = retargetFilter(filter, aiSearch, items);
+    if (seen.has(mapped.id)) continue;
+    seen.add(mapped.id);
+    next.push(mapped);
+  }
+  return next;
+}
+
+export function suggestions(query: string, items: StudioItem[], aiSearch = true): Suggestion[] {
   const trimmed = query.trim();
   const needle = trimmed.toLowerCase();
   if (!needle) return emptySuggestions(items);
@@ -151,14 +167,14 @@ export function suggestions(query: string, items: StudioItem[]): Suggestion[] {
 
   ranked.sort((left, right) => right.score - left.score);
   const list = ranked.map((entry) => entry.suggestion).slice(0, 8);
-  const parsed = parseSearch(trimmed, items);
+  const parsed = parseSearch(trimmed, items, aiSearch);
   if (parsed.length === 1 && parsed[0]?.kind === "text") {
     list.unshift({
       id: `text-${needle}`,
       type: "filters",
       filters: parsed,
       label: `Filename contains “${trimmed}”`,
-      hint: "Plain text",
+      hint: "File name and path",
     });
   } else if (parsed.length > 0) {
     list.unshift({
@@ -166,7 +182,7 @@ export function suggestions(query: string, items: StudioItem[]): Suggestion[] {
       type: "filters",
       filters: parsed,
       label: parsed.map((filter) => filterLabel({ ...filter, id: "preview" })).join(" · "),
-      hint: trimmed,
+      hint: aiSearch ? "Visual tags" : "File name and path",
     });
   }
   return list.slice(0, 8);
@@ -199,7 +215,7 @@ export function filterLabel(filter: ActiveFilter): string {
     case "flag":
       return flagLabel(filter.value);
     case "text":
-      return `“${filter.value}”`;
+      return `File “${filter.value}”`;
     case "region": {
       const latitude = (filter.south + filter.north) / 2;
       const longitude = (filter.west + filter.east) / 2;
@@ -362,8 +378,7 @@ function matchesOne(item: StudioItem, filter: Filter): boolean {
     case "flag":
       return item.flag === filter.value;
     case "text": {
-      if (visualTagMatch(item, filter.value)) return true;
-      const haystack = `${item.fileName} ${item.folder} ${item.camera}`.toLowerCase();
+      const haystack = `${item.fileName} ${item.folder} ${item.sourcePath ?? ""}`.toLowerCase();
       return haystack.includes(filter.value.toLowerCase());
     }
     case "region":
@@ -438,6 +453,22 @@ function wordForms(word: string): string[] {
   return forms;
 }
 
+function retargetFilter(filter: ActiveFilter, aiSearch: boolean, items: StudioItem[]): ActiveFilter {
+  if (!aiSearch && filter.kind === "subject") {
+    return { kind: "text", value: filter.value, id: `text:${filter.value.toLowerCase()}` };
+  }
+  if (!aiSearch && filter.kind === "person") {
+    return { kind: "text", value: filter.name, id: `text:${filter.name.toLowerCase()}` };
+  }
+  if (aiSearch && filter.kind === "text") {
+    const visual = subjectValueForToken(filter.value, items);
+    if (visual) return { kind: "subject", value: visual, id: `subject:${visual.toLowerCase()}` };
+    const person = namedPeople(items).find((entry) => entry.name.toLowerCase() === filter.value.toLowerCase());
+    if (person) return { kind: "person", personId: person.personId, name: person.name, id: `person:${person.personId}` };
+  }
+  return filter;
+}
+
 function subjectValueForToken(token: string, items: StudioItem[]): string | null {
   const known = new Set<string>([
     ...SUBJECT_WORDS.flatMap((entry) => [entry.value, ...entry.words]),
@@ -447,15 +478,6 @@ function subjectValueForToken(token: string, items: StudioItem[]): string | null
   if (!hit) return null;
   const entry = SUBJECT_WORDS.find((candidate) => candidate.value === hit || candidate.words.includes(hit));
   return entry ? entry.value : hit;
-}
-
-function visualTagMatch(item: StudioItem, word: string): boolean {
-  const forms = new Set(wordForms(word));
-  return item.subjects.some((tag) => {
-    const label = tag.label.toLowerCase();
-    if (forms.has(label)) return true;
-    return label.split(/[^a-z0-9]+/).some((part) => forms.has(part));
-  });
 }
 
 function takePhrase(haystack: string, phrase: string): { found: boolean; rest: string } {

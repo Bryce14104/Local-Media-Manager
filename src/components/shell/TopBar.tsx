@@ -7,6 +7,8 @@ import type { ActiveFilter, LayoutPreset, StudioItem, Suggestion, ViewMode } fro
 type TopBarProps = {
   query: string;
   onQuery: (value: string) => void;
+  aiSearch: boolean;
+  onAiSearch: (value: boolean) => void;
   suggestions: Suggestion[];
   filters: ActiveFilter[];
   onRemoveFilter: (id: string) => void;
@@ -48,6 +50,8 @@ const PRESETS: { id: LayoutPreset; label: string }[] = [
 export function TopBar({
   query,
   onQuery,
+  aiSearch,
+  onAiSearch,
   suggestions,
   filters,
   onRemoveFilter,
@@ -165,7 +169,7 @@ export function TopBar({
             aria-expanded={open}
             aria-controls="command-suggestions"
             aria-activedescendant={open ? suggestions[highlight]?.id : undefined}
-            placeholder="Search people, objects, or a command"
+            placeholder={aiSearch ? "Search people, objects, or a command" : "Search file names and paths"}
             onChange={(event) => {
               onQuery(event.target.value);
               setOpen(true);
@@ -175,11 +179,14 @@ export function TopBar({
               window.setTimeout(() => setOpen(false), 150);
             }}
             onKeyDown={onInputKey}
-            className="w-full rounded-full border border-line bg-card px-4 py-2 text-sm outline-none placeholder:text-mute focus:border-teal"
+            className="w-full rounded-full border border-line bg-card py-2 pl-4 pr-[5.6rem] text-sm outline-none placeholder:text-mute focus:border-teal min-[420px]:pr-[8rem] md:pr-[12rem]"
           />
-          <span className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-mute md:inline">
-            Ctrl K
-          </span>
+          <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
+            <AiSearchSwitch checked={aiSearch} onChange={onAiSearch} />
+            <span className="pointer-events-none hidden rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-mute md:inline">
+              Ctrl K
+            </span>
+          </div>
           {open && suggestions.length > 0 ? (
             <ul
               id="command-suggestions"
@@ -319,6 +326,41 @@ export function TopBar({
         </div>
       ) : null}
     </header>
+  );
+}
+
+function AiSearchSwitch({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label="AI Search"
+      data-ai-search={checked ? "on" : "off"}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={() => onChange(!checked)}
+      className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-1.5 py-1 text-[11px] leading-none ${
+        checked ? "border-teal/50 bg-teal/15 text-teal" : "border-line bg-studio text-mute hover:text-foam"
+      }`}
+    >
+      <span aria-hidden className={`relative h-3.5 w-7 shrink-0 rounded-full ${checked ? "bg-teal" : "bg-line"}`}>
+        <span
+          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-studio shadow transition-transform ${
+            checked ? "translate-x-3.5" : "translate-x-0.5"
+          }`}
+        />
+      </span>
+      <span className="pr-0.5 font-medium tracking-wide">
+        <span className="hidden min-[420px]:inline">AI Search</span>
+        <span className="min-[420px]:hidden">AI</span>
+      </span>
+    </button>
   );
 }
 
