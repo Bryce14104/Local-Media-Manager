@@ -87,6 +87,7 @@ export type Filter =
   | { kind: "text"; value: string }
   | ({ kind: "region" } & GeoBounds)
   | { kind: "cluster"; ids: string[]; label: string }
+  | { kind: "visual"; ids: string[]; label: string }
   | { kind: "person"; personId: string; name: string }
   | { kind: "subject"; value: string };
 

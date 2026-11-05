@@ -11,6 +11,31 @@ use tauri::{AppHandle, Emitter, State, async_runtime};
 static CATALOG_JOB: Mutex<()> = Mutex::new(());
 
 #[tauri::command]
+pub async fn ai_search(
+    query: String,
+    state: State<'_, Library>,
+    app: AppHandle,
+) -> Result<Vec<crate::models::AiSearchHit>, String> {
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let library = Library::clone(&*state);
+    let progress_app = app.clone();
+    async_runtime::spawn_blocking(move || {
+        eprintln!("shelf search: embedding search {query:?} — scoring every indexed image");
+        if let Err(error) = services::recognize_library(&library, |done, total, label| {
+            emit_progress(&progress_app, "vision", done, total, label);
+        }) {
+            eprintln!("shelf search: visual pass failed before scoring: {error}");
+        }
+        services::search_embeddings(&library, &query).map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
 pub fn log_search(ai: bool, query: String, summary: String) {
     let mode = if ai {
         "on, visual tags"

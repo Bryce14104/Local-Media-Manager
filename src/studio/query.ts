@@ -130,6 +130,7 @@ export function applySearchMode(filters: ActiveFilter[], aiSearch: boolean, item
   const next: ActiveFilter[] = [];
   const seen = new Set<string>();
   for (const filter of filters) {
+    if (!aiSearch && filter.kind === "visual") continue;
     const mapped = retargetFilter(filter, aiSearch, items);
     if (seen.has(mapped.id)) continue;
     seen.add(mapped.id);
@@ -182,7 +183,7 @@ export function suggestions(query: string, items: StudioItem[], aiSearch = true)
       type: "filters",
       filters: parsed,
       label: parsed.map((filter) => filterLabel({ ...filter, id: "preview" })).join(" · "),
-      hint: aiSearch ? "Visual tags" : "File name and path",
+      hint: aiSearch ? "Image embeddings" : "File name and path",
     });
   }
   return list.slice(0, 8);
@@ -222,6 +223,8 @@ export function filterLabel(filter: ActiveFilter): string {
       return `Region ${formatLatitude(latitude, 1)} ${formatLongitude(longitude, 1)}`;
     }
     case "cluster":
+      return filter.label;
+    case "visual":
       return filter.label;
     case "person":
       return filter.name;
@@ -390,6 +393,8 @@ function matchesOne(item: StudioItem, filter: Filter): boolean {
       );
     case "cluster":
       return filter.ids.includes(item.id);
+    case "visual":
+      return filter.ids.includes(item.id);
     case "person":
       return item.faces.some((face) => face.personId === filter.personId);
     case "subject": {
@@ -423,6 +428,8 @@ function filterKey(filter: Filter): string {
       return "region";
     case "cluster":
       return "cluster";
+    case "visual":
+      return "visual";
     case "person":
       return `person:${filter.personId}`;
     case "subject":

@@ -281,7 +281,10 @@ impl Library {
         let mut stmt = conn.prepare(
             "SELECT id, file_path, thumbnail_path, media_kind, exif_json
              FROM media_files
-             WHERE vision_at IS NULL
+             WHERE media_kind != 'video'
+               AND NOT EXISTS (
+                   SELECT 1 FROM media_embeddings WHERE media_embeddings.media_id = media_files.id
+               )
              ORDER BY id",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -322,7 +325,36 @@ impl Library {
         let conn = self.lock()?;
         conn.execute("DELETE FROM faces WHERE media_id = ?1", params![media_id])?;
         conn.execute("DELETE FROM media_labels WHERE media_id = ?1", params![media_id])?;
+        conn.execute("DELETE FROM media_embeddings WHERE media_id = ?1", params![media_id])?;
         Ok(())
+    }
+
+    pub fn upsert_embedding(&self, media_id: i64, embedding: &[f32]) -> Result<(), DbError> {
+        let blob = embedding_to_blob(embedding);
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO media_embeddings (media_id, embedding) VALUES (?1, ?2)
+             ON CONFLICT(media_id) DO UPDATE SET embedding = excluded.embedding",
+            params![media_id, blob],
+        )?;
+        Ok(())
+    }
+
+    pub fn visual_embeddings(&self) -> Result<Vec<(i64, String, Vec<f32>)>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT media_files.id, media_files.file_path, media_embeddings.embedding
+             FROM media_embeddings
+             JOIN media_files ON media_files.id = media_embeddings.media_id
+             ORDER BY media_files.id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            Ok((id, path, blob_to_embedding(&blob)))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(DbError::from)
     }
 
     pub fn insert_face(
@@ -541,6 +573,12 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     if !columns.iter().any(|name| name == "vision_at") {
         conn.execute("ALTER TABLE media_files ADD COLUMN vision_at INTEGER", [])?;
     }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS media_embeddings (
+            media_id INTEGER PRIMARY KEY REFERENCES media_files(id) ON DELETE CASCADE,
+            embedding BLOB NOT NULL
+        );",
+    )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_media_files_captured_at ON media_files (captured_at DESC)",
         [],
@@ -605,7 +643,7 @@ mod tests {
         let library = Library::open(dir.path().join("library.sqlite")).unwrap();
         let summary = library.summary().unwrap();
 
-        assert_eq!(summary.schema_version, 1);
+        assert_eq!(summary.schema_version, 2);
         assert_eq!(summary.media_count, 0);
         for column in [
             "file_path",
@@ -623,7 +661,7 @@ mod tests {
         }
 
         let again = Library::open(dir.path().join("library.sqlite")).unwrap();
-        assert_eq!(again.summary().unwrap().schema_version, 1);
+        assert_eq!(again.summary().unwrap().schema_version, 2);
     }
 
     #[test]
@@ -787,6 +825,7 @@ mod tests {
         library
             .replace_labels(media_id, &[("pet".into(), "dog".into(), 0.7)])
             .unwrap();
+        library.upsert_embedding(media_id, &[0.0, 0.0, 0.0, 0.0]).unwrap();
         library.mark_vision(media_id).unwrap();
 
         let snapshot = library.insights().unwrap();

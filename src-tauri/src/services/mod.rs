@@ -7,7 +7,7 @@ mod thumbs;
 mod vision;
 
 pub use thumbs::generate_missing_thumbnails_with;
-pub use vision::recognize_library;
+pub use vision::{recognize_library, search_embeddings};
 
 use crate::db::{DbError, Library, NewMedia};
 use crate::models::ScanReport;

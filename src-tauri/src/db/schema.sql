@@ -85,8 +85,21 @@ CREATE INDEX IF NOT EXISTS idx_media_files_rating
 CREATE INDEX IF NOT EXISTS idx_media_files_content_hash
     ON media_files (content_hash);
 
+-- One visual embedding per frame. The values are little-endian f32 scores
+-- from the in-process ONNX classifier and the pixel rules, one per concept.
+CREATE TABLE IF NOT EXISTS media_embeddings (
+    media_id INTEGER PRIMARY KEY REFERENCES media_files(id) ON DELETE CASCADE,
+    embedding BLOB NOT NULL
+);
+
 INSERT INTO schema_migrations (version, applied_at)
 SELECT 1, CAST(strftime('%s', 'now') AS INTEGER)
 WHERE NOT EXISTS (
     SELECT 1 FROM schema_migrations WHERE version = 1
+);
+
+INSERT INTO schema_migrations (version, applied_at)
+SELECT 2, CAST(strftime('%s', 'now') AS INTEGER)
+WHERE NOT EXISTS (
+    SELECT 1 FROM schema_migrations WHERE version = 2
 );

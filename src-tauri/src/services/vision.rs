@@ -1,9 +1,10 @@
 //! Local face and subject recognition.
 //!
 //! YuNet finds faces, SFace turns each aligned crop into a 128-d identity
-//! vector, and MobileNetV2 tags pets, wildlife, and other ImageNet subjects.
-//! Sunset comes from the color of the sky. Drone comes from the camera name.
-//! Nothing leaves the machine.
+//! vector, and MobileNetV2 runs inside this process. Its class probabilities
+//! become a visual embedding stored in SQLite. Search compares that embedding
+//! with the query. Sunset, beach, water, and lighthouse also come from the
+//! pixels. Drone comes from the camera name. Nothing leaves the machine.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -15,8 +16,8 @@ use ort::session::Session;
 use ort::value::Tensor;
 use thiserror::Error;
 
-use crate::db::{Library, VisionTarget};
-use crate::models::ExifSnapshot;
+use crate::db::{DbError, Library, VisionTarget};
+use crate::models::{AiSearchHit, ExifSnapshot};
 
 const INPUT: u32 = 640;
 const FACE_SCORE: f32 = 0.6;
@@ -28,6 +29,25 @@ const RIGHT_EYE: (f32, f32) = (38.2946, 51.6963);
 const LEFT_EYE: (f32, f32) = (73.5318, 51.5014);
 const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
+const CONCEPT_FLOOR: f32 = 0.12;
+
+/// One score per concept, in this order, stored for every decoded image.
+pub const CONCEPTS: [&str; 14] = [
+    "dog",
+    "cat",
+    "bird",
+    "wildlife",
+    "horse",
+    "beach",
+    "water",
+    "boat",
+    "lighthouse",
+    "vehicle",
+    "architecture",
+    "sunset",
+    "drone",
+    "person",
+];
 
 #[derive(Debug, Error)]
 pub enum VisionError {
@@ -35,6 +55,8 @@ pub enum VisionError {
     MissingModel(String),
     #[error(transparent)]
     Ort(#[from] ort::Error),
+    #[error("could not store the visual embedding: {0}")]
+    Database(#[from] DbError),
 }
 
 #[derive(Clone, Debug)]
@@ -130,6 +152,7 @@ fn analyze_frame(
 ) -> Result<Vec<(String, String, f32)>, VisionError> {
     let Some(image) = load_pixels(target) else {
         eprintln!("shelf index: no decodable pixels in {}", target.file_path);
+        library.upsert_embedding(target.id, &vec![0.0; CONCEPTS.len()])?;
         return Ok(Vec::new());
     };
     eprintln!(
@@ -138,16 +161,31 @@ fn analyze_frame(
     );
     let _ = library.clear_file_vision(target.id);
     let resized = image::imageops::resize(&image, INPUT, INPUT, FilterType::Triangle);
-    if let Some(engine) = engine.as_mut() {
-        if let Err(error) = read_faces(engine, library, target, &resized) {
-            eprintln!("shelf index: faces failed for {}: {error}", target.file_path);
+    let mut embedding = vec![0.0; CONCEPTS.len()];
+    let face_count = if let Some(engine) = engine.as_mut() {
+        match read_faces(engine, library, target, &resized) {
+            Ok(count) => count,
+            Err(error) => {
+                eprintln!("shelf index: faces failed for {}: {error}", target.file_path);
+                0
+            }
         }
+    } else {
+        0
+    };
+    if face_count > 0 {
+        bump(&mut embedding, "person", 1.0);
     }
 
     let mut tags = scene_tags(&resized);
     if let Some(engine) = engine.as_mut() {
-        match engine.subjects(&resized) {
-            Ok(found) => tags.extend(found),
+        match engine.classify(&resized) {
+            Ok(found) => {
+                for (slot, score) in embedding.iter_mut().zip(found.embedding) {
+                    *slot = slot.max(score);
+                }
+                tags.extend(found.tags);
+            }
             Err(error) => eprintln!("shelf index: classifier failed for {}: {error}", target.file_path),
         }
     }
@@ -158,15 +196,98 @@ fn analyze_frame(
             score: 1.0,
         });
     }
+    fold_tags(&mut embedding, &tags);
+    for (index, score) in embedding.iter().copied().enumerate() {
+        if score < CONCEPT_FLOOR {
+            continue;
+        }
+        let label = CONCEPTS[index];
+        if tags.iter().any(|tag| tag.label == label) {
+            continue;
+        }
+        tags.push(Tag {
+            kind: kind_for_concept(label),
+            label: label.to_string(),
+            score,
+        });
+    }
     let labels: Vec<(String, String, f32)> = dedupe_tags(tags)
         .into_iter()
         .map(|tag| (tag.kind.to_string(), tag.label, tag.score))
         .collect();
-    library.replace_labels(target.id, &labels).map_err(|error| {
-        eprintln!("shelf index: could not store tags for {}: {error}", target.file_path);
-        VisionError::MissingModel(error.to_string())
-    })?;
+    library.replace_labels(target.id, &labels)?;
+    library.upsert_embedding(target.id, &embedding)?;
+    let summary = embedding
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, score)| *score >= CONCEPT_FLOOR)
+        .map(|(index, score)| format!("{} {score:.2}", CONCEPTS[index]))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if summary.is_empty() {
+        eprintln!("shelf index: embedding stored for {} (no concepts)", target.file_path);
+    } else {
+        eprintln!("shelf index: embedding stored for {} [{summary}]", target.file_path);
+    }
     Ok(labels)
+}
+
+pub fn search_embeddings(library: &Library, query: &str) -> Result<Vec<AiSearchHit>, VisionError> {
+    let query_vec = query_embedding(query);
+    let rows = library.visual_embeddings()?;
+    eprintln!(
+        "shelf search: scoring {} image embeddings for {query:?}",
+        rows.len()
+    );
+    let mut hits = Vec::new();
+    if query_vec.iter().any(|value| *value > 0.0) {
+        for (media_id, path, embedding) in &rows {
+            let Some(score) = embedding_match(embedding, &query_vec) else {
+                continue;
+            };
+            let label = matched_concepts(embedding, &query_vec);
+            eprintln!("shelf search: match {score:.2} {path} ({label})");
+            hits.push(AiSearchHit {
+                media_id: *media_id,
+                path: path.clone(),
+                score,
+                label,
+            });
+        }
+    }
+    let terms = query_terms(query);
+    if !terms.is_empty() {
+        for label in library.insights()?.labels {
+            let name = label.label.to_ascii_lowercase();
+            if !terms.iter().any(|term| term == &name) {
+                continue;
+            }
+            if hits.iter().any(|hit| hit.media_id == label.media_id) {
+                continue;
+            }
+            let path = rows
+                .iter()
+                .find(|(id, _, _)| *id == label.media_id)
+                .map(|(_, path, _)| path.clone())
+                .unwrap_or_default();
+            eprintln!("shelf search: tag match {} {path} ({name})", label.score);
+            hits.push(AiSearchHit {
+                media_id: label.media_id,
+                path,
+                score: label.score,
+                label: name,
+            });
+        }
+    }
+    hits.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    eprintln!("shelf search: {} images matched {query:?}", hits.len());
+    Ok(hits)
 }
 
 fn read_faces(
@@ -174,8 +295,9 @@ fn read_faces(
     library: &Library,
     target: &VisionTarget,
     image: &RgbImage,
-) -> Result<(), VisionError> {
+) -> Result<usize, VisionError> {
     let faces = engine.detect(image)?;
+    let found = faces.len();
     let mut known = library.face_embeddings().unwrap_or_default();
     for face in faces {
         let aligned = align_or_crop(image, &face);
@@ -200,7 +322,7 @@ fn read_faces(
         );
         known.push((person_id, embedding));
     }
-    Ok(())
+    Ok(found)
 }
 
 fn load_pixels(target: &VisionTarget) -> Option<RgbImage> {
@@ -270,15 +392,24 @@ impl Engine {
         Ok(data.to_vec())
     }
 
-    fn subjects(&mut self, image: &RgbImage) -> Result<Vec<Tag>, VisionError> {
+    fn classify(&mut self, image: &RgbImage) -> Result<Classified, VisionError> {
         let sized = image::imageops::resize(image, 224, 224, FilterType::Triangle);
         let tensor = Tensor::from_array(nchw(&sized, false, |value, channel| {
             (value / 255.0 - IMAGENET_MEAN[channel]) / IMAGENET_STD[channel]
         }))?;
         let outputs = self.mobilenet.run(ort::inputs!["input" => tensor])?;
         let (_shape, data) = outputs["output"].try_extract_tensor::<f32>()?;
-        Ok(tags_from_logits(data))
+        let probabilities = probabilities_from_logits(data);
+        Ok(Classified {
+            tags: tags_from_probabilities(&probabilities),
+            embedding: embedding_from_probabilities(&probabilities),
+        })
     }
+}
+
+struct Classified {
+    tags: Vec<Tag>,
+    embedding: Vec<f32>,
 }
 
 fn environment() -> Result<&'static ort::environment::Environment, VisionError> {
@@ -704,7 +835,7 @@ pub fn drone_camera(text: &str) -> bool {
         .any(|hint| lower.contains(hint))
 }
 
-fn tags_from_logits(logits: &[f32]) -> Vec<Tag> {
+fn probabilities_from_logits(logits: &[f32]) -> Vec<f32> {
     if logits.is_empty() {
         return Vec::new();
     }
@@ -715,6 +846,129 @@ fn tags_from_logits(logits: &[f32]) -> Vec<Tag> {
         for value in &mut probabilities {
             *value /= sum;
         }
+    }
+    probabilities
+}
+
+pub fn embedding_from_probabilities(probabilities: &[f32]) -> Vec<f32> {
+    let mut embedding = vec![0.0; CONCEPTS.len()];
+    for (index, probability) in probabilities.iter().copied().enumerate() {
+        if probability <= 0.0 {
+            continue;
+        }
+        if (151..=268).contains(&index) {
+            bump(&mut embedding, "dog", probability);
+        } else if (281..=285).contains(&index) {
+            bump(&mut embedding, "cat", probability);
+        } else if (80..=100).contains(&index) || index == 145 || index == 146 {
+            bump(&mut embedding, "bird", probability);
+        } else if (269..=297).contains(&index)
+            || index == 340
+            || (342..=344).contains(&index)
+            || (346..=355).contains(&index)
+        {
+            bump(&mut embedding, "wildlife", probability);
+        } else if index == 339 {
+            bump(&mut embedding, "horse", probability);
+        }
+        for noun in nouns_for_class(index) {
+            bump(&mut embedding, noun, probability);
+        }
+    }
+    embedding
+}
+
+pub fn query_embedding(query: &str) -> Vec<f32> {
+    let mut embedding = vec![0.0; CONCEPTS.len()];
+    for term in query_terms(query) {
+        if let Some(concept) = concept_for_word(&term) {
+            bump(&mut embedding, concept, 1.0);
+        }
+    }
+    embedding
+}
+
+pub fn embedding_match(image: &[f32], query: &[f32]) -> Option<f32> {
+    if image.len() != query.len() || query.iter().all(|value| *value == 0.0) {
+        return None;
+    }
+    for (image_value, query_value) in image.iter().zip(query) {
+        if *query_value > 0.0 && *image_value < CONCEPT_FLOOR {
+            return None;
+        }
+    }
+    let score = cosine(image, query);
+    if score >= 0.2 { Some(score) } else { None }
+}
+
+fn query_terms(query: &str) -> Vec<String> {
+    query
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .map(|word| word.to_ascii_lowercase())
+        .filter(|word| word.len() >= 2)
+        .collect()
+}
+
+fn concept_for_word(word: &str) -> Option<&'static str> {
+    Some(match word {
+        "dog" | "dogs" | "puppy" | "puppies" => "dog",
+        "cat" | "cats" | "kitten" | "kittens" | "tabby" => "cat",
+        "bird" | "birds" => "bird",
+        "wildlife" | "fauna" | "animals" | "animal" => "wildlife",
+        "horse" | "horses" => "horse",
+        "beach" | "beaches" | "seashore" | "shore" | "sand" => "beach",
+        "water" | "waters" | "ocean" | "sea" | "lake" => "water",
+        "boat" | "boats" | "speedboat" | "sailboat" => "boat",
+        "lighthouse" | "lighthouses" | "beacon" => "lighthouse",
+        "vehicle" | "vehicles" | "car" | "cars" => "vehicle",
+        "architecture" | "building" | "buildings" => "architecture",
+        "sunset" | "sunsets" => "sunset",
+        "drone" | "drones" | "aerial" | "aerials" => "drone",
+        "person" | "people" | "face" | "faces" => "person",
+        _ => return None,
+    })
+}
+
+fn concept_index(label: &str) -> Option<usize> {
+    CONCEPTS.iter().position(|concept| *concept == label)
+}
+
+fn bump(embedding: &mut [f32], label: &str, amount: f32) {
+    if let Some(index) = concept_index(label) {
+        embedding[index] = (embedding[index] + amount).min(1.0);
+    }
+}
+
+fn fold_tags(embedding: &mut [f32], tags: &[Tag]) {
+    for tag in tags {
+        bump(embedding, &tag.label, tag.score);
+    }
+}
+
+fn matched_concepts(image: &[f32], query: &[f32]) -> String {
+    image
+        .iter()
+        .zip(query)
+        .enumerate()
+        .filter(|(_, (image_value, query_value))| **query_value > 0.0 && **image_value >= CONCEPT_FLOOR)
+        .map(|(index, _)| CONCEPTS[index])
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn kind_for_concept(concept: &str) -> &'static str {
+    match concept {
+        "dog" | "cat" => "pet",
+        "bird" | "wildlife" => "wildlife",
+        "horse" => "animal",
+        "beach" | "water" | "sunset" | "drone" => "scene",
+        _ => "object",
+    }
+}
+
+fn tags_from_probabilities(probabilities: &[f32]) -> Vec<Tag> {
+    if probabilities.is_empty() {
+        return Vec::new();
     }
     let mut order: Vec<usize> = (0..probabilities.len()).collect();
     order.sort_by(|&left, &right| {
@@ -1002,7 +1256,68 @@ mod tests {
         let resized = image::imageops::resize(&frame, INPUT, INPUT, FilterType::Triangle);
         let faces = engine.detect(&resized).expect("yunet");
         assert!(faces.is_empty());
-        let tags = engine.subjects(&resized).expect("mobilenet");
-        assert!(tags.len() < 20);
+        let classified = engine.classify(&resized).expect("mobilenet");
+        assert!(classified.tags.len() < 20);
+        assert_eq!(classified.embedding.len(), CONCEPTS.len());
+    }
+
+    #[test]
+    fn cat_logits_match_a_cat_query_and_not_a_lighthouse() {
+        let mut probabilities = vec![0.0; 1000];
+        probabilities[282] = 0.82;
+        probabilities[10] = 0.05;
+        let embedding = embedding_from_probabilities(&probabilities);
+        let cat = query_embedding("cats");
+        let tower = query_embedding("lighthouse");
+        assert!(embedding_match(&embedding, &cat).unwrap() > 0.9);
+        assert!(embedding_match(&embedding, &tower).is_none());
+    }
+
+    #[test]
+    fn embedding_search_ranks_the_beach_and_skips_a_flat_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = crate::db::Library::open(dir.path().join("library.sqlite")).unwrap();
+        let shore_path = dir.path().join("shore.png");
+        let flat_path = dir.path().join("flat.png");
+        let mut shore = RgbImage::new(64, 48);
+        for y in 0..28 {
+            for x in 0..64 {
+                shore.put_pixel(x, y, Rgb([60, 130, 220]));
+            }
+        }
+        for y in 28..48 {
+            for x in 0..64 {
+                shore.put_pixel(x, y, Rgb([210, 170, 100]));
+            }
+        }
+        shore.save(&shore_path).unwrap();
+        RgbImage::from_pixel(32, 32, Rgb([30, 30, 30]))
+            .save(&flat_path)
+            .unwrap();
+        for path in [&shore_path, &flat_path] {
+            library
+                .upsert_media(crate::db::NewMedia {
+                    file_path: path.to_str().unwrap(),
+                    content_hash: path.to_str().unwrap(),
+                    file_size: 8,
+                    created_at: None,
+                    modified_at: 10,
+                    media_kind: crate::models::MediaKind::Image,
+                    exif_json: None,
+                    captured_at: None,
+                })
+                .unwrap();
+        }
+        recognize_library(&library, |_, _, _| {}).unwrap();
+        let hits = search_embeddings(&library, "beach").unwrap();
+        assert!(
+            hits.iter().any(|hit| hit.path.ends_with("shore.png")),
+            "hits: {hits:?}"
+        );
+        assert!(
+            hits.iter().all(|hit| !hit.path.ends_with("flat.png")),
+            "flat frame was returned: {hits:?}"
+        );
+        assert!(library.visual_embeddings().unwrap().len() == 2);
     }
 }

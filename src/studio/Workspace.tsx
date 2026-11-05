@@ -9,6 +9,7 @@ import {
   fetchInsights,
   fetchLibrary,
   indexPaths,
+  searchEmbeddings,
   mergePeople,
   pickImportPaths,
   removeFromLibrary,
@@ -402,6 +403,11 @@ export function Workspace() {
       }
       applyAction(suggestion.action);
     } else {
+      if (aiSearch && desktopBridgeAvailable()) {
+        const typed = query.trim();
+        void runEmbeddingSearch(typed || suggestion.label);
+        return;
+      }
       setFilters((current) => suggestion.filters.reduce(upsertFilter, current));
       if (viewMode === "people") chooseView("compact");
       void logSearch(
@@ -414,6 +420,10 @@ export function Workspace() {
   }
 
   function submitQuery() {
+    if (aiSearch && desktopBridgeAvailable()) {
+      void runEmbeddingSearch(query);
+      return;
+    }
     const parsed = parseQuery(query, items, aiSearch);
     if (parsed.length === 0) {
       void logSearch(aiSearch, query, "no filter");
@@ -429,6 +439,41 @@ export function Workspace() {
     if (viewMode === "people") chooseView("compact");
   }
 
+  async function runEmbeddingSearch(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setQuery("");
+    const parsed = parseQuery(trimmed, items, true);
+    const structured = parsed.filter(
+      (filter) => filter.kind !== "subject" && filter.kind !== "person" && filter.kind !== "text",
+    );
+    try {
+      const hits = await searchEmbeddings(trimmed);
+      const visual = {
+        kind: "visual" as const,
+        ids: hits.map((hit) => `library-${hit.mediaId}`),
+        label: `AI “${trimmed}”`,
+      };
+      setFilters((current) => {
+        const kept = current.filter(
+          (filter) =>
+            filter.kind !== "visual" &&
+            filter.kind !== "subject" &&
+            filter.kind !== "text" &&
+            filter.kind !== "person",
+        );
+        return [...structured, visual].reduce(upsertFilter, kept);
+      });
+      void logSearch(true, trimmed, hits.length === 0 ? "no embedding match" : `${hits.length} embedding matches`);
+      const snapshot = await fetchInsights().catch(() => null);
+      if (snapshot) setItems((current) => applyInsights(current, snapshot));
+    } catch {
+      setFilters((current) => parsed.reduce(upsertFilter, current));
+      void logSearch(true, trimmed, "embedding search unavailable, using stored tags");
+    }
+    if (viewMode === "people") chooseView("compact");
+  }
+
   function changeAiSearch(next: boolean) {
     setAiSearch(next);
     try {
@@ -436,13 +481,26 @@ export function Workspace() {
     } catch {
       // The choice still applies for this visit when storage is blocked.
     }
-    const nextFilters = applySearchMode(filters, next, items);
+    if (!next) {
+      const nextFilters = applySearchMode(filters, false, items);
+      setFilters(nextFilters);
+      void logSearch(false, query, nextFilters.map((filter) => filterLabel(filter)).join(", ") || "file names and paths");
+      return;
+    }
+    const words = filters.flatMap((filter) => {
+      if (filter.kind === "subject" || filter.kind === "text") return [filter.value];
+      if (filter.kind === "person") return [filter.name];
+      if (filter.kind === "visual") return [filter.label];
+      return [];
+    });
+    const text = [query, ...words].map((word) => word.trim()).filter(Boolean).join(" ");
+    if (desktopBridgeAvailable() && text) {
+      void runEmbeddingSearch(text);
+      return;
+    }
+    const nextFilters = applySearchMode(filters, true, items);
     setFilters(nextFilters);
-    void logSearch(
-      next,
-      query,
-      nextFilters.map((filter) => filterLabel(filter)).join(", ") || "no active filter",
-    );
+    void logSearch(true, query, nextFilters.map((filter) => filterLabel(filter)).join(", ") || "visual tags");
   }
 
   function openItem(id: string) {

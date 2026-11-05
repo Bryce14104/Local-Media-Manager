@@ -88,6 +88,18 @@ export async function splitFace(faceId: number): Promise<number> {
   return invoke<number>("split_face", { faceId });
 }
 
+export type EmbeddingHit = {
+  mediaId: number;
+  path: string;
+  score: number;
+  label: string;
+};
+
+export async function searchEmbeddings(query: string): Promise<EmbeddingHit[]> {
+  assertBridge();
+  return invoke<EmbeddingHit[]>("ai_search", { query });
+}
+
 export async function logSearch(ai: boolean, query: string, summary: string): Promise<void> {
   const line = `AI search ${ai ? "on, visual tags" : "off, file names and paths"} | query ${JSON.stringify(query.trim())} | ${summary || "no filter"}`;
   if (!desktopBridgeAvailable()) {

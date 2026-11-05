@@ -169,6 +169,16 @@ pub struct LabelRecord {
     pub score: f32,
 }
 
+/// One frame ranked by the in-process visual embedding.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiSearchHit {
+    pub media_id: i64,
+    pub path: String,
+    pub score: f32,
+    pub label: String,
+}
+
 /// People, faces, and subject tags for the open library.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
