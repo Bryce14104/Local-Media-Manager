@@ -278,16 +278,17 @@ impl Library {
 
     pub fn pending_vision(&self) -> Result<Vec<VisionTarget>, DbError> {
         let conn = self.lock()?;
+        let expected = i64::try_from(crate::models::VISUAL_EMBEDDING_FLOATS * 4).unwrap_or(0);
         let mut stmt = conn.prepare(
-            "SELECT id, file_path, thumbnail_path, media_kind, exif_json
+            "SELECT media_files.id, media_files.file_path, media_files.thumbnail_path,
+                    media_files.media_kind, media_files.exif_json
              FROM media_files
-             WHERE media_kind != 'video'
-               AND NOT EXISTS (
-                   SELECT 1 FROM media_embeddings WHERE media_embeddings.media_id = media_files.id
-               )
-             ORDER BY id",
+             LEFT JOIN media_embeddings ON media_embeddings.media_id = media_files.id
+             WHERE media_files.media_kind != 'video'
+               AND (media_embeddings.embedding IS NULL OR length(media_embeddings.embedding) != ?1)
+             ORDER BY media_files.id",
         )?;
-        let rows = stmt.query_map([], |row| {
+        let rows = stmt.query_map(params![expected], |row| {
             Ok(VisionTarget {
                 id: row.get(0)?,
                 file_path: row.get(1)?,
@@ -825,7 +826,9 @@ mod tests {
         library
             .replace_labels(media_id, &[("pet".into(), "dog".into(), 0.7)])
             .unwrap();
-        library.upsert_embedding(media_id, &[0.0, 0.0, 0.0, 0.0]).unwrap();
+        library
+            .upsert_embedding(media_id, &vec![0.0; crate::models::VISUAL_EMBEDDING_FLOATS])
+            .unwrap();
         library.mark_vision(media_id).unwrap();
 
         let snapshot = library.insights().unwrap();

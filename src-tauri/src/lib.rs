@@ -29,6 +29,11 @@ pub fn run() {
                     unsafe { std::env::set_var("SHELF_MODELS", models) };
                 }
             }
+            if let Err(error) = services::warm_vision() {
+                eprintln!("shelf index: CRITICAL ort initialization failed: {error}");
+                let boxed: Box<dyn std::error::Error> = Box::new(error);
+                return Err(boxed);
+            }
             app.manage(library.clone());
             commands::spawn_catalog_jobs(library, app.handle().clone());
             Ok(())

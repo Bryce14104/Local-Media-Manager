@@ -31,7 +31,7 @@ const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 const CONCEPT_FLOOR: f32 = 0.12;
 
-/// One score per concept, in this order, stored for every decoded image.
+/// One score per concept, appended after the 1000 MobileNet probabilities.
 pub const CONCEPTS: [&str; 14] = [
     "dog",
     "cat",
@@ -49,6 +49,9 @@ pub const CONCEPTS: [&str; 14] = [
     "person",
 ];
 
+const _: () = assert!(CONCEPTS.len() == crate::models::VISUAL_CONCEPTS);
+const _: () = assert!(crate::models::VISUAL_EMBEDDING_FLOATS == crate::models::IMAGENET_DIM + CONCEPTS.len());
+
 #[derive(Debug, Error)]
 pub enum VisionError {
     #[error("missing vision model at {0}")]
@@ -57,6 +60,46 @@ pub enum VisionError {
     Ort(#[from] ort::Error),
     #[error("could not store the visual embedding: {0}")]
     Database(#[from] DbError),
+    #[error("could not decode pixels in {0}")]
+    Decode(String),
+    #[error("mobilenet returned {0} values, expected 1000")]
+    BadOutput(usize),
+}
+
+pub fn warm_vision() -> Result<(), VisionError> {
+    let threads = worker_threads();
+    let started = std::time::Instant::now();
+    let mut engine = Engine::load(threads)?;
+    let model = model_path("mobilenet.onnx");
+    eprintln!(
+        "shelf index: ort initialized in {} ms, mobilenet loaded from {}",
+        started.elapsed().as_millis(),
+        model.display()
+    );
+    let blank = RgbImage::new(224, 224);
+    let started = std::time::Instant::now();
+    let classified = engine.classify(&blank)?;
+    if classified.probabilities.len() != crate::models::IMAGENET_DIM {
+        eprintln!(
+            "shelf index: CRITICAL Session::run returned {} floats, expected {}",
+            classified.probabilities.len(),
+            crate::models::IMAGENET_DIM
+        );
+        return Err(VisionError::BadOutput(classified.probabilities.len()));
+    }
+    eprintln!(
+        "shelf index: Session::run mobilenet.onnx ok in {} ms -> {} floats",
+        started.elapsed().as_millis(),
+        classified.probabilities.len()
+    );
+    Ok(())
+}
+
+fn worker_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(2)
+        .clamp(1, 8)
 }
 
 #[derive(Clone, Debug)]
@@ -104,41 +147,36 @@ where
         eprintln!("shelf index: no frames waiting for visual tags");
         return Ok(());
     }
-    eprintln!("shelf index: {} frames waiting for visual tags", pending.len());
+    eprintln!("shelf index: {} frames waiting for an ONNX embedding", pending.len());
     progress(0, pending.len(), "Loading vision models");
-    let threads = std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(2)
-        .clamp(1, 8);
-    let mut engine = match Engine::load(threads) {
-        Ok(engine) => {
-            eprintln!("shelf index: visual model ready on cpu ({threads} threads)");
-            Some(engine)
-        }
+    let mut engine = match Engine::load(worker_threads()) {
+        Ok(engine) => engine,
         Err(error) => {
-            eprintln!("shelf index: visual model unavailable ({error}); tagging from pixel colors");
-            None
+            eprintln!("shelf index: CRITICAL ort could not load the ONNX models: {error}");
+            return Err(error);
         }
     };
     for (index, target) in pending.iter().enumerate() {
-        progress(index, pending.len(), "Reading faces and subjects");
+        progress(index, pending.len(), "Running ONNX on image pixels");
         match analyze_frame(&mut engine, library, target) {
             Ok(labels) => {
-                if labels.is_empty() {
-                    eprintln!("shelf index: analyzed {} (no visual tags)", target.file_path);
+                let names = labels
+                    .iter()
+                    .map(|(_, label, _)| label.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if names.is_empty() {
+                    eprintln!("shelf index: embedded {} (no tags above the cutoff)", target.file_path);
                 } else {
-                    let names = labels
-                        .iter()
-                        .map(|(_, label, _)| label.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    eprintln!("shelf index: analyzed {} -> {names}", target.file_path);
+                    eprintln!("shelf index: embedded {} -> {names}", target.file_path);
+                }
+                if let Err(error) = library.mark_vision(target.id) {
+                    eprintln!("shelf index: could not record vision for {}: {error}", target.file_path);
                 }
             }
-            Err(error) => eprintln!("shelf index: {} failed: {error}", target.file_path),
-        }
-        if let Err(error) = library.mark_vision(target.id) {
-            eprintln!("shelf index: could not record vision for {}: {error}", target.file_path);
+            Err(error) => {
+                eprintln!("shelf index: CRITICAL {} was not embedded: {error}", target.file_path);
+            }
         }
     }
     progress(pending.len(), pending.len(), "Reading faces and subjects");
@@ -146,49 +184,34 @@ where
 }
 
 fn analyze_frame(
-    engine: &mut Option<Engine>,
+    engine: &mut Engine,
     library: &Library,
     target: &VisionTarget,
 ) -> Result<Vec<(String, String, f32)>, VisionError> {
     let Some(image) = load_pixels(target) else {
-        eprintln!("shelf index: no decodable pixels in {}", target.file_path);
-        library.upsert_embedding(target.id, &vec![0.0; CONCEPTS.len()])?;
-        return Ok(Vec::new());
+        eprintln!("shelf index: CRITICAL no decodable pixels in {}", target.file_path);
+        return Err(VisionError::Decode(target.file_path.clone()));
     };
     eprintln!(
-        "shelf index: analyzing pixels ({}) {}",
+        "shelf index: decoding pixels ({}) {}",
         target.media_kind, target.file_path
     );
     let _ = library.clear_file_vision(target.id);
     let resized = image::imageops::resize(&image, INPUT, INPUT, FilterType::Triangle);
-    let mut embedding = vec![0.0; CONCEPTS.len()];
-    let face_count = if let Some(engine) = engine.as_mut() {
-        match read_faces(engine, library, target, &resized) {
-            Ok(count) => count,
-            Err(error) => {
-                eprintln!("shelf index: faces failed for {}: {error}", target.file_path);
-                0
-            }
+    let face_count = match read_faces(engine, library, target, &resized) {
+        Ok(count) => count,
+        Err(error) => {
+            eprintln!("shelf index: faces failed for {}: {error}", target.file_path);
+            0
         }
-    } else {
-        0
     };
+    let mut concepts = vec![0.0; CONCEPTS.len()];
     if face_count > 0 {
-        bump(&mut embedding, "person", 1.0);
+        bump(&mut concepts, "person", 1.0);
     }
-
     let mut tags = scene_tags(&resized);
-    if let Some(engine) = engine.as_mut() {
-        match engine.classify(&resized) {
-            Ok(found) => {
-                for (slot, score) in embedding.iter_mut().zip(found.embedding) {
-                    *slot = slot.max(score);
-                }
-                tags.extend(found.tags);
-            }
-            Err(error) => eprintln!("shelf index: classifier failed for {}: {error}", target.file_path),
-        }
-    }
+    let classified = engine.classify(&resized)?;
+    tags.extend(classified.tags);
     if drone_camera(&camera_text(target)) {
         tags.push(Tag {
             kind: "scene",
@@ -196,8 +219,8 @@ fn analyze_frame(
             score: 1.0,
         });
     }
-    fold_tags(&mut embedding, &tags);
-    for (index, score) in embedding.iter().copied().enumerate() {
+    fold_tags(&mut concepts, &tags);
+    for (index, score) in concepts.iter().copied().enumerate() {
         if score < CONCEPT_FLOOR {
             continue;
         }
@@ -211,74 +234,52 @@ fn analyze_frame(
             score,
         });
     }
+    let embedding = visual_vector(&classified.probabilities, &concepts);
     let labels: Vec<(String, String, f32)> = dedupe_tags(tags)
         .into_iter()
         .map(|tag| (tag.kind.to_string(), tag.label, tag.score))
         .collect();
     library.replace_labels(target.id, &labels)?;
     library.upsert_embedding(target.id, &embedding)?;
-    let summary = embedding
-        .iter()
-        .copied()
-        .enumerate()
-        .filter(|(_, score)| *score >= CONCEPT_FLOOR)
-        .map(|(index, score)| format!("{} {score:.2}", CONCEPTS[index]))
-        .collect::<Vec<_>>()
-        .join(", ");
-    if summary.is_empty() {
-        eprintln!("shelf index: embedding stored for {} (no concepts)", target.file_path);
-    } else {
-        eprintln!("shelf index: embedding stored for {} [{summary}]", target.file_path);
-    }
+    eprintln!(
+        "shelf index: stored ONNX embedding for {} ({} floats)",
+        target.file_path,
+        embedding.len()
+    );
     Ok(labels)
 }
 
 pub fn search_embeddings(library: &Library, query: &str) -> Result<Vec<AiSearchHit>, VisionError> {
+    let started = std::time::Instant::now();
     let query_vec = query_embedding(query);
     let rows = library.visual_embeddings()?;
     eprintln!(
-        "shelf search: scoring {} image embeddings for {query:?}",
+        "shelf search: scoring {} ONNX embeddings for {query:?}",
         rows.len()
     );
     let mut hits = Vec::new();
-    if query_vec.iter().any(|value| *value > 0.0) {
-        for (media_id, path, embedding) in &rows {
-            let Some(score) = embedding_match(embedding, &query_vec) else {
-                continue;
-            };
-            let label = matched_concepts(embedding, &query_vec);
-            eprintln!("shelf search: match {score:.2} {path} ({label})");
-            hits.push(AiSearchHit {
-                media_id: *media_id,
-                path: path.clone(),
-                score,
-                label,
-            });
-        }
-    }
-    let terms = query_terms(query);
-    if !terms.is_empty() {
-        for label in library.insights()?.labels {
-            let name = label.label.to_ascii_lowercase();
-            if !terms.iter().any(|term| term == &name) {
-                continue;
-            }
-            if hits.iter().any(|hit| hit.media_id == label.media_id) {
-                continue;
-            }
-            let path = rows
-                .iter()
-                .find(|(id, _, _)| *id == label.media_id)
-                .map(|(_, path, _)| path.clone())
-                .unwrap_or_default();
-            eprintln!("shelf search: tag match {} {path} ({name})", label.score);
-            hits.push(AiSearchHit {
-                media_id: label.media_id,
+    for (media_id, path, embedding) in &rows {
+        if embedding.len() != crate::models::VISUAL_EMBEDDING_FLOATS {
+            eprintln!(
+                "shelf search: CRITICAL {} has a {}-float embedding, expected {}",
                 path,
-                score: label.score,
-                label: name,
-            });
+                embedding.len(),
+                crate::models::VISUAL_EMBEDDING_FLOATS
+            );
+            continue;
         }
+        let score = cosine(embedding, &query_vec);
+        eprintln!("shelf search: score {score:.4} {path}");
+        let Some(score) = embedding_match(embedding, &query_vec) else {
+            continue;
+        };
+        let label = matched_concepts(embedding, &query_vec);
+        hits.push(AiSearchHit {
+            media_id: *media_id,
+            path: path.clone(),
+            score,
+            label,
+        });
     }
     hits.sort_by(|left, right| {
         right
@@ -286,7 +287,12 @@ pub fn search_embeddings(library: &Library, query: &str) -> Result<Vec<AiSearchH
             .partial_cmp(&left.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    eprintln!("shelf search: {} images matched {query:?}", hits.len());
+    eprintln!(
+        "shelf search: scored {} embeddings in {} ms, {} matched {query:?}",
+        rows.len(),
+        started.elapsed().as_millis(),
+        hits.len()
+    );
     Ok(hits)
 }
 
@@ -397,19 +403,28 @@ impl Engine {
         let tensor = Tensor::from_array(nchw(&sized, false, |value, channel| {
             (value / 255.0 - IMAGENET_MEAN[channel]) / IMAGENET_STD[channel]
         }))?;
+        let started = std::time::Instant::now();
         let outputs = self.mobilenet.run(ort::inputs!["input" => tensor])?;
         let (_shape, data) = outputs["output"].try_extract_tensor::<f32>()?;
         let probabilities = probabilities_from_logits(data);
+        eprintln!(
+            "shelf index: Session::run mobilenet.onnx in {} ms -> {} floats",
+            started.elapsed().as_millis(),
+            probabilities.len()
+        );
+        if probabilities.len() != crate::models::IMAGENET_DIM {
+            return Err(VisionError::BadOutput(probabilities.len()));
+        }
         Ok(Classified {
             tags: tags_from_probabilities(&probabilities),
-            embedding: embedding_from_probabilities(&probabilities),
+            probabilities,
         })
     }
 }
 
 struct Classified {
     tags: Vec<Tag>,
-    embedding: Vec<f32>,
+    probabilities: Vec<f32>,
 }
 
 fn environment() -> Result<&'static ort::environment::Environment, VisionError> {
@@ -878,27 +893,68 @@ pub fn embedding_from_probabilities(probabilities: &[f32]) -> Vec<f32> {
     embedding
 }
 
-pub fn query_embedding(query: &str) -> Vec<f32> {
-    let mut embedding = vec![0.0; CONCEPTS.len()];
-    for term in query_terms(query) {
-        if let Some(concept) = concept_for_word(&term) {
-            bump(&mut embedding, concept, 1.0);
-        }
+pub fn visual_vector(probabilities: &[f32], concepts: &[f32]) -> Vec<f32> {
+    let mut embedding = vec![0.0; crate::models::VISUAL_EMBEDDING_FLOATS];
+    for (index, probability) in probabilities.iter().take(crate::models::IMAGENET_DIM).enumerate() {
+        embedding[index] = *probability;
+    }
+    let derived = embedding_from_probabilities(probabilities);
+    for index in 0..CONCEPTS.len() {
+        let from_model = derived.get(index).copied().unwrap_or(0.0);
+        let from_pixels = concepts.get(index).copied().unwrap_or(0.0);
+        embedding[crate::models::IMAGENET_DIM + index] = from_model.max(from_pixels);
     }
     embedding
+}
+
+pub fn query_embedding(query: &str) -> Vec<f32> {
+    let mut embedding = vec![0.0; crate::models::VISUAL_EMBEDDING_FLOATS];
+    for term in query_terms(query) {
+        let Some(concept) = concept_for_word(&term) else {
+            continue;
+        };
+        for index in 0..crate::models::IMAGENET_DIM {
+            if class_is_concept(index, concept) {
+                embedding[index] = 1.0;
+            }
+        }
+        bump_at(&mut embedding[crate::models::IMAGENET_DIM..], concept, 1.0);
+    }
+    embedding
+}
+
+fn class_is_concept(index: usize, concept: &str) -> bool {
+    let derived = match concept {
+        "dog" => (151..=268).contains(&index),
+        "cat" => (281..=285).contains(&index),
+        "bird" => (80..=100).contains(&index) || index == 145 || index == 146,
+        "wildlife" => {
+            (269..=297).contains(&index)
+                || index == 340
+                || (342..=344).contains(&index)
+                || (346..=355).contains(&index)
+        }
+        "horse" => index == 339,
+        _ => false,
+    };
+    derived || nouns_for_class(index).contains(&concept)
 }
 
 pub fn embedding_match(image: &[f32], query: &[f32]) -> Option<f32> {
     if image.len() != query.len() || query.iter().all(|value| *value == 0.0) {
         return None;
     }
+    let mut mass = 0.0;
     for (image_value, query_value) in image.iter().zip(query) {
-        if *query_value > 0.0 && *image_value < CONCEPT_FLOOR {
-            return None;
+        if *query_value > 0.0 {
+            mass += *image_value;
         }
     }
+    if mass < 0.08 {
+        return None;
+    }
     let score = cosine(image, query);
-    if score >= 0.2 { Some(score) } else { None }
+    if score >= 0.05 { Some(score) } else { None }
 }
 
 fn query_terms(query: &str) -> Vec<String> {
@@ -934,8 +990,14 @@ fn concept_index(label: &str) -> Option<usize> {
 }
 
 fn bump(embedding: &mut [f32], label: &str, amount: f32) {
+    bump_at(embedding, label, amount);
+}
+
+fn bump_at(embedding: &mut [f32], label: &str, amount: f32) {
     if let Some(index) = concept_index(label) {
-        embedding[index] = (embedding[index] + amount).min(1.0);
+        if let Some(slot) = embedding.get_mut(index) {
+            *slot = (*slot + amount).min(1.0);
+        }
     }
 }
 
@@ -946,14 +1008,37 @@ fn fold_tags(embedding: &mut [f32], tags: &[Tag]) {
 }
 
 fn matched_concepts(image: &[f32], query: &[f32]) -> String {
-    image
-        .iter()
-        .zip(query)
-        .enumerate()
-        .filter(|(_, (image_value, query_value))| **query_value > 0.0 && **image_value >= CONCEPT_FLOOR)
-        .map(|(index, _)| CONCEPTS[index])
-        .collect::<Vec<_>>()
-        .join(", ")
+    let start = crate::models::IMAGENET_DIM;
+    let mut names = Vec::new();
+    for index in 0..CONCEPTS.len() {
+        let image_value = image.get(start + index).copied().unwrap_or(0.0);
+        let query_value = query.get(start + index).copied().unwrap_or(0.0);
+        if query_value > 0.0 && image_value >= CONCEPT_FLOOR {
+            names.push(CONCEPTS[index].to_string());
+        }
+    }
+    if names.is_empty() {
+        let mut best: Option<(usize, f32)> = None;
+        for index in 0..start.min(image.len()) {
+            if query.get(index).copied().unwrap_or(0.0) <= 0.0 || image[index] <= 0.0 {
+                continue;
+            }
+            best = Some(match best {
+                Some((previous, score)) if score >= image[index] => (previous, score),
+                _ => (index, image[index]),
+            });
+        }
+        if let Some((index, _)) = best
+            && let Some(name) = imagenet_name(index)
+        {
+            names.push(name.to_string());
+        }
+    }
+    if names.is_empty() {
+        "embedding".to_string()
+    } else {
+        names.join(", ")
+    }
 }
 
 fn kind_for_concept(concept: &str) -> &'static str {
@@ -1258,7 +1343,7 @@ mod tests {
         assert!(faces.is_empty());
         let classified = engine.classify(&resized).expect("mobilenet");
         assert!(classified.tags.len() < 20);
-        assert_eq!(classified.embedding.len(), CONCEPTS.len());
+        assert_eq!(classified.probabilities.len(), crate::models::IMAGENET_DIM);
     }
 
     #[test]
@@ -1266,10 +1351,12 @@ mod tests {
         let mut probabilities = vec![0.0; 1000];
         probabilities[282] = 0.82;
         probabilities[10] = 0.05;
-        let embedding = embedding_from_probabilities(&probabilities);
+        let embedding = visual_vector(&probabilities, &[0.0; CONCEPTS.len()]);
+        assert_eq!(embedding.len(), crate::models::VISUAL_EMBEDDING_FLOATS);
+        assert!((embedding[282] - 0.82).abs() < 1e-6);
         let cat = query_embedding("cats");
         let tower = query_embedding("lighthouse");
-        assert!(embedding_match(&embedding, &cat).unwrap() > 0.9);
+        assert!(embedding_match(&embedding, &cat).unwrap() > 0.2);
         assert!(embedding_match(&embedding, &tower).is_none());
     }
 
@@ -1318,6 +1405,9 @@ mod tests {
             hits.iter().all(|hit| !hit.path.ends_with("flat.png")),
             "flat frame was returned: {hits:?}"
         );
-        assert!(library.visual_embeddings().unwrap().len() == 2);
+        let stored = library.visual_embeddings().unwrap();
+        assert_eq!(stored.len(), 2);
+        assert!(stored.iter().all(|(_, _, vector)| vector.len() == crate::models::VISUAL_EMBEDDING_FLOATS));
+        assert!(stored.iter().all(|(_, _, vector)| vector.iter().take(crate::models::IMAGENET_DIM).sum::<f32>() > 0.5));
     }
 }

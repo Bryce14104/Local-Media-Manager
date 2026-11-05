@@ -403,7 +403,7 @@ export function Workspace() {
       }
       applyAction(suggestion.action);
     } else {
-      if (aiSearch && desktopBridgeAvailable()) {
+      if (aiSearch) {
         const typed = query.trim();
         void runEmbeddingSearch(typed || suggestion.label);
         return;
@@ -420,7 +420,7 @@ export function Workspace() {
   }
 
   function submitQuery() {
-    if (aiSearch && desktopBridgeAvailable()) {
+    if (aiSearch) {
       void runEmbeddingSearch(query);
       return;
     }
@@ -443,6 +443,20 @@ export function Workspace() {
     const trimmed = text.trim();
     if (!trimmed) return;
     setQuery("");
+    if (!desktopBridgeAvailable()) {
+      setFilters((current) =>
+        upsertFilter(
+          current.filter((filter) => filter.kind !== "subject" && filter.kind !== "text" && filter.kind !== "person"),
+          { kind: "visual", ids: [], label: `AI “${trimmed}”` },
+        ),
+      );
+      setTelemetry((current) => ({
+        ...current,
+        scanLabel: "AI search scores ONNX embeddings in the desktop app.",
+      }));
+      void logSearch(true, trimmed, "no ort session in this browser preview");
+      return;
+    }
     const parsed = parseQuery(trimmed, items, true);
     const structured = parsed.filter(
       (filter) => filter.kind !== "subject" && filter.kind !== "person" && filter.kind !== "text",
@@ -464,12 +478,25 @@ export function Workspace() {
         );
         return [...structured, visual].reduce(upsertFilter, kept);
       });
+      setTelemetry((current) => ({
+        ...current,
+        scanLabel: hits.length === 0 ? `No ONNX match for “${trimmed}”` : `ONNX matched ${hits.length}`,
+      }));
       void logSearch(true, trimmed, hits.length === 0 ? "no embedding match" : `${hits.length} embedding matches`);
       const snapshot = await fetchInsights().catch(() => null);
       if (snapshot) setItems((current) => applyInsights(current, snapshot));
-    } catch {
-      setFilters((current) => parsed.reduce(upsertFilter, current));
-      void logSearch(true, trimmed, "embedding search unavailable, using stored tags");
+    } catch (error) {
+      setFilters((current) =>
+        upsertFilter(
+          current.filter((filter) => filter.kind !== "subject" && filter.kind !== "text" && filter.kind !== "person"),
+          { kind: "visual", ids: [], label: `AI “${trimmed}”` },
+        ),
+      );
+      setTelemetry((current) => ({
+        ...current,
+        scanLabel: "ONNX search failed. The model did not return embeddings.",
+      }));
+      void logSearch(true, trimmed, errorMessage(error));
     }
     if (viewMode === "people") chooseView("compact");
   }
