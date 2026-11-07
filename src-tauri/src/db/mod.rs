@@ -558,10 +558,13 @@ fn map_media(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaRecord> {
 }
 
 fn migrate(conn: &Connection) -> Result<(), DbError> {
-    let mut stmt = conn.prepare("PRAGMA table_info(media_files)")?;
-    let columns = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?;
+    let columns = {
+        let mut stmt = conn.prepare("PRAGMA table_info(media_files)")?;
+        stmt.query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    // Older libraries were created before capture time was stored. The column
+    // has to exist before the index below, or opening the file fails.
     if !columns.iter().any(|name| name == "captured_at") {
         conn.execute("ALTER TABLE media_files ADD COLUMN captured_at INTEGER", [])?;
     }
@@ -663,6 +666,51 @@ mod tests {
 
         let again = Library::open(dir.path().join("library.sqlite")).unwrap();
         assert_eq!(again.summary().unwrap().schema_version, 2);
+    }
+
+    #[test]
+    fn older_library_adds_captured_at_before_indexing_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.sqlite");
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL UNIQUE,
+                content_hash TEXT,
+                file_size INTEGER NOT NULL,
+                created_at INTEGER,
+                modified_at INTEGER NOT NULL,
+                indexed_at INTEGER NOT NULL,
+                rating INTEGER,
+                media_kind TEXT NOT NULL,
+                exif_json TEXT
+            );",
+        )
+        .unwrap();
+        drop(conn);
+
+        let library = Library::open(&path).unwrap();
+        let summary = library.summary().unwrap();
+        assert!(summary.columns.iter().any(|name| name == "captured_at"));
+        drop(library);
+
+        let conn = Connection::open(&path).unwrap();
+        let indexed: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'idx_media_files_captured_at'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexed, 1);
+        conn.execute(
+            "INSERT INTO media_files (file_path, file_size, modified_at, indexed_at, media_kind, captured_at)
+             VALUES ('/photos/old.jpg', 4, 10, 10, 'image', 20)",
+            [],
+        )
+        .unwrap();
     }
 
     #[test]

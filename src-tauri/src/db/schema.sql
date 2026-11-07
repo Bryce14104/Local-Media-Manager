@@ -76,8 +76,9 @@ CREATE TABLE IF NOT EXISTS media_labels (
 CREATE INDEX IF NOT EXISTS idx_media_files_modified_at
     ON media_files (modified_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_media_files_captured_at
-    ON media_files (captured_at DESC);
+-- idx_media_files_captured_at is created in migrate(), after older libraries
+-- receive the captured_at column. Creating it here fails on those files
+-- because CREATE TABLE IF NOT EXISTS leaves the old table unchanged.
 
 CREATE INDEX IF NOT EXISTS idx_media_files_rating
     ON media_files (rating);
