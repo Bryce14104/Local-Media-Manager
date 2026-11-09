@@ -194,6 +194,38 @@ pub struct InsightSnapshot {
     pub labels: Vec<LabelRecord>,
 }
 
+/// A burst, semantic group, or person cluster stored in `clusters`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConceptCluster {
+    pub id: i64,
+    pub kind: String,
+    pub label: String,
+    pub summary: Option<String>,
+    pub score: f32,
+    /// `people.id` when `kind` is `person`.
+    pub source_id: Option<i64>,
+    pub media_ids: Vec<i64>,
+}
+
+/// One searchable caption tag from `media_captions`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaCaption {
+    pub media_id: i64,
+    pub tag: String,
+    pub caption: Option<String>,
+    pub score: f32,
+}
+
+/// Clusters, their members, and caption tags for the AI Insights view.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConceptIndex {
+    pub clusters: Vec<ConceptCluster>,
+    pub captions: Vec<MediaCaption>,
+}
+
 /// What a folder scan changed in the catalog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

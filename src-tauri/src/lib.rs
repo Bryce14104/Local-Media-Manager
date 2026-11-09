@@ -50,6 +50,7 @@ pub fn run() {
             commands::remove_media,
             commands::delete_media,
             commands::list_insights,
+            commands::list_concepts,
             commands::rename_person,
             commands::merge_people,
             commands::split_face,

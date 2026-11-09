@@ -145,6 +145,9 @@ where
     };
     if pending.is_empty() {
         eprintln!("shelf index: no frames waiting for visual tags");
+        if let Err(error) = library.rebuild_concepts() {
+            eprintln!("shelf index: could not write clusters and captions: {error}");
+        }
         return Ok(());
     }
     eprintln!("shelf index: {} frames waiting for an ONNX embedding", pending.len());
@@ -179,7 +182,11 @@ where
             }
         }
     }
-    progress(pending.len(), pending.len(), "Reading faces and subjects");
+    progress(0, 0, "Clustering");
+    if let Err(error) = library.rebuild_concepts() {
+        eprintln!("shelf index: could not write clusters and captions: {error}");
+    }
+    progress(0, 0, "Captioning");
     Ok(())
 }
 

@@ -2,7 +2,7 @@ export type MediaFormat = "raw" | "jpg" | "video";
 
 export type FlagStatus = "unflagged" | "pick" | "reject";
 
-export type ViewMode = "compact" | "cards" | "timeline" | "map" | "people";
+export type ViewMode = "compact" | "timeline" | "map" | "insights";
 
 export type LayoutPreset = "browse" | "inspect" | "compare" | "map";
 
@@ -18,13 +18,11 @@ export type PanelMode = "docked" | "floating" | "hidden";
 export type StudioAction =
   | "add-media"
   | "batch-export"
-  | "index-status"
   | "preset-browse"
   | "preset-inspect"
   | "preset-compare"
   | "preset-map"
   | "view-compact"
-  | "view-cards"
   | "view-timeline"
   | "view-map"
   | "view-people"
@@ -102,6 +100,13 @@ export type Suggestion = {
   | { type: "filters"; filters: Filter[] }
 );
 
+export type PipelineStatus = {
+  phase: string;
+  label: string;
+  done: number;
+  total: number;
+};
+
 export type Telemetry = {
   scanLabel: string;
   scanProgress: number | null;
@@ -109,10 +114,5 @@ export type Telemetry = {
   storageUsed: string;
   storageFree: string;
   exportLabel: string | null;
-};
-
-export type IndexJob = {
-  name: string;
-  detail: string;
-  progress: number;
+  pipeline: PipelineStatus | null;
 };

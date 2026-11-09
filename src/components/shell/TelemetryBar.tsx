@@ -1,5 +1,6 @@
 import { gridZoomLabel } from "../../studio/gridZoom";
-import type { Telemetry } from "../../studio/types";
+import { pipelineReadout } from "../../studio/pipeline";
+import type { PipelineStatus, Telemetry } from "../../studio/types";
 
 export function TelemetryBar({
   telemetry,
@@ -59,6 +60,7 @@ export function TelemetryBar({
           />
           <span aria-hidden className="h-3.5 w-3.5 rounded-[3px] border border-current" />
         </label>
+        {telemetry.pipeline ? <PipelineMeter pipeline={telemetry.pipeline} /> : null}
         <button
           type="button"
           onClick={onPreferences}
@@ -68,5 +70,30 @@ export function TelemetryBar({
         </button>
       </div>
     </footer>
+  );
+}
+
+function PipelineMeter({ pipeline }: { pipeline: PipelineStatus }) {
+  const { text, percent, stage } = pipelineReadout(pipeline);
+  return (
+    <div
+      data-pipeline={stage}
+      className="flex shrink-0 items-center gap-2 text-[11px] text-foam"
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent ?? undefined}
+      aria-valuetext={text}
+      aria-label={text}
+    >
+      <span className="max-w-[9.5rem] truncate">{text}</span>
+      <span className="relative h-1 w-14 overflow-hidden rounded-full bg-line" aria-hidden>
+        {percent == null ? (
+          <span className="pipeline-indeterminate absolute inset-y-0 left-0 rounded-full bg-teal" />
+        ) : (
+          <span className="absolute inset-y-0 left-0 rounded-full bg-teal transition-[width] duration-150" style={{ width: `${percent}%` }} />
+        )}
+      </span>
+    </div>
   );
 }

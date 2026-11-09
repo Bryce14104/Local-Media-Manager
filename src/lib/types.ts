@@ -80,3 +80,25 @@ export type InsightSnapshot = {
   faces: FaceInsight[];
   labels: LabelInsight[];
 };
+
+export type ConceptCluster = {
+  id: number;
+  kind: "burst" | "semantic" | "person" | string;
+  label: string;
+  summary: string | null;
+  score: number;
+  sourceId: number | null;
+  mediaIds: number[];
+};
+
+export type MediaCaption = {
+  mediaId: number;
+  tag: string;
+  caption: string | null;
+  score: number;
+};
+
+export type ConceptIndex = {
+  clusters: ConceptCluster[];
+  captions: MediaCaption[];
+};

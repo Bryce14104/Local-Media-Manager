@@ -3,7 +3,12 @@
 //! The SQL in `schema.sql` is the initialization script. It is compiled into
 //! the binary and executed whenever a library file is opened.
 
-use crate::models::{ExifSnapshot, FaceRecord, InsightSnapshot, LabelRecord, MediaKind, MediaRecord, PersonRecord};
+mod concepts;
+
+use crate::models::{
+    ConceptIndex, ExifSnapshot, FaceRecord, InsightSnapshot, LabelRecord, MediaKind, MediaRecord,
+    PersonRecord,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -327,6 +332,8 @@ impl Library {
         conn.execute("DELETE FROM faces WHERE media_id = ?1", params![media_id])?;
         conn.execute("DELETE FROM media_labels WHERE media_id = ?1", params![media_id])?;
         conn.execute("DELETE FROM media_embeddings WHERE media_id = ?1", params![media_id])?;
+        conn.execute("DELETE FROM media_captions WHERE media_id = ?1", params![media_id])?;
+        conn.execute("DELETE FROM cluster_members WHERE media_id = ?1", params![media_id])?;
         Ok(())
     }
 
@@ -459,6 +466,19 @@ impl Library {
         })
     }
 
+    /// Rewrite `clusters`, `cluster_members`, and `media_captions` from faces and labels.
+    pub fn rebuild_concepts(&self) -> Result<(), DbError> {
+        let mut conn = self.lock()?;
+        concepts::write(&mut conn)
+    }
+
+    /// Refresh the concept tables, then read them for the AI Insights view.
+    pub fn concept_index(&self) -> Result<ConceptIndex, DbError> {
+        let mut conn = self.lock()?;
+        concepts::write(&mut conn)?;
+        concepts::read(&conn)
+    }
+
     pub fn rename_person(&self, id: i64, name: Option<&str>) -> Result<(), DbError> {
         let conn = self.lock()?;
         let changed = conn.execute(
@@ -581,7 +601,32 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
         "CREATE TABLE IF NOT EXISTS media_embeddings (
             media_id INTEGER PRIMARY KEY REFERENCES media_files(id) ON DELETE CASCADE,
             embedding BLOB NOT NULL
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS clusters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL CHECK (kind IN ('burst', 'semantic', 'person')),
+            label TEXT NOT NULL,
+            summary TEXT,
+            score REAL NOT NULL DEFAULT 0,
+            source_id INTEGER,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS cluster_members (
+            cluster_id INTEGER NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+            media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+            rank INTEGER NOT NULL DEFAULT 0,
+            score REAL,
+            PRIMARY KEY (cluster_id, media_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_cluster_members_media ON cluster_members (media_id);
+        CREATE TABLE IF NOT EXISTS media_captions (
+            media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+            tag TEXT NOT NULL,
+            caption TEXT,
+            score REAL NOT NULL,
+            PRIMARY KEY (media_id, tag)
+        );
+        CREATE INDEX IF NOT EXISTS idx_media_captions_tag ON media_captions (tag);",
     )?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_media_files_captured_at ON media_files (captured_at DESC)",
@@ -913,5 +958,106 @@ mod tests {
             .remove_paths(&["/photos/portrait.jpg".into()])
             .unwrap();
         assert!(library.insights().unwrap().faces.is_empty());
+    }
+
+    #[test]
+    fn concept_tables_group_bursts_labels_people_and_captions() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::open(dir.path().join("library.sqlite")).unwrap();
+        let shots = [
+            ("/trips/iceland/a.jpg", 1_000_i64),
+            ("/trips/iceland/b.jpg", 1_500),
+            ("/trips/iceland/c.jpg", 3_000),
+            ("/trips/lisbon/d.jpg", 1_100),
+            ("/trips/lisbon/e.jpg", 1_200),
+        ];
+        for (path, captured_at) in shots {
+            library
+                .upsert_media(NewMedia {
+                    file_path: path,
+                    content_hash: path,
+                    file_size: 4,
+                    created_at: None,
+                    modified_at: captured_at,
+                    media_kind: MediaKind::Image,
+                    exif_json: None,
+                    captured_at: Some(captured_at),
+                })
+                .unwrap();
+        }
+        let media = library.list_media().unwrap();
+        let id = |name: &str| {
+            media
+                .iter()
+                .find(|record| record.file_path.ends_with(name))
+                .unwrap()
+                .id
+        };
+        let beach = id("a.jpg");
+        let also_beach = id("b.jpg");
+        let dog = id("c.jpg");
+        library
+            .replace_labels(
+                beach,
+                &[
+                    ("scene".into(), "beach".into(), 0.9),
+                    ("object".into(), "lighthouse".into(), 0.4),
+                ],
+            )
+            .unwrap();
+        library
+            .replace_labels(also_beach, &[("scene".into(), "beach".into(), 0.5)])
+            .unwrap();
+        library
+            .replace_labels(dog, &[("pet".into(), "dog".into(), 0.8)])
+            .unwrap();
+        let person = library.create_person(Some("Bryce")).unwrap();
+        library
+            .insert_face(dog, person, 0.2, 0.1, 0.3, 0.4, 0.95, &[1.0, 0.0])
+            .unwrap();
+
+        let index = library.concept_index().unwrap();
+        let burst_labels: Vec<_> = index
+            .clusters
+            .iter()
+            .filter(|cluster| cluster.kind == "burst")
+            .map(|cluster| cluster.label.as_str())
+            .collect();
+        assert_eq!(burst_labels, vec!["Lisbon · 00:18", "Iceland · 00:16"]);
+        let iceland = index
+            .clusters
+            .iter()
+            .find(|cluster| cluster.label == "Iceland · 00:16")
+            .unwrap();
+        assert_eq!(iceland.media_ids, vec![beach, also_beach]);
+        assert_eq!(iceland.summary.as_deref(), Some("2 frames · 8 min"));
+
+        let semantic: Vec<_> = index
+            .clusters
+            .iter()
+            .filter(|cluster| cluster.kind == "semantic")
+            .map(|cluster| cluster.label.as_str())
+            .collect();
+        assert_eq!(semantic, vec!["Beach", "Dog", "Lighthouse"]);
+        let people: Vec<_> = index
+            .clusters
+            .iter()
+            .filter(|cluster| cluster.kind == "person")
+            .collect();
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].label, "Bryce");
+        assert_eq!(people[0].source_id, Some(person));
+        assert_eq!(people[0].media_ids, vec![dog]);
+
+        let beach_caption = index
+            .captions
+            .iter()
+            .find(|caption| caption.media_id == beach && caption.tag == "beach")
+            .unwrap();
+        assert_eq!(beach_caption.caption.as_deref(), Some("Beach and Lighthouse"));
+        assert!(index.captions.iter().any(|caption| caption.tag == "dog"));
+        assert!(SCHEMA_SQL.contains("CREATE TABLE IF NOT EXISTS clusters"));
+        assert!(SCHEMA_SQL.contains("CREATE TABLE IF NOT EXISTS cluster_members"));
+        assert!(SCHEMA_SQL.contains("CREATE TABLE IF NOT EXISTS media_captions"));
     }
 }

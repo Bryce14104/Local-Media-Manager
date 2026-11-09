@@ -129,7 +129,6 @@ export function MediaStage({
           <Timeline
             items={items}
             zoom={gridZoom}
-            detail="compact"
             selectedIds={selectedIds}
             primaryId={primaryId}
             onOpen={activate}
@@ -141,7 +140,6 @@ export function MediaStage({
           <Grid
             items={items}
             zoom={gridZoom}
-            detail={viewMode === "cards" ? "card" : "compact"}
             selectedIds={selectedIds}
             primaryId={primaryId}
             onOpen={activate}
@@ -158,7 +156,6 @@ export function MediaStage({
 function Grid({
   items,
   zoom,
-  detail,
   selectedIds,
   primaryId,
   onOpen,
@@ -168,7 +165,6 @@ function Grid({
 }: {
   items: StudioItem[];
   zoom: number;
-  detail: "compact" | "card";
   selectedIds: string[];
   primaryId: string | null;
   onOpen: (id: string, mods: PointerMods) => void;
@@ -190,7 +186,6 @@ function Grid({
           key={item.id}
           item={item}
           zoom={zoom}
-          detail={detail}
           selected={selectedIds.includes(item.id)}
           primary={primaryId === item.id}
           onOpen={(mods) => onOpen(item.id, mods)}
@@ -203,7 +198,7 @@ function Grid({
   );
 }
 
-function Timeline(props: Omit<Parameters<typeof Grid>[0], "detail"> & { detail: "compact" | "card" }) {
+function Timeline(props: Parameters<typeof Grid>[0]) {
   const groups = new Map<string, StudioItem[]>();
   for (const item of props.items) {
     const key = item.capturedAt.slice(0, 7);

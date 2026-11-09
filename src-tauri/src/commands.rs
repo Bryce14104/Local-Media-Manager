@@ -178,6 +178,11 @@ pub fn list_insights(state: State<'_, Library>) -> Result<crate::models::Insight
 }
 
 #[tauri::command]
+pub fn list_concepts(state: State<'_, Library>) -> Result<crate::models::ConceptIndex, String> {
+    state.concept_index().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 pub fn rename_person(id: i64, name: Option<String>, state: State<'_, Library>) -> Result<(), String> {
     let trimmed = name.as_deref().map(str::trim).filter(|value| !value.is_empty());
     state.rename_person(id, trimmed).map_err(|err| err.to_string())

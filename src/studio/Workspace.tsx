@@ -6,6 +6,7 @@ import {
   desktopBridgeAvailable,
   errorMessage,
   logSearch,
+  fetchConcepts,
   fetchInsights,
   fetchLibrary,
   indexPaths,
@@ -17,7 +18,7 @@ import {
   setFlags,
   splitFace,
 } from "../lib/api";
-import type { MediaKind, MediaRecord } from "../lib/types";
+import type { ConceptIndex, MediaKind, MediaRecord } from "../lib/types";
 import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
 import { PreferencesModal } from "../components/drawers/PreferencesModal";
@@ -26,8 +27,8 @@ import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
 import { Lightbox } from "../components/workspace/Lightbox";
+import { InsightsView } from "../components/workspace/InsightsView";
 import { MediaStage } from "../components/workspace/MediaStage";
-import { PeopleBoard } from "../components/workspace/PeopleBoard";
 import { SelectionBar } from "../components/workspace/SelectionBar";
 import { captureMillis, createCatalog, itemFromRecord, mergeItems, nextFlag } from "./catalog";
 import { itemsFromFiles } from "./previews";
@@ -56,6 +57,7 @@ const INITIAL_TELEMETRY: Telemetry = {
   storageUsed: "18.4 GB",
   storageFree: "1.2 TB",
   exportLabel: null,
+  pipeline: null,
 };
 
 export function Workspace() {
@@ -85,8 +87,8 @@ export function Workspace() {
   const [cacheZoom, setCacheZoom] = useState<MapZoom>(12);
   const [cacheBounds, setCacheBounds] = useState<GeoBounds | null>(null);
   const [selectingCache, setSelectingCache] = useState(false);
-  const [indexOpen, setIndexOpen] = useState(false);
-  const [insightsOpen, setInsightsOpen] = useState(false);
+  const [conceptIndex, setConceptIndex] = useState<ConceptIndex | null>(null);
+  const [conceptsLive, setConceptsLive] = useState(() => desktopBridgeAvailable());
   const [telemetry, setTelemetry] = useState<Telemetry>(INITIAL_TELEMETRY);
 
   const visible = useMemo(
@@ -102,7 +104,8 @@ export function Workspace() {
   );
   const palette = useMemo(() => suggestions(query, items, aiSearch), [query, items, aiSearch]);
   const primary = items.find((item) => item.id === primaryId) ?? null;
-  const lightboxItem = visible.find((item) => item.id === lightboxId) ?? null;
+  const lightboxPool = visible.some((item) => item.id === lightboxId) ? visible : items;
+  const lightboxItem = lightboxPool.find((item) => item.id === lightboxId) ?? null;
   const comparePair: [StudioItem | null, StudioItem | null] = [
     items.find((item) => item.id === selectedIds[0]) ?? null,
     items.find((item) => item.id === selectedIds[1]) ?? null,
@@ -113,15 +116,27 @@ export function Workspace() {
     let cancel = false;
     void fetchLibrary()
       .then(async ({ media }) => {
-        if (cancel || media.length === 0) return;
-        const snapshot = await fetchInsights().catch(() => null);
         if (cancel) return;
+        const [snapshot, concepts] = await Promise.all([
+          fetchInsights().catch(() => null),
+          fetchConcepts().catch(() => null),
+        ]);
+        if (cancel) return;
+        if (concepts) {
+          setConceptIndex(concepts);
+          setConceptsLive(true);
+        } else {
+          setConceptsLive(false);
+        }
+        if (media.length === 0) return;
         setItems((current) => {
           const merged = mergeItems(media.map(presentRecord), current);
           return snapshot ? applyInsights(merged, snapshot) : merged;
         });
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (!cancel) setConceptsLive(false);
+      });
     return () => {
       cancel = true;
     };
@@ -162,12 +177,21 @@ export function Workspace() {
             setItems((current) => applyInsights(current, snapshot));
           })
           .catch(() => undefined);
+        void fetchConcepts()
+          .then((concepts) => {
+            setConceptIndex(concepts);
+            setConceptsLive(true);
+          })
+          .catch(() => setConceptsLive(false));
         const token = jobToken.current;
         setTelemetry((current) => ({
           ...current,
           scanLabel: job.label,
           scanProgress: 1,
           syncLabel: "SQLite · ready",
+          pipeline: current.pipeline
+            ? { phase: job.phase, label: job.label, done: job.done, total: Math.max(job.total, 1) }
+            : null,
         }));
         window.setTimeout(() => {
           if (jobToken.current !== token) return;
@@ -175,6 +199,7 @@ export function Workspace() {
             ...current,
             scanLabel: "Idle · catalog ready",
             scanProgress: null,
+            pipeline: null,
           }));
           setImportMessage(null);
           setImportBusy(false);
@@ -186,8 +211,9 @@ export function Workspace() {
       setTelemetry((current) => ({
         ...current,
         scanLabel: job.total > 0 ? `${job.label} · ${job.done} of ${job.total}` : job.label,
-        scanProgress: ratio,
+        scanProgress: job.total > 0 ? ratio : null,
         syncLabel: "SQLite · writing",
+        pipeline: { phase: job.phase, label: job.label, done: job.done, total: job.total },
       }));
       setImportMessage(job.total > 0 ? `${job.label} · ${percent}%` : job.label);
     }).then((unlisten) => {
@@ -209,7 +235,7 @@ export function Workspace() {
         target instanceof HTMLSelectElement;
       const command = event.metaKey || event.ctrlKey;
       if (command && event.key.toLowerCase() === "a") {
-        if (typing || modal || confirmDelete || lightboxId || viewMode === "map" || viewMode === "people" || preset === "compare") return;
+        if (typing || modal || confirmDelete || lightboxId || viewMode === "map" || viewMode === "insights" || preset === "compare") return;
         event.preventDefault();
         const ids = visible.map((item) => item.id);
         setSelectedIds(ids);
@@ -264,8 +290,8 @@ export function Workspace() {
   }, [confirmDelete, lightboxId, modal, panelMode, preset, primaryId, selectedIds, selectingCache, viewMode, visible]);
 
   useEffect(() => {
-    if (lightboxId && !visible.some((item) => item.id === lightboxId)) setLightboxId(null);
-  }, [lightboxId, visible]);
+    if (lightboxId && !items.some((item) => item.id === lightboxId)) setLightboxId(null);
+  }, [lightboxId, items]);
 
   function applyPreset(next: LayoutPreset) {
     setPreset(next);
@@ -353,10 +379,6 @@ export function Workspace() {
       case "batch-export":
         setModal("export");
         break;
-      case "index-status":
-        setIndexOpen(true);
-        inputRef.current?.blur();
-        break;
       case "preset-browse":
         applyPreset("browse");
         break;
@@ -372,9 +394,6 @@ export function Workspace() {
       case "view-compact":
         chooseView("compact");
         break;
-      case "view-cards":
-        chooseView("cards");
-        break;
       case "view-timeline":
         chooseView("timeline");
         break;
@@ -382,7 +401,7 @@ export function Workspace() {
         chooseView("map");
         break;
       case "view-people":
-        setInsightsOpen(true);
+        chooseView("insights");
         break;
       case "preferences":
         openPreferences();
@@ -398,9 +417,6 @@ export function Workspace() {
 
   function applySuggestion(suggestion: Suggestion) {
     if (suggestion.type === "action") {
-      if (suggestion.action === "index-status") {
-        document.getElementById("ai-index-toggle")?.click();
-      }
       applyAction(suggestion.action);
     } else {
       if (aiSearch) {
@@ -409,7 +425,7 @@ export function Workspace() {
         return;
       }
       setFilters((current) => suggestion.filters.reduce(upsertFilter, current));
-      if (viewMode === "people") chooseView("compact");
+      if (viewMode === "insights") chooseView("compact");
       void logSearch(
         aiSearch,
         suggestion.label,
@@ -436,7 +452,7 @@ export function Workspace() {
       parsed.map((filter) => filterLabel({ ...filter, id: "logged" })).join(", "),
     );
     setQuery("");
-    if (viewMode === "people") chooseView("compact");
+    if (viewMode === "insights") chooseView("compact");
   }
 
   async function runEmbeddingSearch(text: string) {
@@ -498,7 +514,7 @@ export function Workspace() {
       }));
       void logSearch(true, trimmed, errorMessage(error));
     }
-    if (viewMode === "people") chooseView("compact");
+    if (viewMode === "insights") chooseView("compact");
   }
 
   function changeAiSearch(next: boolean) {
@@ -556,8 +572,9 @@ export function Workspace() {
   }
 
   function stepLightbox(delta: number) {
-    const index = visible.findIndex((item) => item.id === lightboxId);
-    const next = visible[index + delta];
+    const pool = visible.some((item) => item.id === lightboxId) ? visible : items;
+    const index = pool.findIndex((item) => item.id === lightboxId);
+    const next = pool[index + delta];
     if (!next) return;
     setLightboxMotion(delta > 0 ? "next" : "prev");
     setLightboxId(next.id);
@@ -705,6 +722,7 @@ export function Workspace() {
       scanLabel: `Indexing ${folderName}`,
       scanProgress: 0,
       syncLabel: "SQLite · writing",
+      pipeline: { phase: "index", label: "Indexing", done: 0, total: 0 },
     }));
     try {
       const report = await indexPaths(paths);
@@ -716,6 +734,7 @@ export function Workspace() {
           scanLabel: "Idle · catalog ready",
           scanProgress: null,
           syncLabel: "SQLite · ready",
+          pipeline: null,
         }));
         setImportBusy(false);
         return;
@@ -733,6 +752,7 @@ export function Workspace() {
         scanLabel: "Idle · catalog ready",
         scanProgress: null,
         syncLabel: "SQLite · ready",
+        pipeline: null,
       }));
     } finally {
       setImportBusy(false);
@@ -749,6 +769,7 @@ export function Workspace() {
       scanLabel: "Reading files",
       scanProgress: 0,
       syncLabel: "Browser preview",
+      pipeline: { phase: "index", label: "Reading files", done: 0, total: files.length },
     }));
     try {
       const imported = await itemsFromFiles(files, (done, total) => {
@@ -759,6 +780,7 @@ export function Workspace() {
           ...current,
           scanLabel: `Reading files · ${done} of ${total}`,
           scanProgress: ratio,
+          pipeline: { phase: "index", label: "Reading files", done, total },
         }));
         setImportMessage(`Reading files · ${percent}%`);
       });
@@ -769,17 +791,23 @@ export function Workspace() {
           ...current,
           scanLabel: "Idle · catalog ready",
           scanProgress: null,
+          pipeline: null,
         }));
         return;
       }
       revealImported(imported, `Added ${imported.length} ${imported.length === 1 ? "frame" : "frames"}`);
-      setTelemetry((current) => ({ ...current, scanProgress: 1 }));
+      setTelemetry((current) => ({
+        ...current,
+        scanProgress: 1,
+        pipeline: { phase: "done", label: "Catalog ready", done: 1, total: 1 },
+      }));
       window.setTimeout(() => {
         if (jobToken.current !== token) return;
         setTelemetry((current) => ({
           ...current,
           scanLabel: "Idle · catalog ready",
           scanProgress: null,
+          pipeline: null,
         }));
         setImportMessage(null);
       }, 1200);
@@ -788,11 +816,23 @@ export function Workspace() {
     }
   }
 
+  function loadConcepts() {
+    if (!desktopBridgeAvailable()) return;
+    void fetchConcepts()
+      .then((concepts) => {
+        setConceptIndex(concepts);
+        setConceptsLive(true);
+      })
+      .catch(() => setConceptsLive(false));
+  }
+
   function renameCluster(personId: string, name: string) {
     setItems((current) => renameFaces(current, personId, name));
     const id = numericSuffix(personId, "person-");
     if (id != null && desktopBridgeAvailable()) {
-      void renamePerson(id, name.trim() || null).catch(() => undefined);
+      void renamePerson(id, name.trim() || null)
+        .then(() => loadConcepts())
+        .catch(() => undefined);
     }
   }
 
@@ -801,7 +841,9 @@ export function Workspace() {
     const keep = numericSuffix(keepId, "person-");
     const drop = numericSuffix(dropId, "person-");
     if (keep != null && drop != null && desktopBridgeAvailable()) {
-      void mergePeople(keep, drop).catch(() => undefined);
+      void mergePeople(keep, drop)
+        .then(() => loadConcepts())
+        .catch(() => undefined);
     }
   }
 
@@ -811,6 +853,7 @@ export function Workspace() {
       void splitFace(face)
         .then((id) => {
           setItems((current) => moveFace(current, faceId, `person-${id}`));
+          loadConcepts();
         })
         .catch(() => undefined);
       return;
@@ -818,16 +861,19 @@ export function Workspace() {
     setItems((current) => moveFace(current, faceId, `person-local-${Date.now()}`));
   }
 
+  function showFrames(ids: string[], label: string) {
+    setFilters((current) => upsertFilter(current.filter((filter) => filter.kind !== "region"), { kind: "cluster", ids, label }));
+    chooseView("compact");
+  }
+
   function showSubject(label: string) {
     setFilters((current) => upsertFilter(current, { kind: "subject", value: label }));
     chooseView("compact");
-    setInsightsOpen(false);
   }
 
   function showPerson(personId: string, name: string) {
     setFilters((current) => upsertFilter(current, { kind: "person", personId, name }));
     chooseView("compact");
-    setInsightsOpen(false);
   }
 
   function exportSelection(format: string, destination: string) {
@@ -857,31 +903,25 @@ export function Workspace() {
         onPreset={applyPreset}
         onAdd={openAdd}
         onExport={() => setModal("export")}
-        indexOpen={indexOpen}
-        onIndexOpen={setIndexOpen}
         onPreferences={openPreferences}
         inputRef={inputRef}
-        items={items}
-        insightsOpen={insightsOpen}
-        onInsightsOpen={setInsightsOpen}
-        onInsightSubject={showSubject}
-        onInsightPerson={showPerson}
-        onRenamePerson={renameCluster}
-        onMergePeople={mergeClusters}
-        onSplitFace={splitClusterFace}
       />
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {preset === "compare" ? (
           <ComparePane pair={comparePair} onClear={() => setSelectedIds([])} />
-        ) : viewMode === "people" ? (
-          <PeopleBoard
-            items={visible}
+        ) : viewMode === "insights" ? (
+          <InsightsView
+            items={items}
+            index={conceptsLive ? conceptIndex : null}
+            pending={conceptsLive && conceptIndex == null}
+            onOpen={(id) => viewItem(id)}
+            onShowFrames={showFrames}
+            onShowSubject={showSubject}
+            onShowPerson={showPerson}
             onRename={renameCluster}
             onMerge={mergeClusters}
             onSplit={splitClusterFace}
-            onOpen={(item) => viewItem(item.id)}
-            onSubject={showSubject}
           />
         ) : (
           <MediaStage
@@ -1019,8 +1059,8 @@ export function Workspace() {
       {lightboxItem ? (
         <Lightbox
           item={lightboxItem}
-          index={Math.max(0, visible.findIndex((item) => item.id === lightboxItem.id))}
-          count={visible.length}
+          index={Math.max(0, lightboxPool.findIndex((item) => item.id === lightboxItem.id))}
+          count={lightboxPool.length}
           direction={lightboxMotion}
           onClose={closeLightbox}
           onPrev={() => stepLightbox(-1)}

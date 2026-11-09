@@ -1,8 +1,6 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
-import { IndexStatusPopover } from "../drawers/IndexStatusPopover";
-import { InsightsMenu } from "./InsightsMenu";
+import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
 import { filterLabel } from "../../studio/query";
-import type { ActiveFilter, LayoutPreset, StudioItem, Suggestion, ViewMode } from "../../studio/types";
+import type { ActiveFilter, LayoutPreset, Suggestion, ViewMode } from "../../studio/types";
 
 type TopBarProps = {
   query: string;
@@ -20,25 +18,15 @@ type TopBarProps = {
   onPreset: (preset: LayoutPreset) => void;
   onAdd: () => void;
   onExport: () => void;
-  indexOpen: boolean;
-  onIndexOpen: (open: boolean) => void;
   onPreferences: () => void;
   inputRef: RefObject<HTMLInputElement | null>;
-  items: StudioItem[];
-  insightsOpen: boolean;
-  onInsightsOpen: (open: boolean) => void;
-  onInsightSubject: (value: string) => void;
-  onInsightPerson: (personId: string, name: string) => void;
-  onRenamePerson: (personId: string, name: string) => void;
-  onMergePeople: (keepId: string, dropId: string) => void;
-  onSplitFace: (faceId: string) => void;
 };
 
 const VIEWS: { id: ViewMode; label: string }[] = [
   { id: "compact", label: "Compact" },
-  { id: "cards", label: "Cards" },
   { id: "timeline", label: "Timeline" },
   { id: "map", label: "Map" },
+  { id: "insights", label: "AI Insights" },
 ];
 
 const PRESETS: { id: LayoutPreset; label: string }[] = [
@@ -63,52 +51,16 @@ export function TopBar({
   onPreset,
   onAdd,
   onExport,
-  indexOpen,
-  onIndexOpen,
   onPreferences,
   inputRef,
-  items,
-  insightsOpen,
-  onInsightsOpen,
-  onInsightSubject,
-  onInsightPerson,
-  onRenamePerson,
-  onMergePeople,
-  onSplitFace,
 }: TopBarProps) {
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
-  const desktopIndex = useRef<HTMLDivElement>(null);
-  const mobileIndex = useRef<HTMLDivElement>(null);
-  const insightsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setHighlight(0);
   }, [query]);
-
-  useEffect(() => {
-    if (!indexOpen) return;
-    function onPointer(event: PointerEvent) {
-      const target = event.target as Node;
-      const inside =
-        desktopIndex.current?.contains(target) || mobileIndex.current?.contains(target);
-      if (!inside) onIndexOpen(false);
-    }
-    window.addEventListener("pointerdown", onPointer);
-    return () => window.removeEventListener("pointerdown", onPointer);
-  }, [indexOpen, onIndexOpen]);
-
-  useEffect(() => {
-    if (!insightsOpen) return;
-    function onPointer(event: PointerEvent) {
-      const target = event.target as Node;
-      if (insightsRef.current?.contains(target)) return;
-      onInsightsOpen(false);
-    }
-    window.addEventListener("pointerdown", onPointer);
-    return () => window.removeEventListener("pointerdown", onPointer);
-  }, [insightsOpen, onInsightsOpen]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -215,17 +167,9 @@ export function TopBar({
         <div className="hidden items-center gap-1 lg:flex">
           <Action label="Add media" onClick={onAdd} />
           <Action label="Batch export" onClick={onExport} />
-          <div ref={desktopIndex} className="relative">
-            <Action
-              label="AI indexing"
-              pressed={indexOpen}
-              onClick={() => onIndexOpen(!indexOpen)}
-            />
-            {indexOpen ? <IndexStatusPopover /> : null}
-          </div>
         </div>
 
-        <div ref={mobileIndex} className="relative lg:hidden">
+        <div className="relative lg:hidden">
           <Action label="Menu" pressed={menuOpen} onClick={() => setMenuOpen((current) => !current)} />
           {menuOpen ? (
             <div className="absolute right-0 top-[calc(100%+0.4rem)] z-40 w-52 rounded-2xl border border-line bg-card p-2">
@@ -252,20 +196,6 @@ export function TopBar({
               <MenuRow label="Add media" onClick={() => { onAdd(); setMenuOpen(false); }} />
               <MenuRow label="Batch export" onClick={() => { onExport(); setMenuOpen(false); }} />
               <MenuRow
-                label="AI indexing"
-                onClick={() => {
-                  onIndexOpen(true);
-                  setMenuOpen(false);
-                }}
-              />
-              <MenuRow
-                label="AI Insights"
-                onClick={() => {
-                  onInsightsOpen(true);
-                  setMenuOpen(false);
-                }}
-              />
-              <MenuRow
                 label="Preferences"
                 onClick={() => {
                   onPreferences();
@@ -274,37 +204,12 @@ export function TopBar({
               />
             </div>
           ) : null}
-          {indexOpen ? <IndexStatusPopover /> : null}
         </div>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 px-3 pb-2">
         <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
           <ViewSwitch viewMode={viewMode} preset={preset} onViewMode={onViewMode} />
-        </div>
-        <div ref={insightsRef} className="relative shrink-0">
-          <button
-            type="button"
-            data-insights-button
-            aria-expanded={insightsOpen}
-            aria-haspopup="menu"
-            onClick={() => onInsightsOpen(!insightsOpen)}
-            className={`rounded-full border px-2.5 py-1 text-xs ${
-              insightsOpen ? "border-teal bg-teal text-teal-ink" : "border-line text-mute hover:text-foam"
-            }`}
-          >
-            AI Insights
-          </button>
-          {insightsOpen ? (
-            <InsightsMenu
-              items={items}
-              onSubject={onInsightSubject}
-              onPerson={onInsightPerson}
-              onRename={onRenamePerson}
-              onMerge={onMergePeople}
-              onSplit={onSplitFace}
-            />
-          ) : null}
         </div>
         <PresetSwitch preset={preset} onPreset={onPreset} />
       </div>

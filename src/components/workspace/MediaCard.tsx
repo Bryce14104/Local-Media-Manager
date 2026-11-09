@@ -9,7 +9,6 @@ import { Stars } from "./Stars";
 type MediaCardProps = {
   item: StudioItem;
   zoom: number;
-  detail: "compact" | "card";
   selected: boolean;
   primary: boolean;
   onOpen: (mods: PointerMods) => void;
@@ -21,7 +20,6 @@ type MediaCardProps = {
 export function MediaCard({
   item,
   zoom,
-  detail,
   selected,
   primary,
   onOpen,
@@ -30,7 +28,7 @@ export function MediaCard({
   onFlag,
 }: MediaCardProps) {
   const { roomy, dense } = gridMetrics(zoom);
-  const showMeta = detail === "card" ? !dense : roomy;
+  const showMeta = roomy;
   return (
     <article
       id={`frame-${item.id}`}

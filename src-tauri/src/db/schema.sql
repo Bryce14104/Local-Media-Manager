@@ -93,6 +93,41 @@ CREATE TABLE IF NOT EXISTS media_embeddings (
     embedding BLOB NOT NULL
 );
 
+-- Local AI groupings. kind is burst (a short sequence), semantic (an
+-- automatic scene or object label), or person (a face cluster).
+CREATE TABLE IF NOT EXISTS clusters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('burst', 'semantic', 'person')),
+    label TEXT NOT NULL,
+    summary TEXT,
+    score REAL NOT NULL DEFAULT 0,
+    source_id INTEGER,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cluster_members (
+    cluster_id INTEGER NOT NULL REFERENCES clusters(id) ON DELETE CASCADE,
+    media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    rank INTEGER NOT NULL DEFAULT 0,
+    score REAL,
+    PRIMARY KEY (cluster_id, media_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cluster_members_media
+    ON cluster_members (media_id);
+
+-- Searchable caption tags written by the local vision pass.
+CREATE TABLE IF NOT EXISTS media_captions (
+    media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    tag TEXT NOT NULL,
+    caption TEXT,
+    score REAL NOT NULL,
+    PRIMARY KEY (media_id, tag)
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_captions_tag
+    ON media_captions (tag);
+
 INSERT INTO schema_migrations (version, applied_at)
 SELECT 1, CAST(strftime('%s', 'now') AS INTEGER)
 WHERE NOT EXISTS (
