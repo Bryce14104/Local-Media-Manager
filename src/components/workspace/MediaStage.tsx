@@ -114,7 +114,14 @@ export function MediaStage({
       </header>
 
       <div className="min-h-0 flex-1 overflow-auto px-4 pb-4">
-        {filteredEmpty ? (
+        {total === 0 ? (
+          <div className="rounded-2xl border border-dashed border-line px-5 py-12 text-center">
+            <p className="text-sm">No photos in this library yet</p>
+            <p className="mx-auto mt-2 max-w-md text-sm text-mute">
+              Add media and choose a folder. Shelf indexes the files where they already are.
+            </p>
+          </div>
+        ) : filteredEmpty ? (
           <div className="rounded-2xl border border-dashed border-line px-5 py-12 text-center">
             <p className="text-sm">No frames match these filters.</p>
             <button

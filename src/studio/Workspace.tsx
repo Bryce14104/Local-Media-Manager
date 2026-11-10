@@ -62,7 +62,8 @@ const INITIAL_TELEMETRY: Telemetry = {
 
 export function Workspace() {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [items, setItems] = useState<StudioItem[]>(() => createCatalog());
+  const desktop = desktopBridgeAvailable();
+  const [items, setItems] = useState<StudioItem[]>(() => (desktop ? [] : createCatalog()));
   const [query, setQuery] = useState("");
   const [aiSearch, setAiSearch] = useState(storedAiSearch);
   const [filters, setFilters] = useState<ActiveFilter[]>([]);
@@ -128,11 +129,8 @@ export function Workspace() {
         } else {
           setConceptsLive(false);
         }
-        if (media.length === 0) return;
-        setItems((current) => {
-          const merged = mergeItems(media.map(presentRecord), current);
-          return snapshot ? applyInsights(merged, snapshot) : merged;
-        });
+        const library = media.map(presentRecord);
+        setItems(snapshot ? applyInsights(library, snapshot) : library);
       })
       .catch(() => {
         if (!cancel) setConceptsLive(false);
@@ -1096,8 +1094,13 @@ function storedAiSearch(): boolean {
 
 function presentRecord(record: MediaRecord): StudioItem {
   const item = itemFromRecord(record);
-  if (!record.thumbnailPath || !desktopBridgeAvailable()) return item;
-  return withPreview(item, record.filePath, record.thumbnailPath, record.mediaKind);
+  if (!desktopBridgeAvailable()) return item;
+  if (record.thumbnailPath) return withPreview(item, record.filePath, record.thumbnailPath, record.mediaKind);
+  if (record.mediaKind === "image") {
+    const url = convertFileSrc(record.filePath);
+    return { ...item, previewUrl: url, inspectUrl: url };
+  }
+  return item;
 }
 
 function withPreview(item: StudioItem, filePath: string, thumbnailPath: string, kind: MediaKind): StudioItem {
