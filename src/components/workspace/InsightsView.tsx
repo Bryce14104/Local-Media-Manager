@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ConceptIndex } from "../../lib/types";
 import { presentConcepts, type CaptionChip, type InsightGroup } from "../../studio/concepts";
 import type { StudioItem } from "../../studio/types";
-import { frameBackground } from "../../studio/catalog";
 import { FrameStill } from "./FrameStill";
 
 type Props = {
@@ -105,15 +104,15 @@ export function InsightsView({
           <div className="min-w-0">
             <h1 className="text-sm font-medium tracking-wide">AI Insights</h1>
             <p className="text-[11px] text-mute">
-              {presented.bursts.length} collections · {presented.semantic.length} clusters · {presented.captions.length} captions
+              {presented.bursts.length} collections · {presented.people.length} people · {presented.captions.length} captions
             </p>
           </div>
           <label className="ml-auto w-full sm:w-72">
-            <span className="sr-only">Search captions and clusters</span>
+            <span className="sr-only">Search captions, people, and collections</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search captions and clusters"
+              placeholder="Search captions, people, and collections"
               className="w-full rounded-full border border-line bg-card px-3 py-1.5 text-sm outline-none placeholder:text-mute focus:border-teal"
             />
           </label>
@@ -123,8 +122,8 @@ export function InsightsView({
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
         {total === 0 ? (
           <EmptyState
-            title="No clusters yet"
-            body="Shelf writes burst groups, scene clusters, and caption tags on this machine after the local vision pass."
+            title="Nothing grouped yet"
+            body="Shelf groups short sequences, people, and caption tags on this machine after the local vision pass."
           />
         ) : visibleCount === 0 ? (
           <EmptyState title="No matches" body={`Nothing in the library is captioned with “${query.trim()}”.`} />
@@ -166,40 +165,6 @@ export function InsightsView({
                       <Stack items={group.items} />
                       <p className="mt-2 truncate text-sm">{group.label}</p>
                       <p className="truncate text-[11px] text-mute">{group.summary}</p>
-                    </button>
-                  ))}
-                </div>
-              </Section>
-            ) : null}
-
-            {filtered.semantic.length > 0 ? (
-              <Section title="Semantic clusters" hint="Automatic labels from the local model" count={filtered.semantic.length}>
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {filtered.semantic.map((group) => (
-                    <button
-                      key={group.id}
-                      type="button"
-                      data-cluster={group.raw}
-                      aria-pressed={focus?.type === "group" && focus.id === group.id}
-                      onClick={() => selectGroup(group.id)}
-                      className={`overflow-hidden rounded-2xl border text-left ${
-                        focus?.type === "group" && focus.id === group.id
-                          ? "border-teal bg-teal/5"
-                          : "border-line bg-card hover:border-mute"
-                      }`}
-                    >
-                      <div className="relative h-36">
-                        <FrameStill
-                          id={group.items[0].id}
-                          fileName={group.items[0].fileName}
-                          src={group.items[0].previewUrl}
-                        />
-                        <span className="absolute bottom-2 left-2 rounded-full bg-studio/80 px-2 py-0.5 text-sm">{group.label}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-2 px-3 py-2">
-                        <p className="truncate text-[11px] text-mute">{group.summary}</p>
-                        <MiniRow items={group.items.slice(0, 4)} />
-                      </div>
                     </button>
                   ))}
                 </div>
@@ -417,22 +382,6 @@ function Stack({ items }: { items: StudioItem[] }) {
         </div>
       ))}
     </div>
-  );
-}
-
-function MiniRow({ items }: { items: StudioItem[] }) {
-  return (
-    <span className="flex shrink-0">
-      {items.map((item, index) => (
-        <span
-          key={item.id}
-          className="h-6 w-6 overflow-hidden rounded-full border border-card"
-          style={{ marginLeft: index === 0 ? 0 : -6, background: frameBackground(item.id) }}
-        >
-          {item.previewUrl ? <FrameStill id={item.id} fileName="" src={item.previewUrl} /> : null}
-        </span>
-      ))}
-    </span>
   );
 }
 

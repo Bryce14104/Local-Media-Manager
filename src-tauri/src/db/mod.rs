@@ -635,6 +635,7 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
     Ok(())
 }
 
+#[derive(Clone)]
 pub struct VisionTarget {
     pub id: i64,
     pub file_path: String,
@@ -1032,13 +1033,12 @@ mod tests {
         assert_eq!(iceland.media_ids, vec![beach, also_beach]);
         assert_eq!(iceland.summary.as_deref(), Some("2 frames · 8 min"));
 
-        let semantic: Vec<_> = index
-            .clusters
-            .iter()
-            .filter(|cluster| cluster.kind == "semantic")
-            .map(|cluster| cluster.label.as_str())
-            .collect();
-        assert_eq!(semantic, vec!["Beach", "Dog", "Lighthouse"]);
+        assert!(
+            index
+                .clusters
+                .iter()
+                .all(|cluster| cluster.kind != "semantic")
+        );
         let people: Vec<_> = index
             .clusters
             .iter()

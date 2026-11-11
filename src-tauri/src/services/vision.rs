@@ -96,10 +96,10 @@ pub fn warm_vision() -> Result<(), VisionError> {
 }
 
 fn worker_threads() -> usize {
-    std::thread::available_parallelism()
+    let cores = std::thread::available_parallelism()
         .map(|count| count.get())
-        .unwrap_or(2)
-        .clamp(1, 8)
+        .unwrap_or(2);
+    if cores <= 2 { 1 } else { 2 }
 }
 
 #[derive(Clone, Debug)]
@@ -127,9 +127,22 @@ struct Heads<'a> {
 }
 
 struct Engine {
-    yunet: Session,
-    sface: Session,
-    mobilenet: Session,
+    threads: usize,
+    yunet: Option<Session>,
+    sface: Option<Session>,
+    mobilenet: Option<Session>,
+}
+
+struct PreparedFrame {
+    labels: Vec<(String, String, f32)>,
+    embedding: Vec<f32>,
+    needs_face: bool,
+}
+
+struct FaceJob {
+    target: VisionTarget,
+    labels: Vec<(String, String, f32)>,
+    embedding: Vec<f32>,
 }
 
 pub fn recognize_library<F>(library: &Library, mut progress: F) -> Result<(), VisionError>
@@ -159,11 +172,13 @@ where
             return Err(error);
         }
     };
+    let mut face_jobs = Vec::new();
     for (index, target) in pending.iter().enumerate() {
         progress(index, pending.len(), "Running ONNX on image pixels");
-        match analyze_frame(&mut engine, library, target) {
-            Ok(labels) => {
-                let names = labels
+        match prepare_frame(&mut engine, target) {
+            Ok(prepared) => {
+                let names = prepared
+                    .labels
                     .iter()
                     .map(|(_, label, _)| label.as_str())
                     .collect::<Vec<_>>()
@@ -173,12 +188,53 @@ where
                 } else {
                     eprintln!("shelf index: embedded {} -> {names}", target.file_path);
                 }
-                if let Err(error) = library.mark_vision(target.id) {
-                    eprintln!("shelf index: could not record vision for {}: {error}", target.file_path);
+                if prepared.needs_face {
+                    face_jobs.push(FaceJob {
+                        target: target.clone(),
+                        labels: prepared.labels,
+                        embedding: prepared.embedding,
+                    });
+                } else if let Err(error) = store_frame(library, target.id, &prepared.labels, &prepared.embedding) {
+                    eprintln!("shelf index: could not store {}: {error}", target.file_path);
                 }
             }
             Err(error) => {
                 eprintln!("shelf index: CRITICAL {} was not embedded: {error}", target.file_path);
+            }
+        }
+    }
+    engine.drop_tagger();
+    if !face_jobs.is_empty() {
+        let total = face_jobs.len();
+        progress(0, total, "Finding faces");
+        match engine.load_faces() {
+            Ok(()) => {
+                for (index, job) in face_jobs.iter().enumerate() {
+                    progress(index, total, "Finding faces");
+                    let mut labels = job.labels.clone();
+                    let mut embedding = job.embedding.clone();
+                    if let Some(image) = load_pixels(&job.target) {
+                        let resized = image::imageops::resize(&image, INPUT, INPUT, FilterType::Triangle);
+                        match read_faces(&mut engine, library, &job.target, &resized) {
+                            Ok(count) if count > 0 => note_person(&mut labels, &mut embedding),
+                            Ok(_) => {}
+                            Err(error) => {
+                                eprintln!("shelf index: faces failed for {}: {error}", job.target.file_path);
+                            }
+                        }
+                    }
+                    if let Err(error) = store_frame(library, job.target.id, &labels, &embedding) {
+                        eprintln!("shelf index: could not store {}: {error}", job.target.file_path);
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("shelf index: face models stayed unloaded: {error}");
+                for job in &face_jobs {
+                    if let Err(store_error) = store_frame(library, job.target.id, &job.labels, &job.embedding) {
+                        eprintln!("shelf index: could not store {}: {store_error}", job.target.file_path);
+                    }
+                }
             }
         }
     }
@@ -190,11 +246,7 @@ where
     Ok(())
 }
 
-fn analyze_frame(
-    engine: &mut Engine,
-    library: &Library,
-    target: &VisionTarget,
-) -> Result<Vec<(String, String, f32)>, VisionError> {
+fn prepare_frame(engine: &mut Engine, target: &VisionTarget) -> Result<PreparedFrame, VisionError> {
     let Some(image) = load_pixels(target) else {
         eprintln!("shelf index: CRITICAL no decodable pixels in {}", target.file_path);
         return Err(VisionError::Decode(target.file_path.clone()));
@@ -203,21 +255,8 @@ fn analyze_frame(
         "shelf index: decoding pixels ({}) {}",
         target.media_kind, target.file_path
     );
-    let _ = library.clear_file_vision(target.id);
-    let resized = image::imageops::resize(&image, INPUT, INPUT, FilterType::Triangle);
-    let face_count = match read_faces(engine, library, target, &resized) {
-        Ok(count) => count,
-        Err(error) => {
-            eprintln!("shelf index: faces failed for {}: {error}", target.file_path);
-            0
-        }
-    };
-    let mut concepts = vec![0.0; CONCEPTS.len()];
-    if face_count > 0 {
-        bump(&mut concepts, "person", 1.0);
-    }
-    let mut tags = scene_tags(&resized);
-    let classified = engine.classify(&resized)?;
+    let mut tags = scene_tags(&image);
+    let classified = engine.classify_adaptive(&image)?;
     tags.extend(classified.tags);
     if drone_camera(&camera_text(target)) {
         tags.push(Tag {
@@ -226,6 +265,7 @@ fn analyze_frame(
             score: 1.0,
         });
     }
+    let mut concepts = vec![0.0; CONCEPTS.len()];
     fold_tags(&mut concepts, &tags);
     for (index, score) in concepts.iter().copied().enumerate() {
         if score < CONCEPT_FLOOR {
@@ -246,14 +286,90 @@ fn analyze_frame(
         .into_iter()
         .map(|tag| (tag.kind.to_string(), tag.label, tag.score))
         .collect();
-    library.replace_labels(target.id, &labels)?;
-    library.upsert_embedding(target.id, &embedding)?;
+    let needs_face = might_contain_person(&image);
     eprintln!(
-        "shelf index: stored ONNX embedding for {} ({} floats)",
+        "shelf index: tagged {} ({} floats, faces {})",
         target.file_path,
-        embedding.len()
+        embedding.len(),
+        if needs_face { "queued" } else { "skipped" }
     );
-    Ok(labels)
+    Ok(PreparedFrame {
+        labels,
+        embedding,
+        needs_face,
+    })
+}
+
+fn store_frame(
+    library: &Library,
+    media_id: i64,
+    labels: &[(String, String, f32)],
+    embedding: &[f32],
+) -> Result<(), VisionError> {
+    let _ = library.clear_file_vision(media_id);
+    library.replace_labels(media_id, labels)?;
+    library.upsert_embedding(media_id, embedding)?;
+    library.mark_vision(media_id)?;
+    Ok(())
+}
+
+fn note_person(labels: &mut Vec<(String, String, f32)>, embedding: &mut [f32]) {
+    if !labels.iter().any(|(_, label, _)| label == "person") {
+        labels.push(("object".to_string(), "person".to_string(), 1.0));
+    }
+    let Some(index) = concept_index("person") else {
+        return;
+    };
+    let slot = crate::models::IMAGENET_DIM + index;
+    if slot < embedding.len() {
+        embedding[slot] = embedding[slot].max(1.0);
+    }
+}
+
+fn might_contain_person(image: &RgbImage) -> bool {
+    skin_ratio(image) >= 0.012
+}
+
+fn skin_ratio(image: &RgbImage) -> f32 {
+    let width = image.width();
+    let height = image.height();
+    if width == 0 || height == 0 {
+        return 0.0;
+    }
+    let step = (width.max(height) / 96).max(1);
+    let mut skin = 0.0;
+    let mut total = 0.0;
+    let mut y = 0;
+    while y < height {
+        let mut x = 0;
+        while x < width {
+            let pixel = image.get_pixel(x, y);
+            if is_skin(pixel[0] as f32, pixel[1] as f32, pixel[2] as f32) {
+                skin += 1.0;
+            }
+            total += 1.0;
+            x += step;
+        }
+        y += step;
+    }
+    if total == 0.0 { 0.0 } else { skin / total }
+}
+
+fn is_skin(red: f32, green: f32, blue: f32) -> bool {
+    let y = 0.299 * red + 0.587 * green + 0.114 * blue;
+    let cb = 128.0 - 0.168736 * red - 0.331264 * green + 0.5 * blue;
+    let cr = 128.0 + 0.5 * red - 0.418688 * green - 0.081312 * blue;
+    y > 80.0 && (77.0..135.0).contains(&cb) && (133.0..173.0).contains(&cr)
+}
+
+fn center_crop(image: &RgbImage) -> RgbImage {
+    let width = image.width().max(1);
+    let height = image.height().max(1);
+    let crop_width = ((width as f32) * 0.62).max(1.0) as u32;
+    let crop_height = ((height as f32) * 0.62).max(1.0) as u32;
+    let x = width.saturating_sub(crop_width) / 2;
+    let y = height.saturating_sub(crop_height) / 2;
+    image::imageops::crop_imm(image, x, y, crop_width.min(width), crop_height.min(height)).to_image()
 }
 
 pub fn search_embeddings(library: &Library, query: &str) -> Result<Vec<AiSearchHit>, VisionError> {
@@ -275,8 +391,6 @@ pub fn search_embeddings(library: &Library, query: &str) -> Result<Vec<AiSearchH
             );
             continue;
         }
-        let score = cosine(embedding, &query_vec);
-        eprintln!("shelf search: score {score:.4} {path}");
         let Some(score) = embedding_match(embedding, &query_vec) else {
             continue;
         };
@@ -371,15 +485,34 @@ impl Engine {
     fn load(threads: usize) -> Result<Self, VisionError> {
         let environment = environment()?;
         Ok(Self {
-            yunet: session(environment, "yunet.onnx", threads)?,
-            sface: session(environment, "sface.onnx", threads)?,
-            mobilenet: session(environment, "mobilenet.onnx", threads)?,
+            threads,
+            yunet: None,
+            sface: None,
+            mobilenet: Some(session(environment, "mobilenet.onnx", threads)?),
         })
+    }
+
+    fn drop_tagger(&mut self) {
+        self.mobilenet = None;
+    }
+
+    fn load_faces(&mut self) -> Result<(), VisionError> {
+        if self.yunet.is_some() && self.sface.is_some() {
+            return Ok(());
+        }
+        let environment = environment()?;
+        self.yunet = Some(session(environment, "yunet.onnx", self.threads)?);
+        self.sface = Some(session(environment, "sface.onnx", self.threads)?);
+        Ok(())
     }
 
     fn detect(&mut self, image: &RgbImage) -> Result<Vec<DetectedFace>, VisionError> {
         let tensor = Tensor::from_array(nchw(image, true, |value, _channel| value))?;
-        let outputs = self.yunet.run(ort::inputs!["input" => tensor])?;
+        let yunet = self
+            .yunet
+            .as_mut()
+            .ok_or_else(|| VisionError::MissingModel("yunet.onnx".to_string()))?;
+        let outputs = yunet.run(ort::inputs!["input" => tensor])?;
         let names = [
             "cls_8", "cls_16", "cls_32", "obj_8", "obj_16", "obj_32", "bbox_8", "bbox_16", "bbox_32", "kps_8",
             "kps_16", "kps_32",
@@ -400,9 +533,27 @@ impl Engine {
 
     fn embed(&mut self, face: &RgbImage) -> Result<Vec<f32>, VisionError> {
         let tensor = Tensor::from_array(nchw(face, false, |value, _channel| value))?;
-        let outputs = self.sface.run(ort::inputs!["data" => tensor])?;
+        let sface = self
+            .sface
+            .as_mut()
+            .ok_or_else(|| VisionError::MissingModel("sface.onnx".to_string()))?;
+        let outputs = sface.run(ort::inputs!["data" => tensor])?;
         let (_shape, data) = outputs["fc1"].try_extract_tensor::<f32>()?;
         Ok(data.to_vec())
+    }
+
+    fn classify_adaptive(&mut self, image: &RgbImage) -> Result<Classified, VisionError> {
+        let mut classified = self.classify(image)?;
+        let top = classified.probabilities.iter().copied().fold(0.0, f32::max);
+        if top >= 0.35 || image.width() < 32 || image.height() < 32 {
+            return Ok(classified);
+        }
+        let zoomed = self.classify(&center_crop(image))?;
+        for (slot, probability) in classified.probabilities.iter_mut().zip(&zoomed.probabilities) {
+            *slot = (*slot).max(*probability);
+        }
+        classified.tags = tags_from_probabilities(&classified.probabilities);
+        Ok(classified)
     }
 
     fn classify(&mut self, image: &RgbImage) -> Result<Classified, VisionError> {
@@ -411,7 +562,11 @@ impl Engine {
             (value / 255.0 - IMAGENET_MEAN[channel]) / IMAGENET_STD[channel]
         }))?;
         let started = std::time::Instant::now();
-        let outputs = self.mobilenet.run(ort::inputs!["input" => tensor])?;
+        let mobilenet = self
+            .mobilenet
+            .as_mut()
+            .ok_or_else(|| VisionError::MissingModel("mobilenet.onnx".to_string()))?;
+        let outputs = mobilenet.run(ort::inputs!["input" => tensor])?;
         let (_shape, data) = outputs["output"].try_extract_tensor::<f32>()?;
         let probabilities = probabilities_from_logits(data);
         eprintln!(
@@ -1274,6 +1429,29 @@ mod tests {
     }
 
     #[test]
+    fn open_landscape_skips_faces_and_a_portrait_does_not() {
+        let mut water = RgbImage::new(80, 48);
+        for pixel in water.pixels_mut() {
+            *pixel = Rgb([60, 140, 210]);
+        }
+        assert!(
+            !might_contain_person(&water),
+            "skin ratio {}",
+            skin_ratio(&water)
+        );
+
+        let mut portrait = RgbImage::new(80, 48);
+        for pixel in portrait.pixels_mut() {
+            *pixel = Rgb([214, 164, 132]);
+        }
+        assert!(
+            might_contain_person(&portrait),
+            "skin ratio {}",
+            skin_ratio(&portrait)
+        );
+    }
+
+    #[test]
     fn pixel_colors_tag_beach_water_sunset_and_lighthouse() {
         let mut shore = RgbImage::new(80, 80);
         for y in 0..48 {
@@ -1344,6 +1522,7 @@ mod tests {
     #[test]
     fn models_run_on_a_plain_frame() {
         let mut engine = Engine::load(2).expect("models");
+        engine.load_faces().expect("faces");
         let frame = RgbImage::from_pixel(64, 48, Rgb([20, 40, 80]));
         let resized = image::imageops::resize(&frame, INPUT, INPUT, FilterType::Triangle);
         let faces = engine.detect(&resized).expect("yunet");

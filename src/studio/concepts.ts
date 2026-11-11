@@ -56,9 +56,6 @@ function conceptsFromIndex(items: StudioItem[], index: ConceptIndex): PresentedC
     const summary = cluster.summary?.trim() || frameSummary(members.length);
     if (cluster.kind === "burst") {
       bursts.push(group("burst", cluster.label, summary, cluster.label, null, null, members));
-    } else if (cluster.kind === "semantic") {
-      const raw = cluster.label.trim().toLowerCase();
-      semantic.push(group("semantic", cluster.label, summary, raw, null, null, members));
     } else if (cluster.kind === "person") {
       const personId = cluster.sourceId == null ? null : `person-${cluster.sourceId}`;
       const named = cluster.label.trim() && cluster.label.trim().toLowerCase() !== "unnamed" ? cluster.label.trim() : null;
@@ -97,7 +94,7 @@ function chipsFromCaptions(index: ConceptIndex, byMedia: Map<number, StudioItem>
 function deriveConcepts(items: StudioItem[]): PresentedConcepts {
   return {
     bursts: burstGroups(items),
-    semantic: semanticGroups(items),
+    semantic: [],
     people: peopleGroups(items),
     captions: captionChips(items),
   };
@@ -139,24 +136,6 @@ function burstGroups(items: StudioItem[]): InsightGroup[] {
   return groups.sort(
     (a, b) => captureMillis(b.items[0].capturedAt) - captureMillis(a.items[0].capturedAt) || a.label.localeCompare(b.label),
   );
-}
-
-function semanticGroups(items: StudioItem[]): InsightGroup[] {
-  const grouped = new Map<string, StudioItem[]>();
-  for (const item of items) {
-    const seen = new Set<string>();
-    for (const subject of item.subjects) {
-      const raw = subject.label.trim().toLowerCase();
-      if (!raw || raw === "person" || seen.has(raw)) continue;
-      seen.add(raw);
-      const entry: StudioItem[] = grouped.get(raw) ?? [];
-      entry.push(item);
-      grouped.set(raw, entry);
-    }
-  }
-  return [...grouped.entries()]
-    .map(([raw, entry]) => group("semantic", titleCase(raw), frameSummary(entry.length), raw, null, null, entry))
-    .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label));
 }
 
 function peopleGroups(items: StudioItem[]): InsightGroup[] {

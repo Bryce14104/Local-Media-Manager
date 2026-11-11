@@ -1,4 +1,4 @@
-//! Burst groups, semantic clusters, and caption tags.
+//! Burst groups, people, and caption tags.
 //!
 //! `clusters`, `cluster_members`, and `media_captions` are rebuilt from the
 //! faces and subject tags already stored for this library. The AI Insights
@@ -31,7 +31,6 @@ struct CaptionRow {
 
 pub(super) fn write(conn: &mut Connection) -> Result<(), DbError> {
     let mut drafts = burst_drafts(conn)?;
-    drafts.extend(semantic_drafts(conn)?);
     drafts.extend(person_drafts(conn)?);
     let captions = caption_rows(conn)?;
     let now = super::unix_now();
@@ -202,58 +201,6 @@ struct Shot {
     folder: String,
     place: String,
     captured_at: i64,
-}
-
-fn semantic_drafts(conn: &Connection) -> Result<Vec<Draft>, DbError> {
-    let mut stmt = conn.prepare(
-        "SELECT media_id, label, score FROM media_labels ORDER BY score DESC, media_id ASC",
-    )?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, f32>(2)?,
-            ))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let mut grouped: HashMap<String, Vec<(i64, f32)>> = HashMap::new();
-    for (media_id, label, score) in rows {
-        let key = label.trim().to_lowercase();
-        if key.is_empty() || key == "person" {
-            continue;
-        }
-        let entry = grouped.entry(key).or_default();
-        if entry.iter().any(|(id, _)| *id == media_id) {
-            continue;
-        }
-        entry.push((media_id, score));
-    }
-
-    let mut drafts: Vec<Draft> = grouped
-        .into_iter()
-        .map(|(key, members)| {
-            let score = members.iter().map(|(_, value)| *value).sum::<f32>() / members.len() as f32;
-            Draft {
-                kind: "semantic",
-                label: title_case(&key),
-                summary: frame_summary(members.len()),
-                score,
-                source_id: None,
-                members,
-            }
-        })
-        .collect();
-    drafts.sort_by(|left, right| {
-        right
-            .members
-            .len()
-            .cmp(&left.members.len())
-            .then(right.score.total_cmp(&left.score))
-            .then_with(|| left.label.cmp(&right.label))
-    });
-    Ok(drafts)
 }
 
 fn person_drafts(conn: &Connection) -> Result<Vec<Draft>, DbError> {
