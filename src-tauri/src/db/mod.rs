@@ -553,6 +553,10 @@ fn delete_owned_thumbnail(path: Option<&str>) {
         .is_some_and(|name| name == "thumbnails");
     if owned {
         let _ = std::fs::remove_file(file);
+        if let Some(stem) = file.file_stem() {
+            let proxy = file.with_file_name(format!("{}.1080.jpg", stem.to_string_lossy()));
+            let _ = std::fs::remove_file(proxy);
+        }
     }
 }
 

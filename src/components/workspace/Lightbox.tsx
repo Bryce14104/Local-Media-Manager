@@ -1,23 +1,30 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { formatTimestamp } from "../../lib/format";
 import type { StudioItem } from "../../studio/types";
-import { FrameStill } from "./FrameStill";
+import { ProgressiveMedia } from "./ProgressiveMedia";
 import { Stars } from "./Stars";
 
 type LightboxProps = {
   item: StudioItem;
+  before: StudioItem | null;
+  after: StudioItem | null;
   index: number;
   count: number;
-  direction: "open" | "next" | "prev";
   onClose: () => void;
   onPrev: () => void;
   onNext: () => void;
   onRate: (rating: number | null) => void;
 };
 
-export function Lightbox({ item, index, count, direction, onClose, onPrev, onNext, onRate }: LightboxProps) {
+export function Lightbox({ item, before, after, index, count, onClose, onPrev, onNext, onRate }: LightboxProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const dragX = useRef<number | null>(null);
+  const wheel = useRef({ at: 0, carry: 0 });
+  const onNextRef = useRef(onNext);
+  const onPrevRef = useRef(onPrev);
+  onNextRef.current = onNext;
+  onPrevRef.current = onPrev;
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
@@ -27,6 +34,44 @@ export function Lightbox({ item, index, count, direction, onClose, onPrev, onNex
   useEffect(() => {
     setNatural(null);
   }, [item.id]);
+
+  useEffect(() => {
+    const urls = [before, after].flatMap((neighbor) =>
+      neighbor ? [neighbor.proxyUrl ?? neighbor.previewUrl ?? null] : [],
+    );
+    const images = urls.filter((url): url is string => Boolean(url)).map((url) => {
+      const img = new Image();
+      img.decoding = "async";
+      img.src = url;
+      return img;
+    });
+    return () => {
+      for (const img of images) img.src = "";
+    };
+  }, [before, after]);
+
+  useEffect(() => {
+    const node = rootRef.current;
+    if (!node) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+      if (delta === 0) return;
+      const now = performance.now();
+      if (now - wheel.current.at > 180) wheel.current.carry = 0;
+      wheel.current.at = now;
+      wheel.current.carry += delta;
+      if (wheel.current.carry >= 48) {
+        wheel.current.carry = 0;
+        onNextRef.current();
+      } else if (wheel.current.carry <= -48) {
+        wheel.current.carry = 0;
+        onPrevRef.current();
+      }
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return () => node.removeEventListener("wheel", onWheel);
+  }, []);
 
   const width = item.width ?? natural?.width ?? null;
   const height = item.height ?? natural?.height ?? null;
@@ -49,6 +94,7 @@ export function Lightbox({ item, index, count, direction, onClose, onPrev, onNex
 
   return (
     <div
+      ref={rootRef}
       role="dialog"
       aria-modal="true"
       aria-label={item.fileName}
@@ -59,7 +105,7 @@ export function Lightbox({ item, index, count, direction, onClose, onPrev, onNex
         <p className="font-mono text-xs tracking-wide text-mute">
           {index + 1} / {count}
         </p>
-        <p className="hidden font-mono text-[10px] tracking-[0.16em] text-white/35 sm:block">arrows move · esc closes</p>
+        <p className="hidden font-mono text-[10px] tracking-[0.16em] text-white/35 sm:block">arrows or scroll · esc closes</p>
         <button
           ref={closeRef}
           type="button"
@@ -91,17 +137,19 @@ export function Lightbox({ item, index, count, direction, onClose, onPrev, onNex
         </button>
 
         <div
-          key={`${item.id}-${direction}`}
-          className={`flex h-full items-center justify-center px-3 md:px-20 ${
-            direction === "next" ? "lightbox-next" : direction === "prev" ? "lightbox-prev" : "lightbox-open"
-          }`}
+          className="flex h-full items-center justify-center px-3 md:px-20"
           onPointerDown={onPointerDown}
           onPointerUp={onPointerUp}
           onPointerCancel={() => {
             dragX.current = null;
           }}
         >
-          <ViewerStill item={item} onSize={(width, height) => setNatural({ width, height })} />
+          <ProgressiveMedia
+            item={item}
+            fit="contain"
+            playback="play"
+            onSize={(nextWidth, nextHeight) => setNatural({ width: nextWidth, height: nextHeight })}
+          />
         </div>
       </div>
 
@@ -141,77 +189,6 @@ export function Lightbox({ item, index, count, direction, onClose, onPrev, onNex
           </div>
         </div>
       </footer>
-    </div>
-  );
-}
-
-function ViewerStill({
-  item,
-  onSize,
-}: {
-  item: StudioItem;
-  onSize: (width: number, height: number) => void;
-}) {
-  const full = item.inspectUrl ?? null;
-  const preview = item.previewUrl ?? null;
-  const same = full != null && full === preview;
-  const [fullReady, setFullReady] = useState(false);
-  const [fullFailed, setFullFailed] = useState(false);
-
-  useEffect(() => {
-    setFullReady(false);
-    setFullFailed(false);
-  }, [item.id, full]);
-
-  if (item.format === "video" && full) {
-    return (
-      <video
-        key={full}
-        src={full}
-        poster={preview ?? undefined}
-        controls
-        className="max-h-full max-w-full rounded-md"
-        onLoadedMetadata={(event) => onSize(event.currentTarget.videoWidth, event.currentTarget.videoHeight)}
-      />
-    );
-  }
-
-  const showFull = Boolean(full) && !same && !fullFailed;
-  const base = preview ?? (full && !fullFailed ? full : null);
-  if (!base) {
-    return (
-      <div className="h-[70%] w-full max-w-5xl overflow-hidden rounded-lg">
-        <FrameStill id={item.id} fileName={item.fileName} src={null} fit="contain" />
-      </div>
-    );
-  }
-
-  return (
-    <div className="relative flex h-full w-full items-center justify-center">
-      <img
-        src={base}
-        alt={showFull ? "" : item.fileName}
-        className={`max-h-full max-w-full rounded-md object-contain shadow-[0_24px_80px_rgba(0,0,0,0.45)] transition-opacity duration-300 ${
-          showFull && fullReady ? "opacity-0" : "opacity-100"
-        }`}
-        onLoad={(event) => {
-          if (!showFull || !fullReady) onSize(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight);
-        }}
-      />
-      {showFull && full ? (
-        <img
-          src={full}
-          alt={item.fileName}
-          className={`absolute max-h-full max-w-full rounded-md object-contain shadow-[0_24px_80px_rgba(0,0,0,0.45)] transition-opacity duration-500 ${
-            fullReady ? "opacity-100" : "opacity-0"
-          }`}
-          onLoad={(event) => {
-            setFullReady(true);
-            onSize(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight);
-          }}
-          onError={() => setFullFailed(true)}
-        />
-      ) : null}
     </div>
   );
 }

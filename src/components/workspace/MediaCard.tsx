@@ -53,8 +53,9 @@ export function MediaCard({
         }}
         className="block w-full text-left"
       >
-        <div className={roomy ? "aspect-[4/3]" : "aspect-square"}>
+        <div className={`relative ${roomy ? "aspect-[4/3]" : "aspect-square"}`}>
           <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
+          {item.format === "video" ? <PlayMark /> : null}
         </div>
         {showMeta ? (
           <div className={roomy ? "space-y-1 px-3 py-3" : "space-y-0.5 px-2 py-2"}>
@@ -118,6 +119,16 @@ export function MediaCard({
         </div>
       </div>
     </article>
+  );
+}
+
+function PlayMark() {
+  return (
+    <span className="pointer-events-none absolute bottom-2 right-2 z-10 grid h-7 w-7 place-items-center rounded-full bg-black/60 text-white shadow-sm">
+      <svg width="10" height="12" viewBox="0 0 10 12" aria-hidden>
+        <path d="M1.2 1.1v9.8L8.8 6 1.2 1.1Z" fill="currentColor" />
+      </svg>
+    </span>
   );
 }
 

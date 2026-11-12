@@ -54,6 +54,7 @@ export type StudioItem = {
   geotagged: boolean;
   sourcePath?: string | null;
   previewUrl?: string | null;
+  proxyUrl?: string | null;
   inspectUrl?: string | null;
   faces: FaceMark[];
   subjects: SubjectTag[];

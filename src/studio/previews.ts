@@ -41,6 +41,7 @@ export async function itemsFromFiles(
       hash: fakeHash(id),
       histogram: histogram(id),
       previewUrl: meta.previewUrl,
+      proxyUrl: meta.proxyUrl,
       inspectUrl: meta.inspectUrl,
       sourcePath: null,
       faces: [],
@@ -62,11 +63,14 @@ async function readFileMeta(
   capturedAt: string | null;
   camera: string | null;
   previewUrl: string | null;
+  proxyUrl: string | null;
   inspectUrl: string | null;
   gps: { latitude: number; longitude: number } | null;
 }> {
   if (format === "video") {
-    return { capturedAt: null, camera: null, previewUrl: null, inspectUrl: null, gps: null };
+    const inspectUrl = URL.createObjectURL(file);
+    const poster = await posterFromVideo(inspectUrl);
+    return { capturedAt: null, camera: null, previewUrl: poster, proxyUrl: poster, inspectUrl, gps: null };
   }
   const bytes = new Uint8Array(await file.slice(0, Math.min(file.size, 32 * 1024 * 1024)).arrayBuffer());
   const capturedAt = findCapture(bytes);
@@ -74,16 +78,18 @@ async function readFileMeta(
   const gps = readGps(bytes);
   if (format === "jpg" && STILL.has(extensionOf(file.name))) {
     const inspectUrl = URL.createObjectURL(file);
-    const previewUrl = await downscale(file);
-    return { capturedAt, camera, previewUrl: previewUrl ?? inspectUrl, inspectUrl, gps };
+    const previewUrl = await scaledUrl(file, 480, 0.72);
+    const proxyUrl = (await scaledUrl(file, 1920, 0.82)) ?? previewUrl;
+    return { capturedAt, camera, previewUrl: previewUrl ?? inspectUrl, proxyUrl: proxyUrl ?? inspectUrl, inspectUrl, gps };
   }
   const embedded = largestJpeg(bytes);
-  if (!embedded) return { capturedAt, camera, previewUrl: null, inspectUrl: null, gps };
+  if (!embedded) return { capturedAt, camera, previewUrl: null, proxyUrl: null, inspectUrl: null, gps };
   const copy = embedded.slice();
   const blob = new Blob([copy.buffer], { type: "image/jpeg" });
   const inspectUrl = URL.createObjectURL(blob);
-  const previewUrl = (await downscale(blob)) ?? inspectUrl;
-  return { capturedAt, camera, previewUrl, inspectUrl, gps: gps ?? readGps(embedded) };
+  const previewUrl = (await scaledUrl(blob, 480, 0.72)) ?? inspectUrl;
+  const proxyUrl = (await scaledUrl(blob, 1920, 0.82)) ?? previewUrl;
+  return { capturedAt, camera, previewUrl, proxyUrl, inspectUrl, gps: gps ?? readGps(embedded) };
 }
 
 export function readGps(bytes: Uint8Array): { latitude: number; longitude: number } | null {
@@ -295,24 +301,82 @@ function largestJpeg(bytes: Uint8Array): Uint8Array | null {
   return best;
 }
 
-async function downscale(source: Blob): Promise<string | null> {
+async function scaledUrl(source: Blob, edge: number, quality: number): Promise<string | null> {
   try {
-    const bitmap = await createImageBitmap(source, { resizeWidth: 480, resizeQuality: "low" });
+    const bitmap = await createImageBitmap(source);
+    const scale = Math.min(1, edge / Math.max(bitmap.width, bitmap.height, 1));
     const canvas = document.createElement("canvas");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
     const context = canvas.getContext("2d");
     if (!context) {
       bitmap.close();
       return null;
     }
-    context.drawImage(bitmap, 0, 0);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     bitmap.close();
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.72));
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
     return blob ? URL.createObjectURL(blob) : null;
   } catch {
     return null;
   }
+}
+
+function posterFromVideo(url: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const video = document.createElement("video");
+    video.preload = "auto";
+    video.muted = true;
+    video.playsInline = true;
+    video.src = url;
+    let settled = false;
+    const finish = (value: string | null) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      video.onloadeddata = null;
+      video.onseeked = null;
+      video.onerror = null;
+      video.removeAttribute("src");
+      video.load();
+      resolve(value);
+    };
+    const timer = window.setTimeout(() => finish(null), 2500);
+    const draw = () => {
+      const width = video.videoWidth || 0;
+      const height = video.videoHeight || 0;
+      if (width < 2 || height < 2) {
+        finish(null);
+        return;
+      }
+      const scale = Math.min(1, 1920 / Math.max(width, height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      const context = canvas.getContext("2d");
+      if (!context) {
+        finish(null);
+        return;
+      }
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => finish(blob ? URL.createObjectURL(blob) : null), "image/jpeg", 0.82);
+    };
+    video.onerror = () => finish(null);
+    video.onloadeddata = () => {
+      const duration = Number.isFinite(video.duration) ? video.duration : 0;
+      const seek = duration > 0.5 ? Math.min(0.4, duration * 0.1) : 0;
+      if (seek <= 0) {
+        draw();
+        return;
+      }
+      video.onseeked = draw;
+      try {
+        video.currentTime = seek;
+      } catch {
+        draw();
+      }
+    };
+  });
 }
 
 function extensionOf(name: string): string {

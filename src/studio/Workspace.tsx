@@ -78,7 +78,8 @@ export function Workspace() {
   const [modal, setModal] = useState<"add" | "export" | "preferences" | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [lightboxId, setLightboxId] = useState<string | null>(null);
-  const [lightboxMotion, setLightboxMotion] = useState<"open" | "next" | "prev">("open");
+  const lightboxIdRef = useRef<string | null>(null);
+  lightboxIdRef.current = lightboxId;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const anchorRef = useRef<string | null>(null);
   const jobToken = useRef(0);
@@ -106,7 +107,8 @@ export function Workspace() {
   const palette = useMemo(() => suggestions(query, items, aiSearch), [query, items, aiSearch]);
   const primary = items.find((item) => item.id === primaryId) ?? null;
   const lightboxPool = visible.some((item) => item.id === lightboxId) ? visible : items;
-  const lightboxItem = lightboxPool.find((item) => item.id === lightboxId) ?? null;
+  const lightboxIndex = lightboxPool.findIndex((item) => item.id === lightboxId);
+  const lightboxItem = lightboxIndex >= 0 ? (lightboxPool[lightboxIndex] ?? null) : null;
   const comparePair: [StudioItem | null, StudioItem | null] = [
     items.find((item) => item.id === selectedIds[0]) ?? null,
     items.find((item) => item.id === selectedIds[1]) ?? null,
@@ -268,10 +270,10 @@ export function Workspace() {
       }
       if (typing || modal || confirmDelete) return;
       if (lightboxId) {
-        if (event.key === "ArrowRight") {
+        if (event.key === "ArrowRight" || event.key === "ArrowDown") {
           event.preventDefault();
           stepLightbox(1);
-        } else if (event.key === "ArrowLeft") {
+        } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
           event.preventDefault();
           stepLightbox(-1);
         } else if (/^[1-5]$/.test(event.key)) {
@@ -554,13 +556,14 @@ export function Workspace() {
     setPrimaryId(id);
     anchorRef.current = id;
     setSelectedIds([id]);
-    setLightboxMotion("open");
+    lightboxIdRef.current = id;
     setLightboxId(id);
   }
 
   function closeLightbox() {
     const id = lightboxId;
     if (!id) return;
+    lightboxIdRef.current = null;
     setLightboxId(null);
     requestAnimationFrame(() => {
       const card = document.getElementById(`frame-${id}`);
@@ -570,11 +573,12 @@ export function Workspace() {
   }
 
   function stepLightbox(delta: number) {
-    const pool = visible.some((item) => item.id === lightboxId) ? visible : items;
-    const index = pool.findIndex((item) => item.id === lightboxId);
+    const id = lightboxIdRef.current;
+    const pool = visible.some((item) => item.id === id) ? visible : items;
+    const index = pool.findIndex((item) => item.id === id);
     const next = pool[index + delta];
     if (!next) return;
-    setLightboxMotion(delta > 0 ? "next" : "prev");
+    lightboxIdRef.current = next.id;
     setLightboxId(next.id);
     setPrimaryId(next.id);
     anchorRef.current = next.id;
@@ -1057,9 +1061,10 @@ export function Workspace() {
       {lightboxItem ? (
         <Lightbox
           item={lightboxItem}
-          index={Math.max(0, lightboxPool.findIndex((item) => item.id === lightboxItem.id))}
+          before={lightboxIndex > 0 ? (lightboxPool[lightboxIndex - 1] ?? null) : null}
+          after={lightboxPool[lightboxIndex + 1] ?? null}
+          index={Math.max(0, lightboxIndex)}
           count={lightboxPool.length}
-          direction={lightboxMotion}
           onClose={closeLightbox}
           onPrev={() => stepLightbox(-1)}
           onNext={() => stepLightbox(1)}
@@ -1100,11 +1105,19 @@ function presentRecord(record: MediaRecord): StudioItem {
     const url = convertFileSrc(record.filePath);
     return { ...item, previewUrl: url, inspectUrl: url };
   }
+  if (record.mediaKind === "video") {
+    return { ...item, inspectUrl: convertFileSrc(record.filePath) };
+  }
   return item;
+}
+
+function proxySibling(thumbnailPath: string): string {
+  return thumbnailPath.replace(/\.jpe?g$/i, ".1080.jpg");
 }
 
 function withPreview(item: StudioItem, filePath: string, thumbnailPath: string, kind: MediaKind): StudioItem {
   const previewUrl = convertFileSrc(thumbnailPath);
-  const inspectUrl = kind === "image" ? convertFileSrc(filePath) : previewUrl;
-  return { ...item, previewUrl, inspectUrl };
+  const proxyUrl = convertFileSrc(proxySibling(thumbnailPath));
+  const inspectUrl = kind === "image" || kind === "video" ? convertFileSrc(filePath) : proxyUrl;
+  return { ...item, previewUrl, proxyUrl, inspectUrl };
 }

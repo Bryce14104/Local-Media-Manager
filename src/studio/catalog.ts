@@ -292,6 +292,13 @@ function seedItem(row: Seed, id: string): StudioItem {
     hash: fakeHash(id),
     histogram: histogram(id),
     sourcePath: null,
+    ...(format === "video"
+      ? {
+          previewUrl: "/media/sample-480.jpg",
+          proxyUrl: "/media/sample-1080.jpg",
+          inspectUrl: "/media/sample.mp4",
+        }
+      : {}),
     geotagged: true,
     faces: [],
     subjects: [],

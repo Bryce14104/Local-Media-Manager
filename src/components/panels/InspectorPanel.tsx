@@ -1,5 +1,5 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
-import { FrameStill } from "../workspace/FrameStill";
+import { ProgressiveMedia } from "../workspace/ProgressiveMedia";
 import { formatLatitude, formatLongitude } from "../../studio/geo";
 import { formatLabel, isoFill, shutterFill } from "../../studio/query";
 import type { PanelMode, StudioItem } from "../../studio/types";
@@ -57,12 +57,7 @@ export function InspectorPanel({
         item ? (
           <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
             <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-studio">
-              <FrameStill
-                id={item.id}
-                fileName={item.fileName}
-                src={item.inspectUrl ?? item.previewUrl}
-                fit="contain"
-              />
+              <ProgressiveMedia item={item} fit="contain" playback="hold" />
             </div>
             <Stars rating={item.rating} onChange={onRate} />
             <div className="flex flex-wrap gap-1.5">

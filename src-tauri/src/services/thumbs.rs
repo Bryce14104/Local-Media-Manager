@@ -1,8 +1,9 @@
-//! Low-resolution JPEG previews.
+//! Grid posters and 1080p proxies.
 //!
-//! JPEG and PNG files are decoded and scaled. RAW files are not demosaiced:
-//! the largest embedded JPEG preview is scaled instead. Work stays off the UI
-//! thread; see `generate_missing_thumbnails`.
+//! Stills and RAW embedded JPEGs are scaled in-process. Video posters come
+//! from one ffmpeg frame, then the same scaler writes a 480px grid JPEG and a
+//! long-edge 1920 JPEG the lightbox can show before the original file decodes.
+//! Work stays off the UI thread; see `generate_missing_thumbnails`.
 
 use crate::db::Library;
 use crate::models::{MediaKind, ThumbnailReady};
@@ -11,10 +12,15 @@ use image::{DynamicImage, ImageFormat};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 const MAX_EDGE: u32 = 480;
+const PROXY_EDGE: u32 = 1920;
 const MAX_SOURCE: u64 = 80 * 1024 * 1024;
 const MIN_EMBEDDED: usize = 2 * 1024;
+static FRAME_SEQ: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
 pub enum ThumbError {
@@ -55,16 +61,17 @@ where
         return Vec::new();
     }
 
+    let ffmpeg = ffmpeg_available();
     let pending: Vec<_> = media
         .into_iter()
         .filter(|record| {
-            if record.media_kind == MediaKind::Video || record.content_hash.is_none() {
+            if record.content_hash.is_none() {
                 return false;
             }
-            !record
-                .thumbnail_path
-                .as_deref()
-                .is_some_and(|path| Path::new(path).is_file())
+            if record.media_kind == MediaKind::Video && !ffmpeg {
+                return false;
+            }
+            preview_incomplete(record.thumbnail_path.as_deref())
         })
         .collect();
     let total = pending.len();
@@ -101,13 +108,37 @@ where
     ready
 }
 
+pub fn proxy_path(thumbnail: &Path) -> PathBuf {
+    let stem = thumbnail.file_stem().unwrap_or_default().to_string_lossy();
+    thumbnail.with_file_name(format!("{stem}.1080.jpg"))
+}
+
 pub fn write_thumbnail(source: &Path, destination: &Path) -> Result<(), ThumbError> {
     let image = decode_preview(source)?;
-    let thumb = image.resize(MAX_EDGE, MAX_EDGE, FilterType::Triangle);
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|err| ThumbError::Io(err.to_string()))?;
     }
-    thumb
+    save_fitted(&image, PROXY_EDGE, &proxy_path(destination))?;
+    save_fitted(&image, MAX_EDGE, destination)
+}
+
+fn preview_incomplete(thumbnail: Option<&str>) -> bool {
+    let Some(path) = thumbnail else {
+        return true;
+    };
+    let thumb = Path::new(path);
+    !thumb.is_file() || !proxy_path(thumb).is_file()
+}
+
+fn save_fitted(image: &DynamicImage, edge: u32, destination: &Path) -> Result<(), ThumbError> {
+    if image.width() <= edge && image.height() <= edge {
+        return save_jpeg(image, destination);
+    }
+    save_jpeg(&image.resize(edge, edge, FilterType::Triangle), destination)
+}
+
+fn save_jpeg(image: &DynamicImage, destination: &Path) -> Result<(), ThumbError> {
+    image
         .save_with_format(destination, ImageFormat::Jpeg)
         .map_err(|err| ThumbError::Decode(err.to_string()))
 }
@@ -118,11 +149,95 @@ pub fn decode_preview(source: &Path) -> Result<DynamicImage, ThumbError> {
         .and_then(|ext| ext.to_str())
         .unwrap_or("")
         .to_ascii_lowercase();
+    if is_video(&kind) {
+        return grab_video_frame(source);
+    }
     if matches!(kind.as_str(), "jpg" | "jpeg" | "png" | "gif" | "bmp") {
         return image::open(source).map_err(|err| ThumbError::Decode(err.to_string()));
     }
     let embedded = extract_largest_jpeg(source).ok_or(ThumbError::Empty)?;
     image::load_from_memory(&embedded).map_err(|err| ThumbError::Decode(err.to_string()))
+}
+
+fn is_video(kind: &str) -> bool {
+    matches!(kind, "mp4" | "mov" | "m4v" | "mkv" | "avi" | "webm")
+}
+
+fn ffmpeg_available() -> bool {
+    static READY: OnceLock<bool> = OnceLock::new();
+    *READY.get_or_init(|| {
+        let ok = Command::new("ffmpeg")
+            .arg("-version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if !ok {
+            eprintln!("shelf index: install ffmpeg to build video posters");
+        }
+        ok
+    })
+}
+
+fn grab_video_frame(source: &Path) -> Result<DynamicImage, ThumbError> {
+    if !ffmpeg_available() {
+        return Err(ThumbError::Decode("ffmpeg is not installed".into()));
+    }
+    let out = std::env::temp_dir().join(format!(
+        "shelf-frame-{}-{}.jpg",
+        std::process::id(),
+        FRAME_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    for seek in ["0.4", "0"] {
+        if grab_at(source, seek, &out) {
+            let image = image::open(&out).map_err(|err| ThumbError::Decode(err.to_string()));
+            let _ = std::fs::remove_file(&out);
+            return image;
+        }
+    }
+    let _ = std::fs::remove_file(&out);
+    Err(ThumbError::Empty)
+}
+
+fn grab_at(source: &Path, seek: &str, out: &Path) -> bool {
+    let scaled = Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-ss",
+            seek,
+            "-i",
+        ])
+        .arg(source)
+        .args(["-frames:v", "1", "-vf", "scale='min(1920,iw)':-2"])
+        .arg(out)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if scaled && jpeg_file(out) {
+        return true;
+    }
+    let plain = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss", seek, "-i"])
+        .arg(source)
+        .args(["-frames:v", "1"])
+        .arg(out)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    plain && jpeg_file(out)
+}
+
+fn jpeg_file(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.len() > 100)
 }
 
 pub fn extract_largest_jpeg(path: &Path) -> Option<Vec<u8>> {
@@ -204,6 +319,52 @@ mod tests {
         let written = std::fs::read(&destination).unwrap();
         assert!(written.starts_with(&[0xff, 0xd8]));
         assert!(written.len() > 100);
+        let proxy = std::fs::read(proxy_path(&destination)).unwrap();
+        assert!(proxy.starts_with(&[0xff, 0xd8]));
+        assert!(proxy.len() > 100);
+    }
+
+    #[test]
+    fn ffmpeg_writes_a_poster_and_a_proxy_for_mp4() {
+        if !ffmpeg_available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("clip.mp4");
+        let status = Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=0x206080:s=640x360:d=1",
+                "-frames:v",
+                "12",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(&source)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "ffmpeg could not write a sample clip");
+        let destination = dir.path().join("thumbs").join("clip.jpg");
+        write_thumbnail(&source, &destination).unwrap();
+        assert!(std::fs::read(&destination).unwrap().starts_with(&[0xff, 0xd8]));
+        assert!(std::fs::read(proxy_path(&destination)).unwrap().starts_with(&[0xff, 0xd8]));
+    }
+
+    #[test]
+    fn a_video_without_a_decodable_frame_does_not_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("clip.mov");
+        std::fs::write(&source, b"not a movie").unwrap();
+        let destination = dir.path().join("thumbs").join("clip.jpg");
+        assert!(write_thumbnail(&source, &destination).is_err());
     }
 
     #[test]
