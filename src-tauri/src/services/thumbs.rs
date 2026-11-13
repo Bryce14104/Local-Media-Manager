@@ -1,8 +1,8 @@
-//! Grid posters and 1080p proxies.
+//! Grid posters, 1080p stills, and a web-playable video proxy.
 //!
 //! Stills and RAW embedded JPEGs are scaled in-process. Video posters come
-//! from one ffmpeg frame, then the same scaler writes a 480px grid JPEG and a
-//! long-edge 1920 JPEG the lightbox can show before the original file decodes.
+//! from one ffmpeg frame. The lightbox paints the 1920 JPEG immediately; a
+//! H.264 MP4 next to it is what the webview can actually play.
 //! Work stays off the UI thread; see `generate_missing_thumbnails`.
 
 use crate::db::Library;
@@ -71,7 +71,7 @@ where
             if record.media_kind == MediaKind::Video && !ffmpeg {
                 return false;
             }
-            preview_incomplete(record.thumbnail_path.as_deref())
+            preview_incomplete(record.thumbnail_path.as_deref(), record.media_kind)
         })
         .collect();
     let total = pending.len();
@@ -87,6 +87,8 @@ where
         eprintln!("shelf index: writing preview {}", record.file_path);
         if let Err(error) = write_thumbnail(Path::new(&record.file_path), &destination) {
             eprintln!("shelf index: preview failed for {}: {error}", record.file_path);
+        }
+        if !destination.is_file() {
             progress(index + 1, total);
             continue;
         }
@@ -113,21 +115,40 @@ pub fn proxy_path(thumbnail: &Path) -> PathBuf {
     thumbnail.with_file_name(format!("{stem}.1080.jpg"))
 }
 
+pub fn play_path(thumbnail: &Path) -> PathBuf {
+    let stem = thumbnail.file_stem().unwrap_or_default().to_string_lossy();
+    thumbnail.with_file_name(format!("{stem}.play.mp4"))
+}
+
 pub fn write_thumbnail(source: &Path, destination: &Path) -> Result<(), ThumbError> {
     let image = decode_preview(source)?;
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|err| ThumbError::Io(err.to_string()))?;
     }
     save_fitted(&image, PROXY_EDGE, &proxy_path(destination))?;
-    save_fitted(&image, MAX_EDGE, destination)
+    save_fitted(&image, MAX_EDGE, destination)?;
+    if is_video_path(source) {
+        write_playable(source, &play_path(destination))?;
+    }
+    Ok(())
 }
 
-fn preview_incomplete(thumbnail: Option<&str>) -> bool {
+fn preview_incomplete(thumbnail: Option<&str>, kind: MediaKind) -> bool {
     let Some(path) = thumbnail else {
         return true;
     };
     let thumb = Path::new(path);
-    !thumb.is_file() || !proxy_path(thumb).is_file()
+    if !thumb.is_file() || !proxy_path(thumb).is_file() {
+        return true;
+    }
+    kind == MediaKind::Video && !play_path(thumb).is_file()
+}
+
+fn is_video_path(source: &Path) -> bool {
+    source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| is_video(&ext.to_ascii_lowercase()))
 }
 
 fn save_fitted(image: &DynamicImage, edge: u32, destination: &Path) -> Result<(), ThumbError> {
@@ -164,33 +185,52 @@ fn is_video(kind: &str) -> bool {
 }
 
 fn ffmpeg_available() -> bool {
-    static READY: OnceLock<bool> = OnceLock::new();
-    *READY.get_or_init(|| {
-        let ok = Command::new("ffmpeg")
-            .arg("-version")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|status| status.success());
-        if !ok {
-            eprintln!("shelf index: install ffmpeg to build video posters");
+    ffmpeg_bin().is_some()
+}
+
+fn ffmpeg_bin() -> Option<PathBuf> {
+    static BIN: OnceLock<Option<PathBuf>> = OnceLock::new();
+    BIN.get_or_init(|| {
+        let candidates = [
+            "ffmpeg",
+            "ffmpeg.exe",
+            "/usr/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            "/opt/homebrew/bin/ffmpeg",
+            "/snap/bin/ffmpeg",
+            "/opt/ffmpeg/bin/ffmpeg",
+        ];
+        for candidate in candidates {
+            let path = PathBuf::from(candidate);
+            if ffmpeg_runs(&path) {
+                return Some(path);
+            }
         }
-        ok
+        eprintln!("shelf index: install ffmpeg to build video posters and playback proxies");
+        None
     })
+    .clone()
+}
+
+fn ffmpeg_runs(bin: &Path) -> bool {
+    Command::new(bin)
+        .arg("-version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn grab_video_frame(source: &Path) -> Result<DynamicImage, ThumbError> {
-    if !ffmpeg_available() {
-        return Err(ThumbError::Decode("ffmpeg is not installed".into()));
-    }
+    let bin = ffmpeg_bin().ok_or_else(|| ThumbError::Decode("ffmpeg is not installed".into()))?;
     let out = std::env::temp_dir().join(format!(
         "shelf-frame-{}-{}.jpg",
         std::process::id(),
         FRAME_SEQ.fetch_add(1, Ordering::Relaxed)
     ));
     for seek in ["0.4", "0"] {
-        if grab_at(source, seek, &out) {
+        if grab_at(&bin, source, seek, &out) {
             let image = image::open(&out).map_err(|err| ThumbError::Decode(err.to_string()));
             let _ = std::fs::remove_file(&out);
             return image;
@@ -200,44 +240,82 @@ fn grab_video_frame(source: &Path) -> Result<DynamicImage, ThumbError> {
     Err(ThumbError::Empty)
 }
 
-fn grab_at(source: &Path, seek: &str, out: &Path) -> bool {
-    let scaled = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-ss",
-            seek,
-            "-i",
-        ])
-        .arg(source)
-        .args(["-frames:v", "1", "-vf", "scale='min(1920,iw)':-2"])
-        .arg(out)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if scaled && jpeg_file(out) {
-        return true;
-    }
-    let plain = Command::new("ffmpeg")
+fn grab_at(bin: &Path, source: &Path, seek: &str, out: &Path) -> bool {
+    let ok = Command::new(bin)
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss", seek, "-i"])
         .arg(source)
-        .args(["-frames:v", "1"])
+        .args(["-frames:v", "1", "-q:v", "3"])
         .arg(out)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success());
-    plain && jpeg_file(out)
+    ok && jpeg_file(out)
+}
+
+fn write_playable(source: &Path, destination: &Path) -> Result<(), ThumbError> {
+    let bin = ffmpeg_bin().ok_or_else(|| ThumbError::Decode("ffmpeg is not installed".into()))?;
+    if remux_playable(&bin, source, destination) {
+        return Ok(());
+    }
+    let ok = Command::new(bin)
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
+        .arg(source)
+        .args([
+            "-map",
+            "0:v:0",
+            "-vf",
+            "scale=w=min(1920\\,iw):h=-2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            "-movflags",
+            "+faststart",
+        ])
+        .arg(destination)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if ok && mp4_file(destination) {
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(destination);
+    Err(ThumbError::Decode("could not write a playable mp4".into()))
+}
+
+fn remux_playable(bin: &Path, source: &Path, destination: &Path) -> bool {
+    let ok = Command::new(bin)
+        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
+        .arg(source)
+        .args(["-map", "0:v:0", "-c", "copy", "-an", "-movflags", "+faststart"])
+        .arg(destination)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if ok && mp4_file(destination) {
+        return true;
+    }
+    let _ = std::fs::remove_file(destination);
+    false
 }
 
 fn jpeg_file(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|meta| meta.len() > 100)
+}
+
+fn mp4_file(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.len() > 500)
 }
 
 pub fn extract_largest_jpeg(path: &Path) -> Option<Vec<u8>> {
@@ -322,6 +400,7 @@ mod tests {
         let proxy = std::fs::read(proxy_path(&destination)).unwrap();
         assert!(proxy.starts_with(&[0xff, 0xd8]));
         assert!(proxy.len() > 100);
+        assert!(!play_path(&destination).is_file());
     }
 
     #[test]
@@ -356,6 +435,8 @@ mod tests {
         write_thumbnail(&source, &destination).unwrap();
         assert!(std::fs::read(&destination).unwrap().starts_with(&[0xff, 0xd8]));
         assert!(std::fs::read(proxy_path(&destination)).unwrap().starts_with(&[0xff, 0xd8]));
+        let play = std::fs::read(play_path(&destination)).unwrap();
+        assert!(play.len() > 500);
     }
 
     #[test]

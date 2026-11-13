@@ -36,7 +36,7 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
   }, [item.id]);
 
   useEffect(() => {
-    const urls = [before, after].flatMap((neighbor) =>
+    const urls = [before, after, item].flatMap((neighbor) =>
       neighbor ? [neighbor.proxyUrl ?? neighbor.previewUrl ?? null] : [],
     );
     const images = urls.filter((url): url is string => Boolean(url)).map((url) => {
@@ -48,7 +48,7 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
     return () => {
       for (const img of images) img.src = "";
     };
-  }, [before, after]);
+  }, [before, after, item]);
 
   useEffect(() => {
     const node = rootRef.current;
@@ -58,13 +58,13 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
       const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
       if (delta === 0) return;
       const now = performance.now();
-      if (now - wheel.current.at > 180) wheel.current.carry = 0;
+      if (now - wheel.current.at > 160) wheel.current.carry = 0;
       wheel.current.at = now;
       wheel.current.carry += delta;
-      if (wheel.current.carry >= 48) {
+      if (wheel.current.carry >= 40) {
         wheel.current.carry = 0;
         onNextRef.current();
-      } else if (wheel.current.carry <= -48) {
+      } else if (wheel.current.carry <= -40) {
         wheel.current.carry = 0;
         onPrevRef.current();
       }
@@ -98,71 +98,68 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
       role="dialog"
       aria-modal="true"
       aria-label={item.fileName}
-      className="fixed inset-0 z-50 flex flex-col bg-[#07080b] text-foam"
+      className="fixed inset-0 z-50 bg-black text-foam"
     >
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(46,224,197,0.07),transparent_58%)]" />
-      <header className="relative z-10 flex items-center justify-between gap-3 px-4 py-3 md:px-6">
-        <p className="font-mono text-xs tracking-wide text-mute">
+      <div
+        className="absolute inset-0"
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onPointerCancel={() => {
+          dragX.current = null;
+        }}
+      >
+        <ProgressiveMedia
+          item={item}
+          fit="contain"
+          playback="play"
+          onSize={(nextWidth, nextHeight) => setNatural({ width: nextWidth, height: nextHeight })}
+        />
+      </div>
+
+      <header className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-b from-black/70 to-transparent px-4 py-3 md:px-6">
+        <p className="font-mono text-xs tracking-wide text-white/70">
           {index + 1} / {count}
         </p>
-        <p className="hidden font-mono text-[10px] tracking-[0.16em] text-white/35 sm:block">arrows or scroll · esc closes</p>
+        <p className="hidden font-mono text-[10px] tracking-[0.16em] text-white/45 sm:block">arrows or scroll · esc closes</p>
         <button
           ref={closeRef}
           type="button"
           onClick={onClose}
-          className="rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-sm text-foam transition hover:border-teal hover:text-teal"
+          className="pointer-events-auto rounded-full border border-white/15 bg-black/40 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
         >
           Close
         </button>
       </header>
 
-      <div className="relative z-10 min-h-0 flex-1">
-        <button
-          type="button"
-          aria-label="Previous frame"
-          disabled={atStart}
-          onClick={onPrev}
-          className="absolute left-3 top-1/2 z-10 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full border border-white/10 bg-black/45 text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal disabled:pointer-events-none disabled:opacity-20 md:grid"
-        >
-          <Chevron direction="left" />
-        </button>
-        <button
-          type="button"
-          aria-label="Next frame"
-          disabled={atEnd}
-          onClick={onNext}
-          className="absolute right-3 top-1/2 z-10 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full border border-white/10 bg-black/45 text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal disabled:pointer-events-none disabled:opacity-20 md:grid"
-        >
-          <Chevron direction="right" />
-        </button>
+      <button
+        type="button"
+        aria-label="Previous frame"
+        disabled={atStart}
+        onClick={onPrev}
+        className="absolute left-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full border border-white/10 bg-black/45 text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal disabled:pointer-events-none disabled:opacity-20 md:grid"
+      >
+        <Chevron direction="left" />
+      </button>
+      <button
+        type="button"
+        aria-label="Next frame"
+        disabled={atEnd}
+        onClick={onNext}
+        className="absolute right-3 top-1/2 z-20 hidden h-12 w-12 -translate-y-1/2 place-items-center rounded-full border border-white/10 bg-black/45 text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal disabled:pointer-events-none disabled:opacity-20 md:grid"
+      >
+        <Chevron direction="right" />
+      </button>
 
-        <div
-          className="flex h-full items-center justify-center px-3 md:px-20"
-          onPointerDown={onPointerDown}
-          onPointerUp={onPointerUp}
-          onPointerCancel={() => {
-            dragX.current = null;
-          }}
-        >
-          <ProgressiveMedia
-            item={item}
-            fit="contain"
-            playback="play"
-            onSize={(nextWidth, nextHeight) => setNatural({ width: nextWidth, height: nextHeight })}
-          />
-        </div>
-      </div>
-
-      <footer className="relative z-10 bg-gradient-to-t from-black via-black/75 to-transparent px-4 pb-5 pt-12 md:px-8">
+      <footer className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 via-black/40 to-transparent px-4 pb-5 pt-16 md:px-8">
         <div className="flex items-end justify-between gap-4">
           <div className="min-w-0">
             <p className="truncate text-base font-medium tracking-tight">{item.fileName}</p>
-            <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-mute">
+            <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-white/60">
               <span>{captured}</span>
               <span className="font-mono">{width && height ? `${width} × ${height}` : "—"}</span>
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="pointer-events-auto flex shrink-0 items-center gap-2">
             <div className="flex md:hidden">
               <button
                 type="button"

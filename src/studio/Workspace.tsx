@@ -1106,7 +1106,8 @@ function presentRecord(record: MediaRecord): StudioItem {
     return { ...item, previewUrl: url, inspectUrl: url };
   }
   if (record.mediaKind === "video") {
-    return { ...item, inspectUrl: convertFileSrc(record.filePath) };
+    const url = convertFileSrc(record.filePath);
+    return { ...item, inspectUrl: url, playUrl: url };
   }
   return item;
 }
@@ -1115,9 +1116,18 @@ function proxySibling(thumbnailPath: string): string {
   return thumbnailPath.replace(/\.jpe?g$/i, ".1080.jpg");
 }
 
+function playSibling(thumbnailPath: string): string {
+  return thumbnailPath.replace(/\.jpe?g$/i, ".play.mp4");
+}
+
 function withPreview(item: StudioItem, filePath: string, thumbnailPath: string, kind: MediaKind): StudioItem {
   const previewUrl = convertFileSrc(thumbnailPath);
   const proxyUrl = convertFileSrc(proxySibling(thumbnailPath));
-  const inspectUrl = kind === "image" || kind === "video" ? convertFileSrc(filePath) : proxyUrl;
+  const original = convertFileSrc(filePath);
+  if (kind === "video") {
+    const playUrl = convertFileSrc(playSibling(thumbnailPath));
+    return { ...item, previewUrl, proxyUrl, playUrl, inspectUrl: original };
+  }
+  const inspectUrl = kind === "image" ? original : proxyUrl;
   return { ...item, previewUrl, proxyUrl, inspectUrl };
 }

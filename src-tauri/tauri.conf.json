@@ -25,21 +25,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$APPDATA/**",
-          "$APPLOCALDATA/**",
-          "$HOME/**",
-          "$PICTURE/**",
-          "$VIDEO/**",
-          "$DOCUMENT/**",
-          "$DOWNLOAD/**",
-          "$DESKTOP/**",
-          "$TEMP/**",
-          "/media/**",
-          "/mnt/**",
-          "/run/media/**",
-          "/Volumes/**"
-        ]
+        "scope": ["**"]
       }
     }
   },

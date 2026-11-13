@@ -296,9 +296,14 @@ function seedItem(row: Seed, id: string): StudioItem {
       ? {
           previewUrl: "/media/sample-480.jpg",
           proxyUrl: "/media/sample-1080.jpg",
+          playUrl: "/media/sample.mp4",
           inspectUrl: "/media/sample.mp4",
         }
-      : {}),
+      : {
+          previewUrl: "/media/still-480.jpg",
+          proxyUrl: "/media/still-1080.jpg",
+          inspectUrl: "/media/still-1080.jpg",
+        }),
     geotagged: true,
     faces: [],
     subjects: [],

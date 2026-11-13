@@ -554,8 +554,9 @@ fn delete_owned_thumbnail(path: Option<&str>) {
     if owned {
         let _ = std::fs::remove_file(file);
         if let Some(stem) = file.file_stem() {
-            let proxy = file.with_file_name(format!("{}.1080.jpg", stem.to_string_lossy()));
-            let _ = std::fs::remove_file(proxy);
+            let name = stem.to_string_lossy();
+            let _ = std::fs::remove_file(file.with_file_name(format!("{name}.1080.jpg")));
+            let _ = std::fs::remove_file(file.with_file_name(format!("{name}.play.mp4")));
         }
     }
 }

@@ -42,6 +42,7 @@ export async function itemsFromFiles(
       histogram: histogram(id),
       previewUrl: meta.previewUrl,
       proxyUrl: meta.proxyUrl,
+      playUrl: meta.playUrl,
       inspectUrl: meta.inspectUrl,
       sourcePath: null,
       faces: [],
@@ -64,13 +65,22 @@ async function readFileMeta(
   camera: string | null;
   previewUrl: string | null;
   proxyUrl: string | null;
+  playUrl: string | null;
   inspectUrl: string | null;
   gps: { latitude: number; longitude: number } | null;
 }> {
   if (format === "video") {
     const inspectUrl = URL.createObjectURL(file);
     const poster = await posterFromVideo(inspectUrl);
-    return { capturedAt: null, camera: null, previewUrl: poster, proxyUrl: poster, inspectUrl, gps: null };
+    return {
+      capturedAt: null,
+      camera: null,
+      previewUrl: poster,
+      proxyUrl: poster,
+      playUrl: inspectUrl,
+      inspectUrl,
+      gps: null,
+    };
   }
   const bytes = new Uint8Array(await file.slice(0, Math.min(file.size, 32 * 1024 * 1024)).arrayBuffer());
   const capturedAt = findCapture(bytes);
@@ -80,16 +90,24 @@ async function readFileMeta(
     const inspectUrl = URL.createObjectURL(file);
     const previewUrl = await scaledUrl(file, 480, 0.72);
     const proxyUrl = (await scaledUrl(file, 1920, 0.82)) ?? previewUrl;
-    return { capturedAt, camera, previewUrl: previewUrl ?? inspectUrl, proxyUrl: proxyUrl ?? inspectUrl, inspectUrl, gps };
+    return {
+      capturedAt,
+      camera,
+      previewUrl: previewUrl ?? inspectUrl,
+      proxyUrl: proxyUrl ?? inspectUrl,
+      playUrl: null,
+      inspectUrl,
+      gps,
+    };
   }
   const embedded = largestJpeg(bytes);
-  if (!embedded) return { capturedAt, camera, previewUrl: null, proxyUrl: null, inspectUrl: null, gps };
+  if (!embedded) return { capturedAt, camera, previewUrl: null, proxyUrl: null, playUrl: null, inspectUrl: null, gps };
   const copy = embedded.slice();
   const blob = new Blob([copy.buffer], { type: "image/jpeg" });
   const inspectUrl = URL.createObjectURL(blob);
   const previewUrl = (await scaledUrl(blob, 480, 0.72)) ?? inspectUrl;
   const proxyUrl = (await scaledUrl(blob, 1920, 0.82)) ?? previewUrl;
-  return { capturedAt, camera, previewUrl, proxyUrl, inspectUrl, gps: gps ?? readGps(embedded) };
+  return { capturedAt, camera, previewUrl, proxyUrl, playUrl: null, inspectUrl, gps: gps ?? readGps(embedded) };
 }
 
 export function readGps(bytes: Uint8Array): { latitude: number; longitude: number } | null {
