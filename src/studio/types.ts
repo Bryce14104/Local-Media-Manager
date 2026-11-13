@@ -56,6 +56,7 @@ export type StudioItem = {
   previewUrl?: string | null;
   proxyUrl?: string | null;
   playUrl?: string | null;
+  playFile?: string | null;
   inspectUrl?: string | null;
   faces: FaceMark[];
   subjects: SubjectTag[];

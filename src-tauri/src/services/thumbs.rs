@@ -314,7 +314,18 @@ fn grab_at(bin: &Path, source: &Path, seek: &str, out: &Path) -> bool {
 pub fn write_playable(source: &Path, destination: &Path) -> Result<(), ThumbError> {
     let bin = ffmpeg_bin().ok_or_else(|| ThumbError::Decode("ffmpeg is not installed".into()))?;
     let tmp = destination.with_extension("part.mp4");
-    let ok = Command::new(bin)
+    let ok = transcode(&bin, source, &tmp, true) || transcode(&bin, source, &tmp, false);
+    if ok && mp4_file(&tmp) {
+        std::fs::rename(&tmp, destination).map_err(|err| ThumbError::Io(err.to_string()))?;
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(&tmp);
+    Err(ThumbError::Decode("could not write a playable mp4".into()))
+}
+
+fn transcode(bin: &Path, source: &Path, destination: &Path, audio: bool) -> bool {
+    let mut command = Command::new(bin);
+    command
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
         .arg(source)
         .args([
@@ -330,22 +341,21 @@ pub fn write_playable(source: &Path, destination: &Path) -> Result<(), ThumbErro
             "23",
             "-pix_fmt",
             "yuv420p",
-            "-an",
             "-movflags",
             "+faststart",
-        ])
-        .arg(&tmp)
+        ]);
+    if audio {
+        command.args(["-map", "0:a?", "-c:a", "aac", "-ac", "2", "-b:a", "128k"]);
+    } else {
+        command.arg("-an");
+    }
+    command
+        .arg(destination)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .is_ok_and(|status| status.success());
-    if ok && mp4_file(&tmp) {
-        std::fs::rename(&tmp, destination).map_err(|err| ThumbError::Io(err.to_string()))?;
-        return Ok(());
-    }
-    let _ = std::fs::remove_file(&tmp);
-    Err(ThumbError::Decode("could not write a playable mp4".into()))
+        .is_ok_and(|status| status.success())
 }
 
 fn jpeg_file(path: &Path) -> bool {

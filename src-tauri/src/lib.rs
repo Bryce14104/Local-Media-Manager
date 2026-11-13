@@ -60,6 +60,7 @@ pub fn run() {
             commands::rename_person,
             commands::merge_people,
             commands::split_face,
+            commands::read_media,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Shelf");

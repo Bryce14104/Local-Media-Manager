@@ -6,6 +6,7 @@ use crate::services;
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Mutex;
+use tauri::ipc::Response;
 use tauri::{AppHandle, Emitter, State, async_runtime};
 
 static CATALOG_JOB: Mutex<()> = Mutex::new(());
@@ -214,4 +215,15 @@ pub fn set_rating(
     state
         .set_rating(&path, rating)
         .map_err(|err| err.to_string())
+}
+
+/// Raw bytes for the webview. Linux WebKit will not play MP4 from a custom protocol.
+#[tauri::command]
+pub fn read_media(path: String) -> Result<Response, String> {
+    let file = Path::new(&path);
+    if !file.is_file() {
+        return Err(format!("missing file {path}"));
+    }
+    let bytes = std::fs::read(file).map_err(|err| err.to_string())?;
+    Ok(Response::new(bytes))
 }

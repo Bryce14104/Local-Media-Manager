@@ -1128,6 +1128,7 @@ function withPreview(
     previewUrl,
     proxyUrl,
     playUrl,
+    playFile: playPath ?? null,
     inspectUrl: item.format === "video" ? playUrl : (original ?? proxyUrl ?? previewUrl),
   };
 }

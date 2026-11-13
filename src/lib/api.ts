@@ -140,3 +140,18 @@ export async function pickImportPaths(): Promise<string[] | null> {
   );
   return paths.length > 0 ? paths : null;
 }
+
+const playBlobs = new Map<string, string>();
+
+export async function playableUrl(filePath: string | null | undefined, href: string | null | undefined): Promise<string | null> {
+  if (filePath && desktopBridgeAvailable()) {
+    const cached = playBlobs.get(filePath);
+    if (cached) return cached;
+    const payload = await invoke<ArrayBuffer | number[]>("read_media", { path: filePath });
+    const bytes = payload instanceof ArrayBuffer ? new Uint8Array(payload) : Uint8Array.from(payload);
+    const url = URL.createObjectURL(new Blob([bytes], { type: "video/mp4" }));
+    playBlobs.set(filePath, url);
+    return url;
+  }
+  return href ?? null;
+}

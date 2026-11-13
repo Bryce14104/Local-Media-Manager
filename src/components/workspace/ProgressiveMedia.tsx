@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { playableUrl } from "../../lib/api";
 import type { StudioItem } from "../../studio/types";
 import { FrameStill } from "./FrameStill";
 
@@ -14,7 +15,6 @@ type ProgressiveMediaProps = {
 type Layer = {
   id: string;
   still: string;
-  video: string | null;
 };
 
 export function ProgressiveMedia({
@@ -26,14 +26,16 @@ export function ProgressiveMedia({
   onSize,
 }: ProgressiveMediaProps) {
   const stillSrc = item.proxyUrl ?? item.previewUrl ?? null;
-  const videoSrc = item.format === "video" ? (item.playUrl ?? null) : null;
+  const wantsVideo = item.format === "video";
   const fullSrc = quality === "full" && item.format !== "video" ? (item.inspectUrl ?? null) : null;
-  const [layer, setLayer] = useState<Layer | null>(() =>
-    stillSrc || videoSrc ? { id: item.id, still: stillSrc ?? "", video: videoSrc } : null,
-  );
+  const [layer, setLayer] = useState<Layer | null>(() => (stillSrc ? { id: item.id, still: stillSrc } : null));
+  const [blobSrc, setBlobSrc] = useState<string | null>(null);
   const [fullReady, setFullReady] = useState<string | null>(null);
   const [paused, setPaused] = useState(true);
+  const [showingVideo, setShowingVideo] = useState(false);
+  const [busy, setBusy] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const wantPlay = useRef(false);
   const incoming = useRef(0);
   const onSizeRef = useRef(onSize);
   onSizeRef.current = onSize;
@@ -42,38 +44,55 @@ export function ProgressiveMedia({
     const token = incoming.current + 1;
     incoming.current = token;
     setPaused(true);
+    setShowingVideo(false);
     setFullReady(null);
+    setBlobSrc(null);
     if (!stillSrc) {
-      setLayer(videoSrc ? { id: item.id, still: "", video: videoSrc } : null);
+      setLayer(null);
+    } else {
+      let cancel = false;
+      const image = new Image();
+      image.decoding = "sync";
+      const commit = (src: string) => {
+        if (cancel || incoming.current !== token) return;
+        setLayer({ id: item.id, still: src });
+        if (image.naturalWidth > 0) onSizeRef.current?.(image.naturalWidth, image.naturalHeight);
+      };
+      image.onload = () => {
+        const decoded = image.decode?.();
+        if (decoded) void decoded.then(() => commit(stillSrc)).catch(() => commit(stillSrc));
+        else commit(stillSrc);
+      };
+      image.onerror = () => {
+        if (cancel || incoming.current !== token) return;
+        const fallback = item.previewUrl && item.previewUrl !== stillSrc ? item.previewUrl : null;
+        if (fallback) commit(fallback);
+        else setLayer(null);
+      };
+      image.src = stillSrc;
+      if (image.complete && image.naturalWidth > 0) commit(stillSrc);
+      return () => {
+        cancel = true;
+        image.onload = null;
+        image.onerror = null;
+      };
+    }
+    return undefined;
+  }, [item.id, stillSrc, item.previewUrl]);
+
+  useEffect(() => {
+    if (!wantsVideo) {
+      setBlobSrc(null);
       return;
     }
     let cancel = false;
-    const image = new Image();
-    image.decoding = "sync";
-    const commit = (src: string) => {
-      if (cancel || incoming.current !== token) return;
-      setLayer({ id: item.id, still: src, video: videoSrc });
-      if (image.naturalWidth > 0) onSizeRef.current?.(image.naturalWidth, image.naturalHeight);
-    };
-    image.onload = () => {
-      const decoded = image.decode?.();
-      if (decoded) void decoded.then(() => commit(stillSrc)).catch(() => commit(stillSrc));
-      else commit(stillSrc);
-    };
-    image.onerror = () => {
-      if (cancel || incoming.current !== token) return;
-      const fallback = item.previewUrl && item.previewUrl !== stillSrc ? item.previewUrl : null;
-      if (fallback) commit(fallback);
-      else if (videoSrc) setLayer({ id: item.id, still: "", video: videoSrc });
-    };
-    image.src = stillSrc;
-    if (image.complete && image.naturalWidth > 0) commit(stillSrc);
+    void playableUrl(item.playFile, item.playUrl).then((url) => {
+      if (!cancel) setBlobSrc(url);
+    });
     return () => {
       cancel = true;
-      image.onload = null;
-      image.onerror = null;
     };
-  }, [item.id, stillSrc, videoSrc, item.previewUrl]);
+  }, [item.id, item.playFile, item.playUrl, wantsVideo]);
 
   useEffect(() => {
     if (!fullSrc || fullSrc === layer?.still) {
@@ -98,16 +117,8 @@ export function ProgressiveMedia({
   }, [fullSrc, layer?.still, item.id]);
 
   const fitClass = fit === "cover" ? "h-full w-full object-cover" : "h-full w-full object-contain";
-  const shownVideo = layer?.video ?? null;
 
-  async function togglePlay(event?: { stopPropagation: () => void }) {
-    event?.stopPropagation();
-    const video = videoRef.current;
-    if (!video) return;
-    if (!video.paused) {
-      video.pause();
-      return;
-    }
+  async function startVideo(video: HTMLVideoElement) {
     if (video.ended || video.currentTime >= Math.max(0, (video.duration || 0) - 0.05)) {
       video.currentTime = 0;
     }
@@ -117,10 +128,37 @@ export function ProgressiveMedia({
     } catch {
       video.muted = true;
       await video.play().catch(() => undefined);
+    } finally {
+      setBusy(false);
     }
   }
 
-  if (!layer?.still && !shownVideo) {
+  useEffect(() => {
+    if (!blobSrc || !wantPlay.current) return;
+    const video = videoRef.current;
+    if (video) void startVideo(video);
+  }, [blobSrc]);
+
+  async function togglePlay(event?: { stopPropagation: () => void }) {
+    event?.stopPropagation();
+    const video = videoRef.current;
+    if (video && !video.paused && showingVideo) {
+      wantPlay.current = false;
+      video.pause();
+      return;
+    }
+    wantPlay.current = true;
+    setBusy(true);
+    if (!blobSrc) {
+      const url = await playableUrl(item.playFile, item.playUrl);
+      if (url) setBlobSrc(url);
+      return;
+    }
+    if (video) await startVideo(video);
+    else setBusy(false);
+  }
+
+  if (!layer?.still && !wantsVideo) {
     return <FrameStill id={item.id} fileName={item.fileName} src={null} fit={fit} className={className} />;
   }
 
@@ -128,35 +166,50 @@ export function ProgressiveMedia({
     <div className={`relative h-full w-full overflow-hidden bg-black ${className ?? ""}`}>
       {layer?.still ? (
         <img src={layer.still} alt={item.fileName} draggable={false} className={`absolute inset-0 ${fitClass}`} />
-      ) : null}
+      ) : (
+        <FrameStill id={item.id} fileName={item.fileName} src={null} fit={fit} />
+      )}
       {fullReady && fullReady !== layer?.still ? (
         <img src={fullReady} alt="" draggable={false} className={`absolute inset-0 ${fitClass}`} />
       ) : null}
-      {shownVideo ? (
+      {wantsVideo ? (
         <div
           className="absolute inset-0"
           onPointerDown={(event) => event.stopPropagation()}
           onPointerUp={(event) => event.stopPropagation()}
         >
-          <video
-            ref={videoRef}
-            key={`${layer?.id}:${shownVideo}`}
-            src={shownVideo}
-            poster={layer?.still || undefined}
-            controls
-            playsInline
-            preload="auto"
-            className={`absolute inset-0 ${fitClass}`}
-            onLoadedMetadata={(event) => onSize?.(event.currentTarget.videoWidth, event.currentTarget.videoHeight)}
-            onPlay={() => setPaused(false)}
-            onPause={() => setPaused(true)}
-            onEnded={() => setPaused(true)}
-          />
+          {blobSrc ? (
+            <video
+              ref={videoRef}
+              key={`${item.id}:${blobSrc}`}
+              src={blobSrc}
+              playsInline
+              preload="auto"
+              controls={showingVideo}
+              className={`absolute inset-0 ${fitClass} ${showingVideo ? "opacity-100" : "opacity-0"}`}
+              onLoadedMetadata={(event) => onSize?.(event.currentTarget.videoWidth, event.currentTarget.videoHeight)}
+              onPlaying={() => {
+                setShowingVideo(true);
+                setPaused(false);
+                setBusy(false);
+              }}
+              onPlay={() => {
+                setPaused(false);
+                setBusy(false);
+              }}
+              onPause={() => setPaused(true)}
+              onEnded={() => {
+                setPaused(true);
+                setShowingVideo(false);
+              }}
+            />
+          ) : null}
           {playback === "play" && paused ? (
-            <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-black/15">
+            <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
               <button
                 type="button"
                 aria-label="Play"
+                disabled={busy && !blobSrc}
                 onClick={(event) => void togglePlay(event)}
                 className="pointer-events-auto grid h-20 w-20 place-items-center rounded-full bg-black/70 text-white shadow-lg ring-1 ring-white/20"
               >
