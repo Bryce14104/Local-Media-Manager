@@ -103,6 +103,8 @@ pub struct MediaRecord {
     pub exif: Option<ExifSnapshot>,
     pub captured_at: Option<i64>,
     pub thumbnail_path: Option<String>,
+    pub proxy_path: Option<String>,
+    pub play_path: Option<String>,
     pub flag: Option<String>,
 }
 
@@ -123,6 +125,8 @@ pub struct ThumbnailReady {
     pub id: i64,
     pub file_path: String,
     pub thumbnail_path: String,
+    pub proxy_path: Option<String>,
+    pub play_path: Option<String>,
     pub media_kind: MediaKind,
 }
 

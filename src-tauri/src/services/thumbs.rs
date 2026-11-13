@@ -6,9 +6,10 @@
 //! Work stays off the UI thread; see `generate_missing_thumbnails`.
 
 use crate::db::Library;
-use crate::models::{MediaKind, ThumbnailReady};
+use crate::models::{MediaKind, MediaRecord, ThumbnailReady};
+use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
-use image::{DynamicImage, ImageFormat};
+use image::{DynamicImage, ExtendedColorType};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -47,9 +48,10 @@ pub fn thumbnail_dir(library: &Library) -> PathBuf {
 }
 
 /// Write a JPEG preview for each file that does not have one yet.
-pub fn generate_missing_thumbnails_with<F>(library: &Library, mut progress: F) -> Vec<ThumbnailReady>
+pub fn generate_missing_thumbnails_with<F, E>(library: &Library, mut progress: F, mut emit: E) -> Vec<ThumbnailReady>
 where
     F: FnMut(usize, usize),
+    E: FnMut(&ThumbnailReady),
 {
     let Ok(media) = library.list_media() else {
         progress(0, 0);
@@ -88,7 +90,7 @@ where
         if let Err(error) = write_thumbnail(Path::new(&record.file_path), &destination) {
             eprintln!("shelf index: preview failed for {}: {error}", record.file_path);
         }
-        if !destination.is_file() {
+        if !valid_jpeg(&destination) {
             progress(index + 1, total);
             continue;
         }
@@ -99,15 +101,45 @@ where
             progress(index + 1, total);
             continue;
         }
-        ready.push(ThumbnailReady {
+        let (proxy, mut play) = sidecar_ready(&destination);
+        let mut item = ThumbnailReady {
             id: record.id,
             file_path: record.file_path,
             thumbnail_path: destination.to_string_lossy().into_owned(),
+            proxy_path: proxy,
+            play_path: play.clone(),
             media_kind: record.media_kind,
-        });
+        };
+        emit(&item);
+        if record.media_kind == MediaKind::Video && play.is_none() {
+            if let Err(error) = write_playable(Path::new(&item.file_path), &play_path(&destination)) {
+                eprintln!("shelf index: playback proxy failed for {}: {error}", item.file_path);
+            }
+            play = existing_file(&play_path(&destination));
+            item.play_path = play;
+            emit(&item);
+        }
+        ready.push(item);
         progress(index + 1, total);
     }
     ready
+}
+
+pub fn attach_sidecars(record: &mut MediaRecord) {
+    let Some(thumb) = record.thumbnail_path.as_deref() else {
+        return;
+    };
+    let (proxy, play) = sidecar_ready(Path::new(thumb));
+    record.proxy_path = proxy;
+    record.play_path = play;
+}
+
+fn sidecar_ready(thumb: &Path) -> (Option<String>, Option<String>) {
+    (existing_file(&proxy_path(thumb)), existing_file(&play_path(thumb)))
+}
+
+fn existing_file(path: &Path) -> Option<String> {
+    path.is_file().then(|| path.to_string_lossy().into_owned())
 }
 
 pub fn proxy_path(thumbnail: &Path) -> PathBuf {
@@ -121,14 +153,22 @@ pub fn play_path(thumbnail: &Path) -> PathBuf {
 }
 
 pub fn write_thumbnail(source: &Path, destination: &Path) -> Result<(), ThumbError> {
-    let image = decode_preview(source)?;
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|err| ThumbError::Io(err.to_string()))?;
     }
-    save_fitted(&image, PROXY_EDGE, &proxy_path(destination))?;
-    save_fitted(&image, MAX_EDGE, destination)?;
-    if is_video_path(source) {
-        write_playable(source, &play_path(destination))?;
+    let need_thumb = !valid_jpeg(destination);
+    let need_proxy = !valid_jpeg(&proxy_path(destination));
+    if need_thumb || need_proxy {
+        let image = decode_preview(source)?;
+        if need_proxy {
+            save_fitted(&image, PROXY_EDGE, &proxy_path(destination))?;
+        }
+        if need_thumb {
+            save_fitted(&image, MAX_EDGE, destination)?;
+        }
+    }
+    if !valid_jpeg(destination) {
+        return Err(ThumbError::Empty);
     }
     Ok(())
 }
@@ -144,13 +184,6 @@ fn preview_incomplete(thumbnail: Option<&str>, kind: MediaKind) -> bool {
     kind == MediaKind::Video && !play_path(thumb).is_file()
 }
 
-fn is_video_path(source: &Path) -> bool {
-    source
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| is_video(&ext.to_ascii_lowercase()))
-}
-
 fn save_fitted(image: &DynamicImage, edge: u32, destination: &Path) -> Result<(), ThumbError> {
     if image.width() <= edge && image.height() <= edge {
         return save_jpeg(image, destination);
@@ -159,9 +192,23 @@ fn save_fitted(image: &DynamicImage, edge: u32, destination: &Path) -> Result<()
 }
 
 fn save_jpeg(image: &DynamicImage, destination: &Path) -> Result<(), ThumbError> {
-    image
-        .save_with_format(destination, ImageFormat::Jpeg)
-        .map_err(|err| ThumbError::Decode(err.to_string()))
+    let tmp = destination.with_extension("part.jpg");
+    {
+        let mut file = File::create(&tmp).map_err(|err| ThumbError::Io(err.to_string()))?;
+        let rgb = image.to_rgb8();
+        let mut encoder = JpegEncoder::new_with_quality(&mut file, 82);
+        encoder
+            .encode(rgb.as_raw(), rgb.width(), rgb.height(), ExtendedColorType::Rgb8)
+            .map_err(|err| ThumbError::Decode(err.to_string()))?;
+    }
+    std::fs::rename(&tmp, destination).map_err(|err| ThumbError::Io(err.to_string()))
+}
+
+fn valid_jpeg(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return false;
+    };
+    bytes.len() > 100 && bytes.starts_with(&[0xff, 0xd8])
 }
 
 pub fn decode_preview(source: &Path) -> Result<DynamicImage, ThumbError> {
@@ -174,9 +221,19 @@ pub fn decode_preview(source: &Path) -> Result<DynamicImage, ThumbError> {
         return grab_video_frame(source);
     }
     if matches!(kind.as_str(), "jpg" | "jpeg" | "png" | "gif" | "bmp") {
-        return image::open(source).map_err(|err| ThumbError::Decode(err.to_string()));
+        return decode_still(source);
     }
     let embedded = extract_largest_jpeg(source).ok_or(ThumbError::Empty)?;
+    image::load_from_memory(&embedded).map_err(|err| ThumbError::Decode(err.to_string()))
+}
+
+fn decode_still(source: &Path) -> Result<DynamicImage, ThumbError> {
+    if let Ok(image) = image::open(source) {
+        return Ok(image);
+    }
+    let embedded = extract_largest_jpeg(source).ok_or_else(|| {
+        ThumbError::Decode(format!("could not decode {}", source.display()))
+    })?;
     image::load_from_memory(&embedded).map_err(|err| ThumbError::Decode(err.to_string()))
 }
 
@@ -254,11 +311,9 @@ fn grab_at(bin: &Path, source: &Path, seek: &str, out: &Path) -> bool {
     ok && jpeg_file(out)
 }
 
-fn write_playable(source: &Path, destination: &Path) -> Result<(), ThumbError> {
+pub fn write_playable(source: &Path, destination: &Path) -> Result<(), ThumbError> {
     let bin = ffmpeg_bin().ok_or_else(|| ThumbError::Decode("ffmpeg is not installed".into()))?;
-    if remux_playable(&bin, source, destination) {
-        return Ok(());
-    }
+    let tmp = destination.with_extension("part.mp4");
     let ok = Command::new(bin)
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
         .arg(source)
@@ -266,48 +321,31 @@ fn write_playable(source: &Path, destination: &Path) -> Result<(), ThumbError> {
             "-map",
             "0:v:0",
             "-vf",
-            "scale=w=min(1920\\,iw):h=-2",
+            "scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2",
             "-c:v",
             "libx264",
             "-preset",
             "veryfast",
             "-crf",
-            "20",
+            "23",
             "-pix_fmt",
             "yuv420p",
             "-an",
             "-movflags",
             "+faststart",
         ])
-        .arg(destination)
+        .arg(&tmp)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|status| status.success());
-    if ok && mp4_file(destination) {
+    if ok && mp4_file(&tmp) {
+        std::fs::rename(&tmp, destination).map_err(|err| ThumbError::Io(err.to_string()))?;
         return Ok(());
     }
-    let _ = std::fs::remove_file(destination);
+    let _ = std::fs::remove_file(&tmp);
     Err(ThumbError::Decode("could not write a playable mp4".into()))
-}
-
-fn remux_playable(bin: &Path, source: &Path, destination: &Path) -> bool {
-    let ok = Command::new(bin)
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
-        .arg(source)
-        .args(["-map", "0:v:0", "-c", "copy", "-an", "-movflags", "+faststart"])
-        .arg(destination)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if ok && mp4_file(destination) {
-        return true;
-    }
-    let _ = std::fs::remove_file(destination);
-    false
 }
 
 fn jpeg_file(path: &Path) -> bool {
@@ -371,6 +409,7 @@ fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::ImageFormat;
 
     #[test]
     fn largest_embedded_jpeg_is_chosen() {
@@ -435,6 +474,7 @@ mod tests {
         write_thumbnail(&source, &destination).unwrap();
         assert!(std::fs::read(&destination).unwrap().starts_with(&[0xff, 0xd8]));
         assert!(std::fs::read(proxy_path(&destination)).unwrap().starts_with(&[0xff, 0xd8]));
+        write_playable(&source, &play_path(&destination)).unwrap();
         let play = std::fs::read(play_path(&destination)).unwrap();
         assert!(play.len() > 500);
     }

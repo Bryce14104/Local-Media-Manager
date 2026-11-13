@@ -578,6 +578,8 @@ fn map_media(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaRecord> {
         exif,
         captured_at: row.get(10)?,
         thumbnail_path: row.get(11)?,
+        proxy_path: None,
+        play_path: None,
         flag: row.get(12)?,
     })
 }

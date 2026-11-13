@@ -18,8 +18,8 @@ type Layer = {
 };
 
 export function ProgressiveMedia({ item, fit = "contain", playback = "hold", className, onSize }: ProgressiveMediaProps) {
-  const stillSrc = item.proxyUrl ?? item.previewUrl ?? (item.format === "video" ? null : item.inspectUrl) ?? null;
-  const videoSrc = item.format === "video" ? (item.playUrl ?? item.inspectUrl ?? null) : null;
+  const stillSrc = item.proxyUrl ?? item.previewUrl ?? null;
+  const videoSrc = item.format === "video" ? (item.playUrl ?? null) : null;
   const [layer, setLayer] = useState<Layer | null>(() => (stillSrc ? { id: item.id, still: stillSrc, video: videoSrc, autoplay: playback === "play" } : null));
   const [videoFailed, setVideoFailed] = useState(false);
   const incoming = useRef(0);
@@ -96,14 +96,7 @@ export function ProgressiveMedia({ item, fit = "contain", playback = "hold", cla
           onLoadedData={(event) => {
             if (layer?.autoplay) void event.currentTarget.play().catch(() => undefined);
           }}
-          onError={() => {
-            const fallback = item.inspectUrl;
-            if (fallback && fallback !== shownVideo) {
-              setLayer((current) => (current ? { ...current, video: fallback } : current));
-              return;
-            }
-            setVideoFailed(true);
-          }}
+          onError={() => setVideoFailed(true)}
         />
       ) : null}
     </div>

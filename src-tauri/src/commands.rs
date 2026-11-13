@@ -56,7 +56,11 @@ pub fn library_summary(state: State<'_, Library>) -> Result<LibrarySummary, Stri
 
 #[tauri::command]
 pub fn list_media(state: State<'_, Library>) -> Result<Vec<MediaRecord>, String> {
-    state.list_media().map_err(|err| err.to_string())
+    let mut media = state.list_media().map_err(|err| err.to_string())?;
+    for record in &mut media {
+        services::attach_sidecars(record);
+    }
+    Ok(media)
 }
 
 #[tauri::command]
@@ -114,13 +118,16 @@ pub fn spawn_catalog_jobs(library: Library, app: AppHandle) {
     std::thread::spawn(move || {
         let _guard = CATALOG_JOB.lock().unwrap_or_else(|err| err.into_inner());
         eprintln!("shelf index: catalog job started");
-        let ready = services::generate_missing_thumbnails_with(&library, |done, total| {
-            emit_progress(&app, "thumbnails", done, total, "Writing previews");
-        });
+        let ready = services::generate_missing_thumbnails_with(
+            &library,
+            |done, total| {
+                emit_progress(&app, "thumbnails", done, total, "Writing previews");
+            },
+            |item| {
+                let _ = app.emit("thumbnail-ready", item);
+            },
+        );
         eprintln!("shelf index: wrote {} previews", ready.len());
-        for item in &ready {
-            let _ = app.emit("thumbnail-ready", item);
-        }
         if let Err(error) = services::recognize_library(&library, |done, total, label| {
             emit_progress(&app, "vision", done, total, label);
         }) {

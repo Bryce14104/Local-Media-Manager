@@ -5,6 +5,7 @@
 
 mod commands;
 mod db;
+mod media_protocol;
 mod models;
 mod services;
 
@@ -16,6 +17,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol("shelf", |_ctx, request, responder| {
+            std::thread::spawn(move || {
+                responder.respond(media_protocol::handle(request));
+            });
+        })
         .setup(|app| {
             let directory = app.path().app_data_dir()?;
             let library = Library::open(directory.join("library.sqlite")).map_err(|err| {

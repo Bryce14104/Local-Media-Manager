@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { frameBackground } from "../../studio/catalog";
 
 type FrameStillProps = {
@@ -10,14 +10,18 @@ type FrameStillProps = {
 };
 
 export function FrameStill({ id, fileName, src, fit = "cover", className }: FrameStillProps) {
-  const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  if (src && failedSrc !== src) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+  if (src && !failed) {
     return (
       <img
+        key={src}
         src={src}
         alt={fileName}
         className={`h-full w-full ${fit === "cover" ? "object-cover" : "object-contain"} ${className ?? ""}`}
-        onError={() => setFailedSrc(src)}
+        onError={() => setFailed(true)}
       />
     );
   }

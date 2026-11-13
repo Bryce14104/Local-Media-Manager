@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { mediaSrc } from "../lib/mediaSrc";
 import {
   deleteFromDisk,
   desktopBridgeAvailable,
@@ -151,7 +151,7 @@ export function Workspace() {
       setItems((current) =>
         current.map((item) =>
           item.id === `library-${ready.id}`
-            ? withPreview(item, ready.filePath, ready.thumbnailPath, ready.mediaKind)
+            ? withPreview(item, ready.thumbnailPath, ready.proxyPath, ready.playPath)
             : item,
         ),
       );
@@ -172,9 +172,11 @@ export function Workspace() {
     void listen<JobProgress>("library-progress", (event) => {
       const job = event.payload;
       if (job.phase === "done") {
-        void fetchInsights()
-          .then((snapshot) => {
-            setItems((current) => applyInsights(current, snapshot));
+        void fetchLibrary()
+          .then(async ({ media }) => {
+            const snapshot = await fetchInsights().catch(() => null);
+            const library = media.map(presentRecord);
+            setItems(snapshot ? applyInsights(library, snapshot) : library);
           })
           .catch(() => undefined);
         void fetchConcepts()
@@ -1086,6 +1088,8 @@ type ThumbnailReady = {
   id: number;
   filePath: string;
   thumbnailPath: string;
+  proxyPath: string | null;
+  playPath: string | null;
   mediaKind: MediaKind;
 };
 
@@ -1100,34 +1104,26 @@ function storedAiSearch(): boolean {
 function presentRecord(record: MediaRecord): StudioItem {
   const item = itemFromRecord(record);
   if (!desktopBridgeAvailable()) return item;
-  if (record.thumbnailPath) return withPreview(item, record.filePath, record.thumbnailPath, record.mediaKind);
-  if (record.mediaKind === "image") {
-    const url = convertFileSrc(record.filePath);
-    return { ...item, previewUrl: url, inspectUrl: url };
-  }
-  if (record.mediaKind === "video") {
-    const url = convertFileSrc(record.filePath);
-    return { ...item, inspectUrl: url, playUrl: url };
+  if (record.thumbnailPath) {
+    return withPreview(item, record.thumbnailPath, record.proxyPath, record.playPath);
   }
   return item;
 }
 
-function proxySibling(thumbnailPath: string): string {
-  return thumbnailPath.replace(/\.jpe?g$/i, ".1080.jpg");
-}
-
-function playSibling(thumbnailPath: string): string {
-  return thumbnailPath.replace(/\.jpe?g$/i, ".play.mp4");
-}
-
-function withPreview(item: StudioItem, filePath: string, thumbnailPath: string, kind: MediaKind): StudioItem {
-  const previewUrl = convertFileSrc(thumbnailPath);
-  const proxyUrl = convertFileSrc(proxySibling(thumbnailPath));
-  const original = convertFileSrc(filePath);
-  if (kind === "video") {
-    const playUrl = convertFileSrc(playSibling(thumbnailPath));
-    return { ...item, previewUrl, proxyUrl, playUrl, inspectUrl: original };
-  }
-  const inspectUrl = kind === "image" ? original : proxyUrl;
-  return { ...item, previewUrl, proxyUrl, inspectUrl };
+function withPreview(
+  item: StudioItem,
+  thumbnailPath: string,
+  proxyPath: string | null | undefined,
+  playPath: string | null | undefined,
+): StudioItem {
+  const previewUrl = mediaSrc(thumbnailPath);
+  const proxyUrl = mediaSrc(proxyPath) ?? previewUrl;
+  const playUrl = mediaSrc(playPath);
+  return {
+    ...item,
+    previewUrl,
+    proxyUrl,
+    playUrl,
+    inspectUrl: proxyUrl ?? previewUrl,
+  };
 }

@@ -28,6 +28,8 @@ export type MediaRecord = {
   mediaKind: MediaKind;
   capturedAt: number | null;
   thumbnailPath: string | null;
+  proxyPath: string | null;
+  playPath: string | null;
   flag: string | null;
   exif: ExifSnapshot | null;
 };
