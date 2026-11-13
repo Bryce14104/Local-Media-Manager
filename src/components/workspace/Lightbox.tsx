@@ -106,6 +106,7 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
   const captured = formatCapture(item.capturedAt);
   const atStart = index <= 0;
   const atEnd = index >= count - 1;
+  const clip = item.format === "video";
 
   async function toggleFullscreen() {
     const node = rootRef.current;
@@ -157,14 +158,14 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
       </div>
 
       <header
-        className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between gap-3 bg-gradient-to-b from-black/55 to-transparent px-3 py-2 md:px-4 ${
+        className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-end gap-3 bg-gradient-to-b from-black/55 to-transparent px-3 py-2 md:px-4 ${
           immersive ? "opacity-0 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100" : ""
         }`}
       >
         <p className="font-mono text-xs tracking-wide text-white/70">
           {index + 1} / {count}
         </p>
-        <div className="flex items-center gap-2">
+        {!clip ? (
           <button
             type="button"
             aria-label={immersive ? "Exit full screen" : "Full screen"}
@@ -173,15 +174,15 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
           >
             {immersive ? <ExitFullIcon /> : <FullIcon />}
           </button>
-          <button
-            ref={closeRef}
-            type="button"
-            onClick={onClose}
-            className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
-          >
-            Close
-          </button>
-        </div>
+        ) : null}
+        <button
+          ref={closeRef}
+          type="button"
+          onClick={onClose}
+          className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
+        >
+          Close
+        </button>
       </header>
 
       <button
@@ -204,12 +205,12 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
       </button>
 
       <footer
-        className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/60 to-transparent px-4 pb-4 pt-10 md:px-6 ${
-          immersive ? "opacity-0 transition-opacity duration-200 hover:opacity-100" : ""
-        }`}
+        className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/60 to-transparent px-4 pt-10 md:px-6 ${
+          clip ? "pb-20 md:pb-24" : "pb-4"
+        } ${immersive ? "opacity-0 transition-opacity duration-200 hover:opacity-100" : ""}`}
       >
         <div className="flex items-end justify-between gap-4">
-          <div className="min-w-0">
+          <div className="min-w-0 max-w-[min(100%,42rem)] rounded-md bg-black/45 px-3 py-2 backdrop-blur-sm">
             <p className="truncate text-sm font-medium tracking-tight">{item.fileName}</p>
             <p className="mt-1 font-mono text-[11px] text-white/55">
               {captured}

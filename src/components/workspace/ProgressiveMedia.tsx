@@ -204,7 +204,7 @@ export function ProgressiveMedia({
               }}
             />
           ) : null}
-          {playback === "play" && paused ? (
+          {playback === "play" && paused && !showingVideo ? (
             <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center">
               <button
                 type="button"
