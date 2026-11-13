@@ -24,6 +24,13 @@ body,
   height: 100%;
 }
 
+:fullscreen,
+:-webkit-full-screen {
+  width: 100vw;
+  height: 100vh;
+  background: #000;
+}
+
 body {
   margin: 0;
   background: var(--color-studio);

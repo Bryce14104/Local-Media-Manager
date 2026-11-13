@@ -4,7 +4,6 @@ import type { PointerMods } from "../../studio/selection";
 import type { StudioItem } from "../../studio/types";
 import { formatBytes } from "../../lib/format";
 import { FrameStill } from "./FrameStill";
-import { Stars } from "./Stars";
 
 type MediaCardProps = {
   item: StudioItem;
@@ -24,7 +23,6 @@ export function MediaCard({
   primary,
   onOpen,
   onToggle,
-  onRate,
   onFlag,
 }: MediaCardProps) {
   const { roomy, dense } = gridMetrics(zoom);
@@ -109,15 +107,6 @@ export function MediaCard({
         </span>
       </div>
 
-      <div
-        className={`pointer-events-none absolute inset-x-0 flex justify-start px-1.5 ${
-          showMeta ? (roomy ? "bottom-[4.4rem]" : "bottom-12") : "bottom-7"
-        } ${dense ? "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100" : ""}`}
-      >
-        <div className="pointer-events-auto rounded-full bg-studio/80 px-1">
-          <Stars rating={item.rating} onChange={onRate} compact={!roomy} />
-        </div>
-      </div>
     </article>
   );
 }

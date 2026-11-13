@@ -151,7 +151,7 @@ export function Workspace() {
       setItems((current) =>
         current.map((item) =>
           item.id === `library-${ready.id}`
-            ? withPreview(item, ready.thumbnailPath, ready.proxyPath, ready.playPath)
+            ? withPreview(item, ready.thumbnailPath, ready.proxyPath, ready.playPath, ready.filePath)
             : item,
         ),
       );
@@ -250,6 +250,11 @@ export function Workspace() {
       if (event.key === "Escape") {
         if (selectingCache) return;
         if (lightboxId) {
+          if (document.fullscreenElement) {
+            event.preventDefault();
+            void document.exitFullscreen();
+            return;
+          }
           event.preventDefault();
           closeLightbox();
           return;
@@ -278,8 +283,6 @@ export function Workspace() {
         } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
           event.preventDefault();
           stepLightbox(-1);
-        } else if (/^[1-5]$/.test(event.key)) {
-          rate(lightboxId, Number(event.key));
         }
         return;
       }
@@ -1070,7 +1073,6 @@ export function Workspace() {
           onClose={closeLightbox}
           onPrev={() => stepLightbox(-1)}
           onNext={() => stepLightbox(1)}
-          onRate={(rating) => rate(lightboxItem.id, rating)}
         />
       ) : null}
     </div>
@@ -1105,7 +1107,7 @@ function presentRecord(record: MediaRecord): StudioItem {
   const item = itemFromRecord(record);
   if (!desktopBridgeAvailable()) return item;
   if (record.thumbnailPath) {
-    return withPreview(item, record.thumbnailPath, record.proxyPath, record.playPath);
+    return withPreview(item, record.thumbnailPath, record.proxyPath, record.playPath, record.filePath);
   }
   return item;
 }
@@ -1115,15 +1117,17 @@ function withPreview(
   thumbnailPath: string,
   proxyPath: string | null | undefined,
   playPath: string | null | undefined,
+  filePath: string,
 ): StudioItem {
   const previewUrl = mediaSrc(thumbnailPath);
   const proxyUrl = mediaSrc(proxyPath) ?? previewUrl;
   const playUrl = mediaSrc(playPath);
+  const original = mediaSrc(filePath);
   return {
     ...item,
     previewUrl,
     proxyUrl,
     playUrl,
-    inspectUrl: proxyUrl ?? previewUrl,
+    inspectUrl: item.format === "video" ? playUrl : (original ?? proxyUrl ?? previewUrl),
   };
 }
