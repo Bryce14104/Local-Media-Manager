@@ -76,12 +76,6 @@ export function InspectorPanel({
               {item.geotagged ? (
                 <Fact label="GPS" value={`${formatLatitude(item.latitude)} ${formatLongitude(item.longitude)}`} />
               ) : null}
-              {item.faces.length > 0 ? (
-                <Fact
-                  label="People"
-                  value={[...new Set(item.faces.map((face) => face.name?.trim() || "Unnamed"))].join(", ")}
-                />
-              ) : null}
               {item.subjects.length > 0 ? (
                 <Fact
                   label="Subjects"

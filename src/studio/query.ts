@@ -19,7 +19,7 @@ const ACTIONS: { action: StudioAction; label: string; hint: string; keywords: st
   { action: "view-compact", label: "View: Compact grid", hint: "Tight tiles", keywords: "view compact grid" },
   { action: "view-timeline", label: "View: Timeline", hint: "Group by month", keywords: "view timeline date" },
   { action: "view-map", label: "View: Map", hint: "Pins and the frame panel", keywords: "view map geo gps" },
-  { action: "view-people", label: "AI Insights", hint: "Collections, clusters, and captions", keywords: "ai insights people pets faces clusters captions bursts collections scenes objects lighthouse beach" },
+  { action: "view-people", label: "AI Insights", hint: "Collections and captions", keywords: "ai insights clusters captions bursts collections scenes objects lighthouse beach" },
   { action: "toggle-inspector", label: "Toggle info panel", hint: "Dock, float, or hide", keywords: "toggle inspector info panel exif" },
   { action: "clear-filters", label: "Clear filters", hint: "Show the full roll", keywords: "clear filters reset" },
   { action: "preferences", label: "Preferences", hint: "Draw a map area to cache, or clear tiles", keywords: "preferences settings map tiles download cache zoom area" },

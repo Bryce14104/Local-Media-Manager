@@ -7,9 +7,10 @@ type FrameStillProps = {
   src: string | null | undefined;
   fit?: "cover" | "contain";
   className?: string;
+  lazy?: boolean;
 };
 
-export function FrameStill({ id, fileName, src, fit = "cover", className }: FrameStillProps) {
+export function FrameStill({ id, fileName, src, fit = "cover", className, lazy = true }: FrameStillProps) {
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     setFailed(false);
@@ -20,6 +21,9 @@ export function FrameStill({ id, fileName, src, fit = "cover", className }: Fram
         key={src}
         src={src}
         alt={fileName}
+        loading={lazy ? "lazy" : "eager"}
+        decoding="async"
+        draggable={false}
         className={`h-full w-full ${fit === "cover" ? "object-cover" : "object-contain"} ${className ?? ""}`}
         onError={() => setFailed(true)}
       />

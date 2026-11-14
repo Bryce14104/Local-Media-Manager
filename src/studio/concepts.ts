@@ -57,9 +57,7 @@ function conceptsFromIndex(items: StudioItem[], index: ConceptIndex): PresentedC
     if (cluster.kind === "burst") {
       bursts.push(group("burst", cluster.label, summary, cluster.label, null, null, members));
     } else if (cluster.kind === "person") {
-      const personId = cluster.sourceId == null ? null : `person-${cluster.sourceId}`;
-      const named = cluster.label.trim() && cluster.label.trim().toLowerCase() !== "unnamed" ? cluster.label.trim() : null;
-      people.push(group("person", named ?? "Unnamed", summary, personId ?? cluster.label, personId, named, members));
+      continue;
     }
   }
 
@@ -95,7 +93,7 @@ function deriveConcepts(items: StudioItem[]): PresentedConcepts {
   return {
     bursts: burstGroups(items),
     semantic: [],
-    people: peopleGroups(items),
+    people: [],
     captions: captionChips(items),
   };
 }
@@ -136,33 +134,6 @@ function burstGroups(items: StudioItem[]): InsightGroup[] {
   return groups.sort(
     (a, b) => captureMillis(b.items[0].capturedAt) - captureMillis(a.items[0].capturedAt) || a.label.localeCompare(b.label),
   );
-}
-
-function peopleGroups(items: StudioItem[]): InsightGroup[] {
-  const grouped = new Map<string, { name: string | null; items: StudioItem[]; faces: number }>();
-  for (const item of items) {
-    const seen = new Set<string>();
-    for (const face of item.faces) {
-      const entry = grouped.get(face.personId) ?? { name: face.name, items: [], faces: 0 };
-      entry.name = face.name?.trim() || entry.name;
-      entry.faces += 1;
-      if (!seen.has(face.personId)) {
-        seen.add(face.personId);
-        entry.items.push(item);
-      }
-      grouped.set(face.personId, entry);
-    }
-  }
-  return [...grouped.entries()]
-    .map(([personId, entry]) => {
-      const name = entry.name?.trim() || null;
-      const summary =
-        entry.faces === entry.items.length
-          ? frameSummary(entry.items.length)
-          : `${entry.faces} faces · ${frameSummary(entry.items.length)}`;
-      return group("person", name ?? "Unnamed", summary, personId, personId, name, entry.items);
-    })
-    .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label));
 }
 
 function captionChips(items: StudioItem[]): CaptionChip[] {

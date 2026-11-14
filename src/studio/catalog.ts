@@ -311,16 +311,6 @@ function seedItem(row: Seed, id: string): StudioItem {
   };
 }
 
-const SEED_FACES: Record<string, { personId: string; name: string | null; x: number; y: number; width: number; height: number }[]> = {
-  "A7_04188.JPG": [{ personId: "person-bryce", name: "Bryce", x: 0.33, y: 0.12, width: 0.28, height: 0.36 }],
-  "XT5_2288.JPG": [{ personId: "person-bryce", name: "Bryce", x: 0.4, y: 0.1, width: 0.26, height: 0.34 }],
-  "Z8_1210.JPG": [{ personId: "person-bryce", name: "Bryce", x: 0.36, y: 0.14, width: 0.3, height: 0.38 }],
-  "A7_05040.JPG": [{ personId: "person-bryce", name: "Bryce", x: 0.22, y: 0.16, width: 0.24, height: 0.32 }],
-  "A7_04140.JPG": [{ personId: "person-amina", name: "Amina", x: 0.38, y: 0.18, width: 0.27, height: 0.34 }],
-  "Q3_0160.JPG": [{ personId: "person-amina", name: "Amina", x: 0.34, y: 0.12, width: 0.3, height: 0.36 }],
-  "R5_0904.JPG": [{ personId: "person-guest", name: null, x: 0.42, y: 0.15, width: 0.25, height: 0.33 }],
-};
-
 const SEED_SUBJECTS: Record<string, { kind: "pet" | "wildlife" | "scene" | "object"; label: string }[]> = {
   "A7_05040.JPG": [{ kind: "pet", label: "dog" }],
   "A7_04112.ARW": [
@@ -371,20 +361,10 @@ const SEED_SUBJECTS: Record<string, { kind: "pet" | "wildlife" | "scene" | "obje
 };
 
 function attachSeed(item: StudioItem): StudioItem {
-  const faces = SEED_FACES[item.fileName] ?? [];
   const subjects = SEED_SUBJECTS[item.fileName] ?? [];
   return {
     ...item,
-    faces: faces.map((face, index) => ({
-      id: `face-${face.personId}-${item.fileName}-${index}`,
-      personId: face.personId,
-      name: face.name,
-      x: face.x,
-      y: face.y,
-      width: face.width,
-      height: face.height,
-      score: 0.94,
-    })),
+    faces: [],
     subjects: subjects.map((tag) => ({ ...tag, score: 0.86 })),
   };
 }

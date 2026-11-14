@@ -11,10 +11,6 @@ type Props = {
   onOpen: (id: string) => void;
   onShowFrames: (ids: string[], label: string) => void;
   onShowSubject: (value: string) => void;
-  onShowPerson: (personId: string, name: string) => void;
-  onRename: (personId: string, name: string) => void;
-  onMerge: (keepId: string, dropId: string) => void;
-  onSplit: (faceId: string) => void;
 };
 
 type Focus =
@@ -28,15 +24,9 @@ export function InsightsView({
   onOpen,
   onShowFrames,
   onShowSubject,
-  onShowPerson,
-  onRename,
-  onMerge,
-  onSplit,
 }: Props) {
   const [query, setQuery] = useState("");
   const [focus, setFocus] = useState<Focus | null>(null);
-  const [picked, setPicked] = useState<string[]>([]);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const presented = useMemo(() => (pending ? null : presentConcepts(items, index)), [items, index, pending]);
 
   const filtered = useMemo(() => {
@@ -82,11 +72,7 @@ export function InsightsView({
     setFocus((current) => (current?.type === "caption" && current.tag === tag ? null : { type: "caption", tag }));
   }
 
-  function reveal(target: { kind: InsightGroup["kind"] | "caption"; label: string; raw: string; personId: string | null; items: StudioItem[] }) {
-    if (target.kind === "person" && target.personId) {
-      onShowPerson(target.personId, target.label === "Unnamed" ? "Unnamed" : target.label);
-      return;
-    }
+  function reveal(target: { kind: InsightGroup["kind"] | "caption"; label: string; raw: string; items: StudioItem[] }) {
     if (target.kind === "semantic") {
       onShowSubject(target.raw);
       return;
@@ -104,15 +90,15 @@ export function InsightsView({
           <div className="min-w-0">
             <h1 className="text-sm font-medium tracking-wide">AI Insights</h1>
             <p className="text-[11px] text-mute">
-              {presented.bursts.length} collections · {presented.people.length} people · {presented.captions.length} captions
+              {presented.bursts.length} collections · {presented.captions.length} captions
             </p>
           </div>
           <label className="ml-auto w-full sm:w-72">
-            <span className="sr-only">Search captions, people, and collections</span>
+            <span className="sr-only">Search captions and collections</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search captions, people, and collections"
+              placeholder="Search captions and collections"
               className="w-full rounded-full border border-line bg-card px-3 py-1.5 text-sm outline-none placeholder:text-mute focus:border-teal"
             />
           </label>
@@ -123,7 +109,7 @@ export function InsightsView({
         {total === 0 ? (
           <EmptyState
             title="Nothing grouped yet"
-            body="Shelf groups short sequences, people, and caption tags on this machine after the local vision pass."
+            body="Shelf groups short sequences and caption tags on this machine after the local vision pass."
           />
         ) : visibleCount === 0 ? (
           <EmptyState title="No matches" body={`Nothing in the library is captioned with “${query.trim()}”.`} />
@@ -135,10 +121,8 @@ export function InsightsView({
                 summary={active.summary}
                 caption={active.caption}
                 items={active.items}
-                personId={active.personId}
                 onOpen={onOpen}
                 onReveal={() => reveal(active)}
-                onSplit={onSplit}
               />
             ) : null}
 
@@ -167,71 +151,6 @@ export function InsightsView({
                       <p className="truncate text-[11px] text-mute">{group.summary}</p>
                     </button>
                   ))}
-                </div>
-              </Section>
-            ) : null}
-
-            {filtered.people.length > 0 ? (
-              <Section title="People" hint="Name a cluster, or merge two" count={filtered.people.length}>
-                {picked.length === 2 ? (
-                  <button
-                    type="button"
-                    data-merge-people
-                    onClick={() => {
-                      onMerge(picked[0], picked[1]);
-                      setPicked([]);
-                    }}
-                    className="mb-3 rounded-full border border-line px-3 py-1 text-xs hover:border-teal hover:text-teal"
-                  >
-                    Merge selected
-                  </button>
-                ) : null}
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {filtered.people.map((group) => {
-                    const personId = group.personId ?? group.id;
-                    const selected = focus?.type === "group" && focus.id === group.id;
-                    return (
-                      <article
-                        key={group.id}
-                        data-person={personId}
-                        className={`rounded-2xl border bg-card p-2 ${selected ? "border-teal" : "border-line"}`}
-                      >
-                        <button type="button" onClick={() => selectGroup(group.id)} className="block w-full text-left">
-                          <Stack items={group.items} />
-                        </button>
-                        <div className="mt-2 flex items-center gap-2">
-                          <input
-                            type="checkbox"
-                            checked={picked.includes(personId)}
-                            onChange={() =>
-                              setPicked((current) =>
-                                current.includes(personId)
-                                  ? current.filter((entry) => entry !== personId)
-                                  : [...current, personId].slice(-2),
-                              )
-                            }
-                            aria-label={`Select ${group.name ?? "unnamed person"}`}
-                            className="accent-teal"
-                          />
-                          <input
-                            data-person-name={personId}
-                            value={drafts[personId] ?? group.name ?? ""}
-                            placeholder="Name this person"
-                            onChange={(event) => setDrafts((current) => ({ ...current, [personId]: event.target.value }))}
-                            onBlur={() => {
-                              const next = (drafts[personId] ?? group.name ?? "").trim();
-                              if (next !== (group.name ?? "")) onRename(personId, next);
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") (event.target as HTMLInputElement).blur();
-                            }}
-                            className="h-8 min-w-0 flex-1 rounded-full border border-transparent bg-studio px-2 text-sm outline-none focus:border-line"
-                          />
-                          <span className="text-[11px] text-mute">{group.items.length}</span>
-                        </div>
-                      </article>
-                    );
-                  })}
                 </div>
               </Section>
             ) : null}
@@ -272,19 +191,15 @@ function FocusTray({
   summary,
   caption,
   items,
-  personId,
   onOpen,
   onReveal,
-  onSplit,
 }: {
   title: string;
   summary: string;
   caption: string | null;
   items: StudioItem[];
-  personId: string | null;
   onOpen: (id: string) => void;
   onReveal: () => void;
-  onSplit: (faceId: string) => void;
 }) {
   return (
     <section className="rounded-2xl border border-line bg-card p-3">
@@ -314,21 +229,6 @@ function FocusTray({
               </div>
               <p className="mt-1 truncate text-[11px] text-mute">{item.fileName}</p>
             </button>
-            {personId
-              ? item.faces
-                  .filter((face) => face.personId === personId)
-                  .map((face) => (
-                    <button
-                      key={face.id}
-                      type="button"
-                      data-split={face.id}
-                      onClick={() => onSplit(face.id)}
-                      className="mt-0.5 text-[10px] text-mute hover:text-foam"
-                    >
-                      Split
-                    </button>
-                  ))
-              : null}
           </div>
         ))}
       </div>

@@ -1,7 +1,6 @@
-//! Local face and subject recognition.
+//! Local subject recognition.
 //!
-//! YuNet finds faces, SFace turns each aligned crop into a 128-d identity
-//! vector, and MobileNetV2 runs inside this process. Its class probabilities
+//! ResNet-50 runs inside this process. Its ImageNet class probabilities
 //! become a visual embedding stored in SQLite. Search compares that embedding
 //! with the query. Sunset, beach, water, and lighthouse also come from the
 //! pixels. Drone comes from the camera name. Nothing leaves the machine.
@@ -62,17 +61,19 @@ pub enum VisionError {
     Database(#[from] DbError),
     #[error("could not decode pixels in {0}")]
     Decode(String),
-    #[error("mobilenet returned {0} values, expected 1000")]
+    #[error("classifier returned {0} values, expected 1000")]
     BadOutput(usize),
 }
+
+const TAGGER_MODEL: &str = "resnet50.onnx";
 
 pub fn warm_vision() -> Result<(), VisionError> {
     let threads = worker_threads();
     let started = std::time::Instant::now();
     let mut engine = Engine::load(threads)?;
-    let model = model_path("mobilenet.onnx");
+    let model = model_path(TAGGER_MODEL);
     eprintln!(
-        "shelf index: ort initialized in {} ms, mobilenet loaded from {}",
+        "shelf index: ort initialized in {} ms, {TAGGER_MODEL} loaded from {}",
         started.elapsed().as_millis(),
         model.display()
     );
@@ -88,7 +89,7 @@ pub fn warm_vision() -> Result<(), VisionError> {
         return Err(VisionError::BadOutput(classified.probabilities.len()));
     }
     eprintln!(
-        "shelf index: Session::run mobilenet.onnx ok in {} ms -> {} floats",
+        "shelf index: Session::run {TAGGER_MODEL} ok in {} ms -> {} floats",
         started.elapsed().as_millis(),
         classified.probabilities.len()
     );
@@ -99,7 +100,7 @@ fn worker_threads() -> usize {
     let cores = std::thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(2);
-    if cores <= 2 { 1 } else { 2 }
+    cores.clamp(1, 8)
 }
 
 #[derive(Clone, Debug)]
@@ -127,20 +128,12 @@ struct Heads<'a> {
 }
 
 struct Engine {
-    threads: usize,
-    yunet: Option<Session>,
-    sface: Option<Session>,
-    mobilenet: Option<Session>,
+    tagger: Option<Session>,
+    input_name: String,
+    output_name: String,
 }
 
 struct PreparedFrame {
-    labels: Vec<(String, String, f32)>,
-    embedding: Vec<f32>,
-    needs_face: bool,
-}
-
-struct FaceJob {
-    target: VisionTarget,
     labels: Vec<(String, String, f32)>,
     embedding: Vec<f32>,
 }
@@ -172,7 +165,6 @@ where
             return Err(error);
         }
     };
-    let mut face_jobs = Vec::new();
     for (index, target) in pending.iter().enumerate() {
         progress(index, pending.len(), "Running ONNX on image pixels");
         match prepare_frame(&mut engine, target) {
@@ -188,13 +180,7 @@ where
                 } else {
                     eprintln!("shelf index: embedded {} -> {names}", target.file_path);
                 }
-                if prepared.needs_face {
-                    face_jobs.push(FaceJob {
-                        target: target.clone(),
-                        labels: prepared.labels,
-                        embedding: prepared.embedding,
-                    });
-                } else if let Err(error) = store_frame(library, target.id, &prepared.labels, &prepared.embedding) {
+                if let Err(error) = store_frame(library, target.id, &prepared.labels, &prepared.embedding) {
                     eprintln!("shelf index: could not store {}: {error}", target.file_path);
                 }
             }
@@ -204,40 +190,6 @@ where
         }
     }
     engine.drop_tagger();
-    if !face_jobs.is_empty() {
-        let total = face_jobs.len();
-        progress(0, total, "Finding faces");
-        match engine.load_faces() {
-            Ok(()) => {
-                for (index, job) in face_jobs.iter().enumerate() {
-                    progress(index, total, "Finding faces");
-                    let mut labels = job.labels.clone();
-                    let mut embedding = job.embedding.clone();
-                    if let Some(image) = load_pixels(&job.target) {
-                        let resized = image::imageops::resize(&image, INPUT, INPUT, FilterType::Triangle);
-                        match read_faces(&mut engine, library, &job.target, &resized) {
-                            Ok(count) if count > 0 => note_person(&mut labels, &mut embedding),
-                            Ok(_) => {}
-                            Err(error) => {
-                                eprintln!("shelf index: faces failed for {}: {error}", job.target.file_path);
-                            }
-                        }
-                    }
-                    if let Err(error) = store_frame(library, job.target.id, &labels, &embedding) {
-                        eprintln!("shelf index: could not store {}: {error}", job.target.file_path);
-                    }
-                }
-            }
-            Err(error) => {
-                eprintln!("shelf index: face models stayed unloaded: {error}");
-                for job in &face_jobs {
-                    if let Err(store_error) = store_frame(library, job.target.id, &job.labels, &job.embedding) {
-                        eprintln!("shelf index: could not store {}: {store_error}", job.target.file_path);
-                    }
-                }
-            }
-        }
-    }
     progress(0, 0, "Clustering");
     if let Err(error) = library.rebuild_concepts() {
         eprintln!("shelf index: could not write clusters and captions: {error}");
@@ -286,18 +238,12 @@ fn prepare_frame(engine: &mut Engine, target: &VisionTarget) -> Result<PreparedF
         .into_iter()
         .map(|tag| (tag.kind.to_string(), tag.label, tag.score))
         .collect();
-    let needs_face = might_contain_person(&image);
     eprintln!(
-        "shelf index: tagged {} ({} floats, faces {})",
+        "shelf index: tagged {} ({} floats)",
         target.file_path,
-        embedding.len(),
-        if needs_face { "queued" } else { "skipped" }
+        embedding.len()
     );
-    Ok(PreparedFrame {
-        labels,
-        embedding,
-        needs_face,
-    })
+    Ok(PreparedFrame { labels, embedding })
 }
 
 fn store_frame(
@@ -417,41 +363,6 @@ pub fn search_embeddings(library: &Library, query: &str) -> Result<Vec<AiSearchH
     Ok(hits)
 }
 
-fn read_faces(
-    engine: &mut Engine,
-    library: &Library,
-    target: &VisionTarget,
-    image: &RgbImage,
-) -> Result<usize, VisionError> {
-    let faces = engine.detect(image)?;
-    let found = faces.len();
-    let mut known = library.face_embeddings().unwrap_or_default();
-    for face in faces {
-        let aligned = align_or_crop(image, &face);
-        let mut embedding = engine.embed(&aligned)?;
-        l2_normalize(&mut embedding);
-        let person_id = match nearest(&embedding, &known) {
-            Some((person_id, score)) if score >= SAME_PERSON => person_id,
-            _ => library.create_person(None).unwrap_or(0),
-        };
-        if person_id == 0 {
-            continue;
-        }
-        let _ = library.insert_face(
-            target.id,
-            person_id,
-            (face.x / INPUT as f32).clamp(0.0, 1.0),
-            (face.y / INPUT as f32).clamp(0.0, 1.0),
-            (face.width / INPUT as f32).clamp(0.0, 1.0),
-            (face.height / INPUT as f32).clamp(0.0, 1.0),
-            face.score,
-            &embedding,
-        );
-        known.push((person_id, embedding));
-    }
-    Ok(found)
-}
-
 fn load_pixels(target: &VisionTarget) -> Option<RgbImage> {
     if let Some(thumb) = target.thumbnail_path.as_deref()
         && let Ok(image) = image::open(thumb)
@@ -484,62 +395,26 @@ fn camera_text(target: &VisionTarget) -> String {
 impl Engine {
     fn load(threads: usize) -> Result<Self, VisionError> {
         let environment = environment()?;
+        let tagger = session(environment, TAGGER_MODEL, threads)?;
+        let input_name = tagger
+            .inputs()
+            .first()
+            .map(|input| input.name().to_string())
+            .unwrap_or_else(|| "data".to_string());
+        let output_name = tagger
+            .outputs()
+            .first()
+            .map(|output| output.name().to_string())
+            .unwrap_or_else(|| "output".to_string());
         Ok(Self {
-            threads,
-            yunet: None,
-            sface: None,
-            mobilenet: Some(session(environment, "mobilenet.onnx", threads)?),
+            tagger: Some(tagger),
+            input_name,
+            output_name,
         })
     }
 
     fn drop_tagger(&mut self) {
-        self.mobilenet = None;
-    }
-
-    fn load_faces(&mut self) -> Result<(), VisionError> {
-        if self.yunet.is_some() && self.sface.is_some() {
-            return Ok(());
-        }
-        let environment = environment()?;
-        self.yunet = Some(session(environment, "yunet.onnx", self.threads)?);
-        self.sface = Some(session(environment, "sface.onnx", self.threads)?);
-        Ok(())
-    }
-
-    fn detect(&mut self, image: &RgbImage) -> Result<Vec<DetectedFace>, VisionError> {
-        let tensor = Tensor::from_array(nchw(image, true, |value, _channel| value))?;
-        let yunet = self
-            .yunet
-            .as_mut()
-            .ok_or_else(|| VisionError::MissingModel("yunet.onnx".to_string()))?;
-        let outputs = yunet.run(ort::inputs!["input" => tensor])?;
-        let names = [
-            "cls_8", "cls_16", "cls_32", "obj_8", "obj_16", "obj_32", "bbox_8", "bbox_16", "bbox_32", "kps_8",
-            "kps_16", "kps_32",
-        ];
-        let mut planes = Vec::with_capacity(names.len());
-        for name in names {
-            let (_shape, data) = outputs[name].try_extract_tensor::<f32>()?;
-            planes.push(data.to_vec());
-        }
-        let heads = Heads {
-            cls: [&planes[0], &planes[1], &planes[2]],
-            obj: [&planes[3], &planes[4], &planes[5]],
-            bbox: [&planes[6], &planes[7], &planes[8]],
-            kps: [&planes[9], &planes[10], &planes[11]],
-        };
-        Ok(decode_yunet(&heads, FACE_SCORE, FACE_NMS))
-    }
-
-    fn embed(&mut self, face: &RgbImage) -> Result<Vec<f32>, VisionError> {
-        let tensor = Tensor::from_array(nchw(face, false, |value, _channel| value))?;
-        let sface = self
-            .sface
-            .as_mut()
-            .ok_or_else(|| VisionError::MissingModel("sface.onnx".to_string()))?;
-        let outputs = sface.run(ort::inputs!["data" => tensor])?;
-        let (_shape, data) = outputs["fc1"].try_extract_tensor::<f32>()?;
-        Ok(data.to_vec())
+        self.tagger = None;
     }
 
     fn classify_adaptive(&mut self, image: &RgbImage) -> Result<Classified, VisionError> {
@@ -562,15 +437,15 @@ impl Engine {
             (value / 255.0 - IMAGENET_MEAN[channel]) / IMAGENET_STD[channel]
         }))?;
         let started = std::time::Instant::now();
-        let mobilenet = self
-            .mobilenet
+        let tagger = self
+            .tagger
             .as_mut()
-            .ok_or_else(|| VisionError::MissingModel("mobilenet.onnx".to_string()))?;
-        let outputs = mobilenet.run(ort::inputs!["input" => tensor])?;
-        let (_shape, data) = outputs["output"].try_extract_tensor::<f32>()?;
+            .ok_or_else(|| VisionError::MissingModel(TAGGER_MODEL.to_string()))?;
+        let outputs = tagger.run(ort::inputs![self.input_name.as_str() => tensor])?;
+        let (_shape, data) = outputs[self.output_name.as_str()].try_extract_tensor::<f32>()?;
         let probabilities = probabilities_from_logits(data);
         eprintln!(
-            "shelf index: Session::run mobilenet.onnx in {} ms -> {} floats",
+            "shelf index: Session::run {TAGGER_MODEL} in {} ms -> {} floats",
             started.elapsed().as_millis(),
             probabilities.len()
         );
@@ -1522,12 +1397,8 @@ mod tests {
     #[test]
     fn models_run_on_a_plain_frame() {
         let mut engine = Engine::load(2).expect("models");
-        engine.load_faces().expect("faces");
         let frame = RgbImage::from_pixel(64, 48, Rgb([20, 40, 80]));
-        let resized = image::imageops::resize(&frame, INPUT, INPUT, FilterType::Triangle);
-        let faces = engine.detect(&resized).expect("yunet");
-        assert!(faces.is_empty());
-        let classified = engine.classify(&resized).expect("mobilenet");
+        let classified = engine.classify(&frame).expect("resnet50");
         assert!(classified.tags.len() < 20);
         assert_eq!(classified.probabilities.len(), crate::models::IMAGENET_DIM);
     }

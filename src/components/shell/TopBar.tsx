@@ -121,7 +121,7 @@ export function TopBar({
             aria-expanded={open}
             aria-controls="command-suggestions"
             aria-activedescendant={open ? suggestions[highlight]?.id : undefined}
-            placeholder={aiSearch ? "Search people, objects, or a command" : "Search file names and paths"}
+            placeholder={aiSearch ? "Search objects, scenes, or a command" : "Search file names and paths"}
             onChange={(event) => {
               onQuery(event.target.value);
               setOpen(true);

@@ -174,7 +174,7 @@ pub struct LabelRecord {
 }
 
 /// Length of the vector stored for each frame: 1000 ImageNet probabilities
-/// from MobileNet `Session::run`, then one score per visual concept.
+/// from ResNet-50 `Session::run`, then one score per visual concept.
 pub const IMAGENET_DIM: usize = 1000;
 pub const VISUAL_CONCEPTS: usize = 14;
 pub const VISUAL_EMBEDDING_FLOATS: usize = IMAGENET_DIM + VISUAL_CONCEPTS;

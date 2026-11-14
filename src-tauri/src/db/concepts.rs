@@ -30,8 +30,7 @@ struct CaptionRow {
 }
 
 pub(super) fn write(conn: &mut Connection) -> Result<(), DbError> {
-    let mut drafts = burst_drafts(conn)?;
-    drafts.extend(person_drafts(conn)?);
+    let drafts = burst_drafts(conn)?;
     let captions = caption_rows(conn)?;
     let now = super::unix_now();
     let tx = conn.transaction()?;

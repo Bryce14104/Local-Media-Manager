@@ -31,7 +31,7 @@ export function MediaCard({
     <article
       id={`frame-${item.id}`}
       data-filename={item.fileName}
-      className={`group relative overflow-hidden border bg-card select-none ${dense ? "rounded-lg" : "rounded-xl"} ${
+      className={`group relative overflow-hidden border bg-card select-none [content-visibility:auto] [contain-intrinsic-size:240px] ${dense ? "rounded-lg" : "rounded-xl"} ${
         primary ? "border-teal" : selected ? "border-teal/50" : "border-line"
       }`}
     >

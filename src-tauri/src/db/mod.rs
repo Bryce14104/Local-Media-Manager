@@ -639,6 +639,23 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
         "CREATE INDEX IF NOT EXISTS idx_media_files_captured_at ON media_files (captured_at DESC)",
         [],
     )?;
+    let has_v3: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 3",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_v3 == 0 {
+        conn.execute_batch(
+            "DELETE FROM media_embeddings;
+             DELETE FROM faces;
+             DELETE FROM people;
+             DELETE FROM cluster_members;
+             DELETE FROM clusters WHERE kind = 'person';
+             UPDATE media_files SET vision_at = NULL;
+             INSERT INTO schema_migrations (version, applied_at)
+             VALUES (3, CAST(strftime('%s', 'now') AS INTEGER));",
+        )?;
+    }
     Ok(())
 }
 
@@ -700,7 +717,7 @@ mod tests {
         let library = Library::open(dir.path().join("library.sqlite")).unwrap();
         let summary = library.summary().unwrap();
 
-        assert_eq!(summary.schema_version, 2);
+        assert_eq!(summary.schema_version, 3);
         assert_eq!(summary.media_count, 0);
         for column in [
             "file_path",
@@ -718,7 +735,7 @@ mod tests {
         }
 
         let again = Library::open(dir.path().join("library.sqlite")).unwrap();
-        assert_eq!(again.summary().unwrap().schema_version, 2);
+        assert_eq!(again.summary().unwrap().schema_version, 3);
     }
 
     #[test]
@@ -1019,11 +1036,6 @@ mod tests {
         library
             .replace_labels(dog, &[("pet".into(), "dog".into(), 0.8)])
             .unwrap();
-        let person = library.create_person(Some("Bryce")).unwrap();
-        library
-            .insert_face(dog, person, 0.2, 0.1, 0.3, 0.4, 0.95, &[1.0, 0.0])
-            .unwrap();
-
         let index = library.concept_index().unwrap();
         let burst_labels: Vec<_> = index
             .clusters
@@ -1044,17 +1056,8 @@ mod tests {
             index
                 .clusters
                 .iter()
-                .all(|cluster| cluster.kind != "semantic")
+                .all(|cluster| cluster.kind != "semantic" && cluster.kind != "person")
         );
-        let people: Vec<_> = index
-            .clusters
-            .iter()
-            .filter(|cluster| cluster.kind == "person")
-            .collect();
-        assert_eq!(people.len(), 1);
-        assert_eq!(people[0].label, "Bryce");
-        assert_eq!(people[0].source_id, Some(person));
-        assert_eq!(people[0].media_ids, vec![dog]);
 
         let beach_caption = index
             .captions

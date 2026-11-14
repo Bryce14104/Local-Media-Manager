@@ -40,9 +40,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "models/yunet.onnx",
-      "models/sface.onnx",
-      "models/mobilenet.onnx"
+      "models/resnet50.onnx"
     ]
   }
 }

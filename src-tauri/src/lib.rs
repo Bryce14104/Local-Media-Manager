@@ -30,7 +30,7 @@ pub fn run() {
             })?;
             if let Ok(resources) = app.path().resource_dir() {
                 let models = resources.join("models");
-                if models.join("yunet.onnx").is_file() {
+                if models.join("resnet50.onnx").is_file() {
                     // The vision worker reads this before the first session is built.
                     unsafe { std::env::set_var("SHELF_MODELS", models) };
                 }

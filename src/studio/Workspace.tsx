@@ -11,12 +11,9 @@ import {
   fetchLibrary,
   indexPaths,
   searchEmbeddings,
-  mergePeople,
   pickImportPaths,
   removeFromLibrary,
-  renamePerson,
   setFlags,
-  splitFace,
 } from "../lib/api";
 import type { ConceptIndex, MediaKind, MediaRecord } from "../lib/types";
 import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
@@ -33,7 +30,7 @@ import { SelectionBar } from "../components/workspace/SelectionBar";
 import { captureMillis, createCatalog, itemFromRecord, mergeItems, nextFlag } from "./catalog";
 import { itemsFromFiles } from "./previews";
 import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
-import { applyInsights, mergeFaces, moveFace, numericSuffix, renameFaces } from "./insights";
+import { applyInsights } from "./insights";
 import { applySelection, type PointerMods } from "./selection";
 import type { MapZoom } from "./mapRegions";
 import { applySearchMode, filterLabel, matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
@@ -823,51 +820,6 @@ export function Workspace() {
     }
   }
 
-  function loadConcepts() {
-    if (!desktopBridgeAvailable()) return;
-    void fetchConcepts()
-      .then((concepts) => {
-        setConceptIndex(concepts);
-        setConceptsLive(true);
-      })
-      .catch(() => setConceptsLive(false));
-  }
-
-  function renameCluster(personId: string, name: string) {
-    setItems((current) => renameFaces(current, personId, name));
-    const id = numericSuffix(personId, "person-");
-    if (id != null && desktopBridgeAvailable()) {
-      void renamePerson(id, name.trim() || null)
-        .then(() => loadConcepts())
-        .catch(() => undefined);
-    }
-  }
-
-  function mergeClusters(keepId: string, dropId: string) {
-    setItems((current) => mergeFaces(current, keepId, dropId));
-    const keep = numericSuffix(keepId, "person-");
-    const drop = numericSuffix(dropId, "person-");
-    if (keep != null && drop != null && desktopBridgeAvailable()) {
-      void mergePeople(keep, drop)
-        .then(() => loadConcepts())
-        .catch(() => undefined);
-    }
-  }
-
-  function splitClusterFace(faceId: string) {
-    const face = numericSuffix(faceId, "face-");
-    if (face != null && desktopBridgeAvailable()) {
-      void splitFace(face)
-        .then((id) => {
-          setItems((current) => moveFace(current, faceId, `person-${id}`));
-          loadConcepts();
-        })
-        .catch(() => undefined);
-      return;
-    }
-    setItems((current) => moveFace(current, faceId, `person-local-${Date.now()}`));
-  }
-
   function showFrames(ids: string[], label: string) {
     setFilters((current) => upsertFilter(current.filter((filter) => filter.kind !== "region"), { kind: "cluster", ids, label }));
     chooseView("compact");
@@ -875,11 +827,6 @@ export function Workspace() {
 
   function showSubject(label: string) {
     setFilters((current) => upsertFilter(current, { kind: "subject", value: label }));
-    chooseView("compact");
-  }
-
-  function showPerson(personId: string, name: string) {
-    setFilters((current) => upsertFilter(current, { kind: "person", personId, name }));
     chooseView("compact");
   }
 
@@ -925,10 +872,6 @@ export function Workspace() {
             onOpen={(id) => viewItem(id)}
             onShowFrames={showFrames}
             onShowSubject={showSubject}
-            onShowPerson={showPerson}
-            onRename={renameCluster}
-            onMerge={mergeClusters}
-            onSplit={splitClusterFace}
           />
         ) : (
           <MediaStage
