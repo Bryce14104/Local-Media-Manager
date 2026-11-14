@@ -163,7 +163,10 @@ export function ProgressiveMedia({
   }
 
   return (
-    <div className={`relative h-full w-full overflow-hidden bg-black ${className ?? ""}`}>
+    <div
+      className={`relative h-full w-full overflow-hidden bg-black ${className ?? ""}`}
+      style={item.rotation ? { transform: `rotate(${item.rotation}deg)` } : undefined}
+    >
       {layer?.still ? (
         <img src={layer.still} alt={item.fileName} draggable={false} className={`absolute inset-0 ${fitClass}`} />
       ) : (

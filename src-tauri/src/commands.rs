@@ -227,3 +227,79 @@ pub fn read_media(path: String) -> Result<Response, String> {
     let bytes = std::fs::read(file).map_err(|err| err.to_string())?;
     Ok(Response::new(bytes))
 }
+
+#[tauri::command]
+pub fn set_color(
+    paths: Vec<String>,
+    color: Option<String>,
+    state: State<'_, Library>,
+) -> Result<usize, String> {
+    state
+        .set_color(&paths, color.as_deref())
+        .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn set_rotation(
+    path: String,
+    rotation: i64,
+    state: State<'_, Library>,
+) -> Result<MediaRecord, String> {
+    state.set_rotation(&path, rotation).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn set_notes(path: String, notes: Option<String>, state: State<'_, Library>) -> Result<(), String> {
+    let trimmed = notes.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    state.set_notes(&path, trimmed).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn set_keywords(
+    path: String,
+    keywords: Vec<String>,
+    state: State<'_, Library>,
+) -> Result<(), String> {
+    let cleaned: Vec<String> = keywords
+        .into_iter()
+        .map(|word| word.trim().to_string())
+        .filter(|word| !word.is_empty())
+        .collect();
+    state.set_keywords(&path, &cleaned).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn list_albums(state: State<'_, Library>) -> Result<Vec<crate::models::AlbumRecord>, String> {
+    state.list_albums().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn create_album(name: String, state: State<'_, Library>) -> Result<crate::models::AlbumRecord, String> {
+    state.create_album(&name).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn add_to_album(album_id: i64, media_ids: Vec<i64>, state: State<'_, Library>) -> Result<usize, String> {
+    state.add_to_album(album_id, &media_ids).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn album_media_ids(album_id: i64, state: State<'_, Library>) -> Result<Vec<i64>, String> {
+    state.album_media_ids(album_id).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn reveal_path(path: String) -> Result<(), String> {
+    tauri_plugin_opener::reveal_item_in_dir(Path::new(&path)).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn copy_originals(
+    paths: Vec<String>,
+    destination: String,
+    state: State<'_, Library>,
+) -> Result<usize, String> {
+    state
+        .copy_originals(&paths, &destination)
+        .map_err(|err| err.to_string())
+}

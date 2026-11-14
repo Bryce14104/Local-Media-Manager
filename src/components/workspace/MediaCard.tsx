@@ -52,8 +52,21 @@ export function MediaCard({
         className="block w-full text-left"
       >
         <div className={`relative ${roomy ? "aspect-[4/3]" : "aspect-square"}`}>
-          <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
+          {item.colorLabel ? (
+            <span
+              className="absolute left-0 top-0 z-10 h-full w-1.5"
+              style={{ background: colorSwatch(item.colorLabel) }}
+            />
+          ) : null}
+          <div className="h-full w-full" style={{ transform: item.rotation ? `rotate(${item.rotation}deg)` : undefined }}>
+            <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
+          </div>
           {item.format === "video" ? <PlayMark /> : null}
+          {item.rating ? (
+            <span className="pointer-events-none absolute bottom-1 left-1 z-10 rounded bg-black/55 px-1 font-mono text-[10px] text-gold">
+              {"★".repeat(item.rating)}
+            </span>
+          ) : null}
         </div>
         {showMeta ? (
           <div className={roomy ? "space-y-1 px-3 py-3" : "space-y-0.5 px-2 py-2"}>
@@ -125,6 +138,15 @@ function flagClass(flag: StudioItem["flag"]): string {
   if (flag === "pick") return "border-teal bg-teal text-teal-ink";
   if (flag === "reject") return "border-danger/70 bg-danger/20 text-danger";
   return "border-white/20 bg-studio/75 text-foam";
+}
+
+function colorSwatch(color: StudioItem["colorLabel"]): string {
+  if (color === "red") return "#ef4444";
+  if (color === "yellow") return "#eab308";
+  if (color === "green") return "#22c55e";
+  if (color === "blue") return "#3b82f6";
+  if (color === "purple") return "#a855f7";
+  return "transparent";
 }
 
 function flagTitle(flag: StudioItem["flag"]): string {

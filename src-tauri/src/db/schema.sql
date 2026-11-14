@@ -38,7 +38,23 @@ CREATE TABLE IF NOT EXISTS media_files (
     captured_at INTEGER,
     thumbnail_path TEXT,
     flag TEXT CHECK (flag IS NULL OR flag IN ('pick', 'reject')),
-    vision_at INTEGER
+    vision_at INTEGER,
+    color_label TEXT CHECK (color_label IS NULL OR color_label IN ('red', 'yellow', 'green', 'blue', 'purple')),
+    rotation INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    keywords TEXT
+);
+
+CREATE TABLE IF NOT EXISTS albums (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS album_members (
+    album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+    media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+    PRIMARY KEY (album_id, media_id)
 );
 
 -- A person cluster. `name` stays NULL until someone names the cluster.

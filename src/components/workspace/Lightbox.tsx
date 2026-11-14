@@ -9,12 +9,31 @@ type LightboxProps = {
   after: StudioItem | null;
   index: number;
   count: number;
+  strip?: StudioItem[];
   onClose: () => void;
   onPrev: () => void;
   onNext: () => void;
+  onJump?: (id: string) => void;
+  onRotate?: () => void;
+  onReveal?: () => void;
+  onCopyPath?: () => void;
 };
 
-export function Lightbox({ item, before, after, index, count, onClose, onPrev, onNext }: LightboxProps) {
+export function Lightbox({
+  item,
+  before,
+  after,
+  index,
+  count,
+  strip = [],
+  onClose,
+  onPrev,
+  onNext,
+  onJump,
+  onRotate,
+  onReveal,
+  onCopyPath,
+}: LightboxProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const dragX = useRef<number | null>(null);
@@ -25,6 +44,8 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
   onPrevRef.current = onPrev;
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
   const [immersive, setImmersive] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [slideshow, setSlideshow] = useState(false);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -32,7 +53,14 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
 
   useEffect(() => {
     setNatural(null);
+    setZoom(1);
   }, [item.id]);
+
+  useEffect(() => {
+    if (!slideshow) return;
+    const timer = window.setInterval(() => onNext(), 4000);
+    return () => window.clearInterval(timer);
+  }, [slideshow, onNext, item.id]);
 
   useEffect(() => {
     const sync = () => setImmersive(document.fullscreenElement === rootRef.current);
@@ -66,13 +94,26 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
       }
       if (event.key === " ") {
         const video = rootRef.current?.querySelector("video");
-        if (!video) return;
-        event.stopPropagation();
+        if (video) {
+          event.stopPropagation();
+          event.preventDefault();
+          video.muted = false;
+          if (video.paused) void video.play().catch(() => undefined);
+          else video.pause();
+          return;
+        }
         event.preventDefault();
-        video.muted = false;
-        if (video.paused) void video.play().catch(() => undefined);
-        else video.pause();
+        setSlideshow((current) => !current);
       }
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        setZoom((current) => Math.min(4, current + 0.25));
+      }
+      if (event.key === "-" || event.key === "_") {
+        event.preventDefault();
+        setZoom((current) => Math.max(1, current - 0.25));
+      }
+      if (event.key === "0") setZoom(1);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -128,6 +169,7 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
     if (dragX.current == null) return;
     const delta = event.clientX - dragX.current;
     dragX.current = null;
+    if (zoom > 1) return;
     if (delta > 72) onPrev();
     else if (delta < -72) onNext();
   }
@@ -148,23 +190,63 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
           dragX.current = null;
         }}
       >
-        <ProgressiveMedia
-          item={item}
-          fit="contain"
-          playback="play"
-          quality={immersive ? "full" : "proxy"}
-          onSize={(nextWidth, nextHeight) => setNatural({ width: nextWidth, height: nextHeight })}
-        />
+        <div className="h-full w-full" style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}>
+          <ProgressiveMedia
+            item={item}
+            fit="contain"
+            playback="play"
+            quality={immersive ? "full" : "proxy"}
+            onSize={(nextWidth, nextHeight) => setNatural({ width: nextWidth, height: nextHeight })}
+          />
+        </div>
       </div>
 
       <header
-        className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-end gap-3 bg-gradient-to-b from-black/55 to-transparent px-3 py-2 md:px-4 ${
+        className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-end gap-2 bg-gradient-to-b from-black/55 to-transparent px-3 py-2 md:px-4 ${
           immersive ? "opacity-0 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100" : ""
         }`}
       >
-        <p className="font-mono text-xs tracking-wide text-white/70">
+        <p className="mr-auto font-mono text-xs tracking-wide text-white/70">
           {index + 1} / {count}
+          {slideshow ? " · slideshow" : ""}
+          {zoom > 1 ? ` · ${Math.round(zoom * 100)}%` : ""}
         </p>
+        <button
+          type="button"
+          aria-label={slideshow ? "Stop slideshow" : "Slideshow"}
+          onClick={() => setSlideshow((current) => !current)}
+          className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
+        >
+          {slideshow ? "Pause" : "Play"}
+        </button>
+        {onRotate ? (
+          <button
+            type="button"
+            aria-label="Rotate"
+            onClick={onRotate}
+            className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
+          >
+            Rotate
+          </button>
+        ) : null}
+        {onCopyPath ? (
+          <button
+            type="button"
+            onClick={onCopyPath}
+            className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
+          >
+            Copy path
+          </button>
+        ) : null}
+        {onReveal ? (
+          <button
+            type="button"
+            onClick={onReveal}
+            className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
+          >
+            Reveal
+          </button>
+        ) : null}
         {!clip ? (
           <button
             type="button"
@@ -217,6 +299,24 @@ export function Lightbox({ item, before, after, index, count, onClose, onPrev, o
               {width && height ? ` · ${width} × ${height}` : ""}
             </p>
           </div>
+          {strip.length > 1 ? (
+            <div className="pointer-events-auto hidden max-w-[min(52rem,55vw)] gap-1 overflow-x-auto md:flex">
+              {strip.map((frame) => (
+                <button
+                  key={frame.id}
+                  type="button"
+                  onClick={() => onJump?.(frame.id)}
+                  className={`h-12 w-12 shrink-0 overflow-hidden rounded border ${
+                    frame.id === item.id ? "border-teal" : "border-white/20"
+                  }`}
+                >
+                  {frame.previewUrl ? (
+                    <img src={frame.previewUrl} alt="" className="h-full w-full object-cover" />
+                  ) : null}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div className="pointer-events-auto flex md:hidden">
             <button
               type="button"

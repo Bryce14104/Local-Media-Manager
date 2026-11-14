@@ -6,8 +6,8 @@
 mod concepts;
 
 use crate::models::{
-    ConceptIndex, ExifSnapshot, FaceRecord, InsightSnapshot, LabelRecord, MediaKind, MediaRecord,
-    PersonRecord,
+    AlbumRecord, ConceptIndex, ExifSnapshot, FaceRecord, InsightSnapshot, LabelRecord, MediaKind,
+    MediaRecord, PersonRecord,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
@@ -16,6 +16,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 const SCHEMA_SQL: &str = include_str!("schema.sql");
+
+const MEDIA_SELECT: &str = "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
+                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path, flag,
+                    color_label, rotation, notes, keywords
+             FROM media_files";
 
 /// Values written for a newly hashed media file.
 ///
@@ -42,6 +47,8 @@ pub enum DbError {
     InvalidRating,
     #[error("flag must be pick, reject, or empty")]
     InvalidFlag,
+    #[error("color must be red, yellow, green, blue, purple, or empty")]
+    InvalidColor,
     #[error("no indexed file at {0}")]
     NotFound(String),
     #[error("the library lock was poisoned")]
@@ -114,24 +121,17 @@ impl Library {
 
     pub fn list_media(&self) -> Result<Vec<MediaRecord>, DbError> {
         let conn = self.lock()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
-                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path, flag
-             FROM media_files
-             ORDER BY captured_at IS NULL, captured_at DESC, file_path COLLATE NOCASE ASC",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "{MEDIA_SELECT}
+             ORDER BY captured_at IS NULL, captured_at DESC, file_path COLLATE NOCASE ASC"
+        ))?;
         let rows = stmt.query_map([], map_media)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn find_by_path(&self, path: &str) -> Result<Option<MediaRecord>, DbError> {
         let conn = self.lock()?;
-        let mut stmt = conn.prepare(
-            "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
-                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path, flag
-             FROM media_files
-             WHERE file_path = ?1",
-        )?;
+        let mut stmt = conn.prepare(&format!("{MEDIA_SELECT} WHERE file_path = ?1"))?;
         let record = stmt.query_row(params![path], map_media).optional()?;
         Ok(record)
     }
@@ -190,10 +190,7 @@ impl Library {
         }
 
         let record = conn.query_row(
-            "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
-                    indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path, flag
-             FROM media_files
-             WHERE file_path = ?1",
+            &format!("{MEDIA_SELECT} WHERE file_path = ?1"),
             params![path],
             map_media,
         )?;
@@ -240,6 +237,145 @@ impl Library {
             )?;
         }
         Ok(changed)
+    }
+
+    pub fn set_color(&self, paths: &[String], color: Option<&str>) -> Result<usize, DbError> {
+        if let Some(value) = color
+            && !matches!(value, "red" | "yellow" | "green" | "blue" | "purple")
+        {
+            return Err(DbError::InvalidColor);
+        }
+        let conn = self.lock()?;
+        let mut changed = 0;
+        for path in paths {
+            changed += conn.execute(
+                "UPDATE media_files SET color_label = ?1 WHERE file_path = ?2",
+                params![color, path],
+            )?;
+        }
+        Ok(changed)
+    }
+
+    pub fn set_rotation(&self, path: &str, rotation: i64) -> Result<MediaRecord, DbError> {
+        let degrees = ((rotation % 360) + 360) % 360;
+        if degrees % 90 != 0 {
+            return Err(DbError::InvalidFlag);
+        }
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE media_files SET rotation = ?1 WHERE file_path = ?2",
+            params![degrees, path],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound(path.to_string()));
+        }
+        conn.query_row(&format!("{MEDIA_SELECT} WHERE file_path = ?1"), params![path], map_media)
+            .map_err(DbError::from)
+    }
+
+    pub fn set_notes(&self, path: &str, notes: Option<&str>) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE media_files SET notes = ?1 WHERE file_path = ?2",
+            params![notes, path],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound(path.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn set_keywords(&self, path: &str, keywords: &[String]) -> Result<(), DbError> {
+        let encoded = serde_json::to_string(keywords).unwrap_or_else(|_| "[]".into());
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE media_files SET keywords = ?1 WHERE file_path = ?2",
+            params![encoded, path],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound(path.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn list_albums(&self) -> Result<Vec<AlbumRecord>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT albums.id, albums.name, COUNT(album_members.media_id)
+             FROM albums
+             LEFT JOIN album_members ON album_members.album_id = albums.id
+             GROUP BY albums.id
+             ORDER BY albums.name COLLATE NOCASE ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AlbumRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                count: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn create_album(&self, name: &str) -> Result<AlbumRecord, DbError> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(DbError::NotFound("album name".into()));
+        }
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO albums (name, created_at) VALUES (?1, ?2)",
+            params![trimmed, unix_now()],
+        )?;
+        let id = conn.last_insert_rowid();
+        Ok(AlbumRecord {
+            id,
+            name: trimmed.to_string(),
+            count: 0,
+        })
+    }
+
+    pub fn add_to_album(&self, album_id: i64, media_ids: &[i64]) -> Result<usize, DbError> {
+        let conn = self.lock()?;
+        let mut changed = 0;
+        for media_id in media_ids {
+            changed += conn.execute(
+                "INSERT OR IGNORE INTO album_members (album_id, media_id) VALUES (?1, ?2)",
+                params![album_id, media_id],
+            )?;
+        }
+        Ok(changed)
+    }
+
+    pub fn album_media_ids(&self, album_id: i64) -> Result<Vec<i64>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT media_id FROM album_members WHERE album_id = ?1 ORDER BY media_id",
+        )?;
+        let rows = stmt.query_map(params![album_id], |row| row.get(0))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn copy_originals(&self, paths: &[String], destination: &str) -> Result<usize, DbError> {
+        let dest = Path::new(destination);
+        std::fs::create_dir_all(dest)?;
+        let mut copied = 0;
+        for path in paths {
+            let source = Path::new(path);
+            if !source.is_file() {
+                continue;
+            }
+            let name = source.file_name().unwrap_or_default();
+            let mut target = dest.join(name);
+            if target.exists() {
+                let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("frame");
+                let ext = source.extension().and_then(|s| s.to_str()).unwrap_or("");
+                target = dest.join(format!("{stem}-{copied}.{ext}"));
+            }
+            std::fs::copy(source, target)?;
+            copied += 1;
+        }
+        Ok(copied)
     }
 
     /// Drop catalog rows and Shelf-written previews. Source files stay on disk.
@@ -581,6 +717,15 @@ fn map_media(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaRecord> {
         proxy_path: None,
         play_path: None,
         flag: row.get(12)?,
+        color_label: row.get(13).ok().flatten(),
+        rotation: row.get::<_, Option<i64>>(14).ok().flatten().unwrap_or(0),
+        notes: row.get(15).ok().flatten(),
+        keywords: row
+            .get::<_, Option<String>>(16)
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str(&raw).ok())
+            .unwrap_or_default(),
     })
 }
 
@@ -656,6 +801,49 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
              VALUES (3, CAST(strftime('%s', 'now') AS INTEGER));",
         )?;
     }
+    let columns = {
+        let mut stmt = conn.prepare("PRAGMA table_info(media_files)")?;
+        stmt.query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if !columns.iter().any(|name| name == "color_label") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN color_label TEXT", [])?;
+    }
+    if !columns.iter().any(|name| name == "rotation") {
+        conn.execute(
+            "ALTER TABLE media_files ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    if !columns.iter().any(|name| name == "notes") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN notes TEXT", [])?;
+    }
+    if !columns.iter().any(|name| name == "keywords") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN keywords TEXT", [])?;
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS albums (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS album_members (
+            album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
+            media_id INTEGER NOT NULL REFERENCES media_files(id) ON DELETE CASCADE,
+            PRIMARY KEY (album_id, media_id)
+        );",
+    )?;
+    let has_v4: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 4",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_v4 == 0 {
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (4, CAST(strftime('%s', 'now') AS INTEGER))",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -717,7 +905,7 @@ mod tests {
         let library = Library::open(dir.path().join("library.sqlite")).unwrap();
         let summary = library.summary().unwrap();
 
-        assert_eq!(summary.schema_version, 3);
+        assert_eq!(summary.schema_version, 4);
         assert_eq!(summary.media_count, 0);
         for column in [
             "file_path",
@@ -735,7 +923,7 @@ mod tests {
         }
 
         let again = Library::open(dir.path().join("library.sqlite")).unwrap();
-        assert_eq!(again.summary().unwrap().schema_version, 3);
+        assert_eq!(again.summary().unwrap().schema_version, 4);
     }
 
     #[test]
@@ -1069,5 +1257,59 @@ mod tests {
         assert!(SCHEMA_SQL.contains("CREATE TABLE IF NOT EXISTS clusters"));
         assert!(SCHEMA_SQL.contains("CREATE TABLE IF NOT EXISTS cluster_members"));
         assert!(SCHEMA_SQL.contains("CREATE TABLE IF NOT EXISTS media_captions"));
+    }
+
+    #[test]
+    fn color_rotation_notes_and_albums_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::open(dir.path().join("library.sqlite")).unwrap();
+        library
+            .upsert_media(NewMedia {
+                file_path: "/photos/a.jpg",
+                content_hash: "aa",
+                file_size: 8,
+                created_at: None,
+                modified_at: 10,
+                media_kind: MediaKind::Image,
+                exif_json: None,
+                captured_at: Some(20),
+            })
+            .unwrap();
+        library
+            .set_color(&["/photos/a.jpg".into()], Some("green"))
+            .unwrap();
+        library.set_rotation("/photos/a.jpg", 90).unwrap();
+        library.set_notes("/photos/a.jpg", Some("keep this")).unwrap();
+        library
+            .set_keywords("/photos/a.jpg", &["drone".into(), "gold coast".into()])
+            .unwrap();
+        let record = library.find_by_path("/photos/a.jpg").unwrap().unwrap();
+        assert_eq!(record.color_label.as_deref(), Some("green"));
+        assert_eq!(record.rotation, 90);
+        assert_eq!(record.notes.as_deref(), Some("keep this"));
+        assert_eq!(record.keywords, vec!["drone", "gold coast"]);
+        let album = library.create_album("Keepers").unwrap();
+        library.add_to_album(album.id, &[record.id]).unwrap();
+        assert_eq!(library.album_media_ids(album.id).unwrap(), vec![record.id]);
+        let source = dir.path().join("a.jpg");
+        std::fs::write(&source, b"jpg").unwrap();
+        library
+            .upsert_media(NewMedia {
+                file_path: source.to_str().unwrap(),
+                content_hash: "bb",
+                file_size: 3,
+                created_at: None,
+                modified_at: 10,
+                media_kind: MediaKind::Image,
+                exif_json: None,
+                captured_at: Some(20),
+            })
+            .unwrap();
+        let dest = dir.path().join("out");
+        let copied = library
+            .copy_originals(&[source.to_string_lossy().into_owned()], dest.to_str().unwrap())
+            .unwrap();
+        assert_eq!(copied, 1);
+        assert!(dest.join("a.jpg").is_file());
     }
 }

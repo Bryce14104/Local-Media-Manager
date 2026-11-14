@@ -106,6 +106,18 @@ pub struct MediaRecord {
     pub proxy_path: Option<String>,
     pub play_path: Option<String>,
     pub flag: Option<String>,
+    pub color_label: Option<String>,
+    pub rotation: i64,
+    pub notes: Option<String>,
+    pub keywords: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumRecord {
+    pub id: i64,
+    pub name: String,
+    pub count: i64,
 }
 
 /// Progress for indexing or thumbnail generation.

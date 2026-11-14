@@ -1,7 +1,9 @@
+import { captureMillis } from "./catalog";
 import { formatLatitude, formatLongitude } from "./geo";
 import type {
   ActiveFilter,
   Filter,
+  ColorLabel,
   FlagStatus,
   MediaFormat,
   StudioAction,
@@ -23,6 +25,8 @@ const ACTIONS: { action: StudioAction; label: string; hint: string; keywords: st
   { action: "toggle-inspector", label: "Toggle info panel", hint: "Dock, float, or hide", keywords: "toggle inspector info panel exif" },
   { action: "clear-filters", label: "Clear filters", hint: "Show the full roll", keywords: "clear filters reset" },
   { action: "preferences", label: "Preferences", hint: "Draw a map area to cache, or clear tiles", keywords: "preferences settings map tiles download cache zoom area" },
+  { action: "slideshow", label: "Slideshow", hint: "Play the current view", keywords: "slideshow play auto" },
+  { action: "rotate", label: "Rotate 90°", hint: "Turn the selected frame", keywords: "rotate turn orientation" },
 ];
 
 const STOP_WORDS = new Set([
@@ -73,7 +77,7 @@ const SUBJECT_WORDS: { words: string[]; value: string }[] = [
   { words: ["people", "persons", "person"], value: "person" },
 ];
 
-const STRUCTURED = /\b(?:rating:(?:>=|=)?[0-5]|type:(?:raw|jpg|jpeg|video)|flag:(?:pick|reject|unflagged)|date:\d{4}(?:-\d{2})?|camera:[^\s]+)/gi;
+const STRUCTURED = /\b(?:rating:(?:>=|=)?[0-5]|type:(?:raw|jpg|jpeg|video)|flag:(?:pick|reject|unflagged)|date:\d{4}(?:-\d{2})?|camera:[^\s]+|color:(?:red|yellow|green|blue|purple)|keyword:[^\s]+|unrated|gps|duplicates|recent)/gi;
 
 export function parseQuery(input: string, items: StudioItem[] = [], aiSearch = true): Filter[] {
   return parseSearch(input, items, aiSearch);
@@ -228,6 +232,20 @@ export function filterLabel(filter: ActiveFilter): string {
       return filter.name;
     case "subject":
       return subjectTitle(filter.value);
+    case "color":
+      return `${filter.value[0].toUpperCase()}${filter.value.slice(1)}`;
+    case "gps":
+      return "Has GPS";
+    case "unrated":
+      return "Unrated";
+    case "duplicates":
+      return "Duplicates";
+    case "recent":
+      return "Added recently";
+    case "keyword":
+      return `#${filter.value}`;
+    case "album":
+      return filter.label;
   }
 }
 
@@ -361,6 +379,14 @@ function parseToken(token: string): Filter | null {
   if (date) return { kind: "date", value: date[1] };
   const flag = /^flag:(pick|reject|unflagged)$/i.exec(token);
   if (flag) return { kind: "flag", value: flag[1].toLowerCase() as FlagStatus };
+  const color = /^color:(red|yellow|green|blue|purple)$/i.exec(token);
+  if (color) return { kind: "color", value: color[1].toLowerCase() as ColorLabel };
+  const keyword = /^keyword:(.+)$/i.exec(token);
+  if (keyword?.[1]?.trim()) return { kind: "keyword", value: keyword[1].trim() };
+  if (/^unrated$/i.test(token)) return { kind: "unrated" };
+  if (/^gps$/i.test(token)) return { kind: "gps" };
+  if (/^duplicates$/i.test(token)) return { kind: "duplicates", ids: [] };
+  if (/^recent$/i.test(token)) return { kind: "recent" };
   if (token.includes(":")) return null;
   return { kind: "text", value: token };
 }
@@ -405,6 +431,23 @@ function matchesOne(item: StudioItem, filter: Filter): boolean {
           (value === "pet" && tag.kind === "pet"),
       );
     }
+    case "color":
+      return item.colorLabel === filter.value;
+    case "gps":
+      return item.geotagged;
+    case "unrated":
+      return item.rating == null;
+    case "duplicates":
+      return filter.ids.includes(item.id);
+    case "recent": {
+      const stamp = (item.indexedAt ?? Math.floor(captureMillis(item.capturedAt) / 1000)) * 1000;
+      return Date.now() - stamp < 14 * 24 * 60 * 60 * 1000;
+    }
+    case "keyword":
+      return item.keywords.some((word) => word.toLowerCase() === filter.value.toLowerCase())
+        || item.notes.toLowerCase().includes(filter.value.toLowerCase());
+    case "album":
+      return filter.ids.includes(item.id);
   }
 }
 
@@ -432,6 +475,20 @@ function filterKey(filter: Filter): string {
       return `person:${filter.personId}`;
     case "subject":
       return `subject:${filter.value.toLowerCase()}`;
+    case "color":
+      return `color:${filter.value}`;
+    case "gps":
+      return "gps";
+    case "unrated":
+      return "unrated";
+    case "duplicates":
+      return "duplicates";
+    case "recent":
+      return "recent";
+    case "keyword":
+      return `keyword:${filter.value.toLowerCase()}`;
+    case "album":
+      return `album:${filter.albumId}`;
   }
 }
 

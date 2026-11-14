@@ -15,6 +15,12 @@ type InspectorPanelProps = {
   onCollapse: () => void;
   onMode: (mode: PanelMode) => void;
   onRate: (rating: number | null) => void;
+  onColor?: (color: StudioItem["colorLabel"]) => void;
+  onRotate?: () => void;
+  onNotes?: (notes: string) => void;
+  onKeywords?: (keywords: string[]) => void;
+  onReveal?: () => void;
+  onCopyPath?: () => void;
 };
 
 export function InspectorPanel({
@@ -26,6 +32,12 @@ export function InspectorPanel({
   onCollapse,
   onMode,
   onRate,
+  onColor,
+  onRotate,
+  onNotes,
+  onKeywords,
+  onReveal,
+  onCopyPath,
 }: InspectorPanelProps) {
   const floating = mode === "floating";
   return (
@@ -60,6 +72,77 @@ export function InspectorPanel({
               <ProgressiveMedia item={item} fit="contain" playback="hold" />
             </div>
             <Stars rating={item.rating} onChange={onRate} />
+            <div className="flex flex-wrap gap-1.5">
+              {(["red", "yellow", "green", "blue", "purple"] as const).map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  aria-label={color}
+                  onClick={() => onColor?.(item.colorLabel === color ? null : color)}
+                  className={`h-5 w-5 rounded-full border ${item.colorLabel === color ? "border-foam" : "border-line"}`}
+                  style={{
+                    background:
+                      color === "red"
+                        ? "#ef4444"
+                        : color === "yellow"
+                          ? "#eab308"
+                          : color === "green"
+                            ? "#22c55e"
+                            : color === "blue"
+                              ? "#3b82f6"
+                              : "#a855f7",
+                  }}
+                />
+              ))}
+              {onRotate ? (
+                <button type="button" onClick={onRotate} className="rounded-full border border-line px-2 text-[11px]">
+                  Rotate
+                </button>
+              ) : null}
+            </div>
+            {onNotes ? (
+              <label className="block text-xs text-mute">
+                Notes
+                <textarea
+                  defaultValue={item.notes}
+                  key={item.id}
+                  onBlur={(event) => onNotes(event.target.value)}
+                  rows={3}
+                  className="mt-1 w-full rounded-xl border border-line bg-studio px-2 py-1.5 text-sm text-foam outline-none focus:border-teal"
+                />
+              </label>
+            ) : null}
+            {onKeywords ? (
+              <label className="block text-xs text-mute">
+                Keywords
+                <input
+                  defaultValue={item.keywords.join(", ")}
+                  key={`${item.id}-kw`}
+                  onBlur={(event) =>
+                    onKeywords(
+                      event.target.value
+                        .split(",")
+                        .map((word) => word.trim())
+                        .filter(Boolean),
+                    )
+                  }
+                  placeholder="gold coast, drone"
+                  className="mt-1 w-full rounded-xl border border-line bg-studio px-2 py-1.5 text-sm text-foam outline-none focus:border-teal"
+                />
+              </label>
+            ) : null}
+            <div className="flex flex-wrap gap-1.5">
+              {onCopyPath ? (
+                <button type="button" onClick={onCopyPath} className="rounded-full border border-line px-2 py-1 text-[11px]">
+                  Copy path
+                </button>
+              ) : null}
+              {onReveal ? (
+                <button type="button" onClick={onReveal} className="rounded-full border border-line px-2 py-1 text-[11px]">
+                  Reveal in Finder
+                </button>
+              ) : null}
+            </div>
             <div className="flex flex-wrap gap-1.5">
               <Tag>{formatLabel(item.format)}</Tag>
               <Tag>{item.camera}</Tag>

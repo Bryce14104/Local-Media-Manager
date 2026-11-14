@@ -47,6 +47,11 @@ export async function itemsFromFiles(
       sourcePath: null,
       faces: [],
       subjects: [],
+      colorLabel: null,
+      rotation: 0,
+      notes: "",
+      keywords: [],
+      indexedAt: Math.floor(Date.now() / 1000),
       ...(meta.gps
         ? { latitude: meta.gps.latitude, longitude: meta.gps.longitude, geotagged: true }
         : { ...coordinatesFor(folder, id), geotagged: false }),

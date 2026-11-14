@@ -61,6 +61,16 @@ pub fn run() {
             commands::merge_people,
             commands::split_face,
             commands::read_media,
+            commands::set_color,
+            commands::set_rotation,
+            commands::set_notes,
+            commands::set_keywords,
+            commands::list_albums,
+            commands::create_album,
+            commands::add_to_album,
+            commands::album_media_ids,
+            commands::reveal_path,
+            commands::copy_originals,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Shelf");

@@ -2,6 +2,10 @@ export type MediaFormat = "raw" | "jpg" | "video";
 
 export type FlagStatus = "unflagged" | "pick" | "reject";
 
+export type ColorLabel = "red" | "yellow" | "green" | "blue" | "purple";
+
+export type SortKey = "captured" | "name" | "size" | "rating" | "camera";
+
 export type ViewMode = "compact" | "timeline" | "map" | "insights";
 
 export type LayoutPreset = "browse" | "inspect" | "compare" | "map";
@@ -28,7 +32,9 @@ export type StudioAction =
   | "view-people"
   | "toggle-inspector"
   | "clear-filters"
-  | "preferences";
+  | "preferences"
+  | "slideshow"
+  | "rotate";
 
 export type StudioItem = {
   id: string;
@@ -60,6 +66,11 @@ export type StudioItem = {
   inspectUrl?: string | null;
   faces: FaceMark[];
   subjects: SubjectTag[];
+  colorLabel: ColorLabel | null;
+  rotation: number;
+  notes: string;
+  keywords: string[];
+  indexedAt: number | null;
 };
 
 export type FaceMark = {
@@ -90,7 +101,14 @@ export type Filter =
   | { kind: "cluster"; ids: string[]; label: string }
   | { kind: "visual"; ids: string[]; label: string }
   | { kind: "person"; personId: string; name: string }
-  | { kind: "subject"; value: string };
+  | { kind: "subject"; value: string }
+  | { kind: "color"; value: ColorLabel }
+  | { kind: "gps" }
+  | { kind: "unrated" }
+  | { kind: "duplicates"; ids: string[] }
+  | { kind: "recent" }
+  | { kind: "keyword"; value: string }
+  | { kind: "album"; albumId: number; ids: string[]; label: string };
 
 export type ActiveFilter = Filter & { id: string };
 

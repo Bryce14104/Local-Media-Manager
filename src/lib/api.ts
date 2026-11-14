@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { ConceptIndex, InsightSnapshot, LibrarySummary, MediaRecord, ScanReport } from "./types";
+import type { AlbumRecord, ConceptIndex, InsightSnapshot, LibrarySummary, MediaRecord, ScanReport } from "./types";
 
 export class BridgeError extends Error {
   readonly offline: boolean;
@@ -154,4 +154,60 @@ export async function playableUrl(filePath: string | null | undefined, href: str
     return url;
   }
   return href ?? null;
+}
+
+export async function setColor(paths: string[], color: string | null): Promise<number> {
+  assertBridge();
+  return invoke<number>("set_color", { paths, color });
+}
+
+export async function setRotation(path: string, rotation: number): Promise<MediaRecord> {
+  assertBridge();
+  return invoke<MediaRecord>("set_rotation", { path, rotation });
+}
+
+export async function setNotes(path: string, notes: string | null): Promise<void> {
+  assertBridge();
+  return invoke("set_notes", { path, notes });
+}
+
+export async function setKeywords(path: string, keywords: string[]): Promise<void> {
+  assertBridge();
+  return invoke("set_keywords", { path, keywords });
+}
+
+export async function listAlbums(): Promise<AlbumRecord[]> {
+  assertBridge();
+  return invoke<AlbumRecord[]>("list_albums");
+}
+
+export async function createAlbum(name: string): Promise<AlbumRecord> {
+  assertBridge();
+  return invoke<AlbumRecord>("create_album", { name });
+}
+
+export async function addToAlbum(albumId: number, mediaIds: number[]): Promise<number> {
+  assertBridge();
+  return invoke<number>("add_to_album", { albumId, mediaIds });
+}
+
+export async function albumMediaIds(albumId: number): Promise<number[]> {
+  assertBridge();
+  return invoke<number[]>("album_media_ids", { albumId });
+}
+
+export async function revealPath(path: string): Promise<void> {
+  assertBridge();
+  return invoke("reveal_path", { path });
+}
+
+export async function pickDirectory(title = "Choose a folder"): Promise<string | null> {
+  assertBridge();
+  const selected = await open({ title, directory: true, multiple: false });
+  return typeof selected === "string" && selected.trim() ? selected : null;
+}
+
+export async function copyOriginals(paths: string[], destination: string): Promise<number> {
+  assertBridge();
+  return invoke<number>("copy_originals", { paths, destination });
 }

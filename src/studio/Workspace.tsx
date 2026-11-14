@@ -12,10 +12,22 @@ import {
   indexPaths,
   searchEmbeddings,
   pickImportPaths,
+  pickDirectory,
   removeFromLibrary,
+  revealPath,
+  setColor,
   setFlags,
+  setKeywords,
+  setNotes,
+  setRating,
+  setRotation,
+  listAlbums,
+  createAlbum,
+  addToAlbum,
+  albumMediaIds,
+  copyOriginals,
 } from "../lib/api";
-import type { ConceptIndex, MediaKind, MediaRecord } from "../lib/types";
+import type { AlbumRecord, ConceptIndex, MediaKind, MediaRecord } from "../lib/types";
 import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
 import { PreferencesModal } from "../components/drawers/PreferencesModal";
@@ -24,10 +36,11 @@ import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
 import { Lightbox } from "../components/workspace/Lightbox";
+import { FilterRail } from "../components/workspace/FilterRail";
 import { InsightsView } from "../components/workspace/InsightsView";
 import { MediaStage } from "../components/workspace/MediaStage";
 import { SelectionBar } from "../components/workspace/SelectionBar";
-import { captureMillis, createCatalog, itemFromRecord, mergeItems, nextFlag } from "./catalog";
+import { createCatalog, duplicateIds, itemFromRecord, mergeItems, nextFlag, sortItems } from "./catalog";
 import { itemsFromFiles } from "./previews";
 import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
 import { applyInsights } from "./insights";
@@ -37,8 +50,11 @@ import { applySearchMode, filterLabel, matchesFilters, parseQuery, suggestions, 
 import type {
   ActiveFilter,
   GeoBounds,
+  ColorLabel,
   FlagStatus,
+  Filter,
   LayoutPreset,
+  SortKey,
   PanelMode,
   StudioAction,
   StudioItem,
@@ -66,6 +82,8 @@ export function Workspace() {
   const [filters, setFilters] = useState<ActiveFilter[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>("compact");
   const [gridZoom, setGridZoom] = useState(readGridZoom);
+  const [sort, setSort] = useState<SortKey>("captured");
+  const [albums, setAlbums] = useState<AlbumRecord[]>([]);
   const [preset, setPreset] = useState<LayoutPreset>("browse");
   const [panelMode, setPanelMode] = useState<PanelMode>("hidden");
   const [panelCollapsed, setPanelCollapsed] = useState(false);
@@ -90,16 +108,17 @@ export function Workspace() {
   const [conceptsLive, setConceptsLive] = useState(() => desktopBridgeAvailable());
   const [telemetry, setTelemetry] = useState<Telemetry>(INITIAL_TELEMETRY);
 
-  const visible = useMemo(
+  const dupes = useMemo(() => duplicateIds(items), [items]);
+  const resolvedFilters = useMemo(
     () =>
-      items
-        .filter((item) => matchesFilters(item, filters))
-        .sort(
-          (left, right) =>
-            captureMillis(right.capturedAt) - captureMillis(left.capturedAt) ||
-            left.fileName.localeCompare(right.fileName),
-        ),
-    [items, filters],
+      filters.map((filter) =>
+        filter.kind === "duplicates" ? { ...filter, ids: dupes } : filter,
+      ),
+    [dupes, filters],
+  );
+  const visible = useMemo(
+    () => sortItems(items.filter((item) => matchesFilters(item, resolvedFilters)), sort),
+    [items, resolvedFilters, sort],
   );
   const palette = useMemo(() => suggestions(query, items, aiSearch), [query, items, aiSearch]);
   const primary = items.find((item) => item.id === primaryId) ?? null;
@@ -130,6 +149,9 @@ export function Workspace() {
         }
         const library = media.map(presentRecord);
         setItems(snapshot ? applyInsights(library, snapshot) : library);
+        void listAlbums()
+          .then(setAlbums)
+          .catch(() => undefined);
       })
       .catch(() => {
         if (!cancel) setConceptsLive(false);
@@ -273,19 +295,64 @@ export function Workspace() {
         return;
       }
       if (typing || modal || confirmDelete) return;
+      const focusId = lightboxId ?? primaryId;
       if (lightboxId) {
         if (event.key === "ArrowRight" || event.key === "ArrowDown") {
           event.preventDefault();
           stepLightbox(1);
-        } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+          return;
+        }
+        if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
           event.preventDefault();
           stepLightbox(-1);
+          return;
         }
-        return;
+      } else {
+        if (event.key === "j" || event.key === "ArrowRight" || event.key === "ArrowDown") {
+          event.preventDefault();
+          movePrimary(1);
+        }
+        if (event.key === "k" || event.key === "ArrowLeft" || event.key === "ArrowUp") {
+          event.preventDefault();
+          movePrimary(-1);
+        }
+        if (event.key === "Enter" && primaryId) {
+          event.preventDefault();
+          viewItem(primaryId);
+        }
+        if (event.key === "i") {
+          event.preventDefault();
+          setPanelMode((current) => (current === "hidden" ? "docked" : "hidden"));
+        }
       }
-      if (/^[1-5]$/.test(event.key) && primaryId) {
-        rate(primaryId, Number(event.key));
+      if (/^[1-5]$/.test(event.key) && focusId) {
+        event.preventDefault();
+        rate(focusId, Number(event.key));
       }
+      if (event.key === "0" && focusId) {
+        event.preventDefault();
+        rate(focusId, null);
+      }
+      if ((event.key === "p" || event.key === "P") && focusId) {
+        event.preventDefault();
+        void applyFlag(focusId, "pick");
+      }
+      if ((event.key === "x" || event.key === "X") && focusId) {
+        event.preventDefault();
+        void applyFlag(focusId, "reject");
+      }
+      if ((event.key === "u" || event.key === "U") && focusId) {
+        event.preventDefault();
+        void applyFlag(focusId, "unflagged");
+      }
+      if ((event.key === "r" || event.key === "R") && focusId) {
+        event.preventDefault();
+        void rotateItem(focusId);
+      }
+      if (event.key === "6" && focusId) void colorItem(focusId, "red");
+      if (event.key === "7" && focusId) void colorItem(focusId, "yellow");
+      if (event.key === "8" && focusId) void colorItem(focusId, "green");
+      if (event.key === "9" && focusId) void colorItem(focusId, "blue");
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -413,6 +480,12 @@ export function Workspace() {
         break;
       case "clear-filters":
         setFilters([]);
+        break;
+      case "slideshow":
+        if (primaryId) viewItem(primaryId);
+        break;
+      case "rotate":
+        if (primaryId) void rotateItem(primaryId);
         break;
     }
   }
@@ -598,13 +671,110 @@ export function Workspace() {
   function rate(id: string, rating: number | null) {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, rating } : item)));
     setPrimaryId(id);
+    const path = items.find((item) => item.id === id)?.sourcePath;
+    if (path && desktopBridgeAvailable()) {
+      void setRating(path, rating).catch(() => undefined);
+    }
   }
 
   function flag(id: string) {
-    setItems((current) =>
-      current.map((item) => (item.id === id ? { ...item, flag: nextFlag(item.flag) } : item)),
-    );
+    const current = items.find((item) => item.id === id);
+    if (!current) return;
+    void applyFlag(id, nextFlag(current.flag));
+  }
+
+  function applyFlag(id: string, next: FlagStatus) {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, flag: next } : item)));
     setPrimaryId(id);
+    const path = items.find((item) => item.id === id)?.sourcePath;
+    if (path && desktopBridgeAvailable()) {
+      void setFlags([path], next === "unflagged" ? null : next).catch(() => undefined);
+    }
+  }
+
+  function rotateItem(id: string) {
+    const current = items.find((item) => item.id === id);
+    if (!current) return;
+    const rotation = (current.rotation + 90) % 360;
+    setItems((list) => list.map((item) => (item.id === id ? { ...item, rotation } : item)));
+    if (current.sourcePath && desktopBridgeAvailable()) {
+      void setRotation(current.sourcePath, rotation).catch(() => undefined);
+    }
+  }
+
+  function colorItem(id: string, color: ColorLabel | null) {
+    setItems((list) => list.map((item) => (item.id === id ? { ...item, colorLabel: color } : item)));
+    const path = items.find((item) => item.id === id)?.sourcePath;
+    if (path && desktopBridgeAvailable()) {
+      void setColor([path], color).catch(() => undefined);
+    }
+  }
+
+  function movePrimary(delta: number) {
+    if (visible.length === 0) return;
+    const index = Math.max(0, visible.findIndex((item) => item.id === primaryId));
+    const next = visible[(index + delta + visible.length) % visible.length];
+    if (!next) return;
+    setPrimaryId(next.id);
+    anchorRef.current = next.id;
+    setSelectedIds([next.id]);
+  }
+
+  function toggleQuickFilter(filter: Filter) {
+    const marked = upsertFilter([], filter)[0];
+    if (!marked) return;
+    setFilters((current) =>
+      current.some((entry) => entry.id === marked.id)
+        ? current.filter((entry) => entry.id !== marked.id)
+        : upsertFilter(current, filter),
+    );
+  }
+
+  async function openAlbum(album: AlbumRecord) {
+    try {
+      const ids = desktopBridgeAvailable() ? await albumMediaIds(album.id) : [];
+      const mapped = ids.map((id) => `library-${id}`);
+      setFilters((current) => upsertFilter(current.filter((filter) => filter.kind !== "album"), {
+        kind: "album",
+        albumId: album.id,
+        ids: mapped,
+        label: album.name,
+      }));
+    } catch (error) {
+      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+    }
+  }
+
+  async function makeAlbum(name: string) {
+    if (!desktopBridgeAvailable()) return;
+    try {
+      const album = await createAlbum(name);
+      const mediaIds = selectedIds
+        .map((id) => Number(id.replace("library-", "")))
+        .filter((id) => Number.isFinite(id));
+      if (mediaIds.length > 0) await addToAlbum(album.id, mediaIds);
+      setAlbums(await listAlbums());
+    } catch (error) {
+      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+    }
+  }
+
+  async function exportCopies() {
+    const paths = items
+      .filter((item) => (selectedIds.length > 0 ? selectedIds.includes(item.id) : visible.some((row) => row.id === item.id)) && item.sourcePath)
+      .map((item) => item.sourcePath as string);
+    if (!desktopBridgeAvailable() || paths.length === 0) {
+      setModal("export");
+      return;
+    }
+    try {
+      const destination = await pickDirectory("Export copies");
+      if (!destination) return;
+      const copied = await copyOriginals(paths, destination);
+      setTelemetry((current) => ({ ...current, exportLabel: `Copied ${copied} originals to ${destination}` }));
+    } catch (error) {
+      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+    }
   }
 
   function selectItem(id: string, mods: PointerMods) {
@@ -830,6 +1000,34 @@ export function Workspace() {
     chooseView("compact");
   }
 
+  function saveNotes(id: string, notes: string) {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, notes } : item)));
+    const path = items.find((item) => item.id === id)?.sourcePath;
+    if (path && desktopBridgeAvailable()) void setNotes(path, notes || null).catch(() => undefined);
+  }
+
+  function saveKeywords(id: string, keywords: string[]) {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, keywords } : item)));
+    const path = items.find((item) => item.id === id)?.sourcePath;
+    if (path && desktopBridgeAvailable()) void setKeywords(path, keywords).catch(() => undefined);
+  }
+
+  function copyItemPath(item: StudioItem) {
+    const path = item.sourcePath ?? `${item.folder}/${item.fileName}`;
+    void navigator.clipboard?.writeText(path);
+    setTelemetry((current) => ({ ...current, scanLabel: "Copied path" }));
+  }
+
+  function rateSelected(rating: number | null) {
+    const chosen = new Set(selectedIds);
+    setItems((current) => current.map((item) => (chosen.has(item.id) ? { ...item, rating } : item)));
+    for (const item of items) {
+      if (chosen.has(item.id) && item.sourcePath && desktopBridgeAvailable()) {
+        void setRating(item.sourcePath, rating).catch(() => undefined);
+      }
+    }
+  }
+
   function exportSelection(format: string, destination: string) {
     const count = selectedIds.length > 0 ? selectedIds.length : visible.length;
     setModal(null);
@@ -856,10 +1054,23 @@ export function Workspace() {
         preset={preset}
         onPreset={applyPreset}
         onAdd={openAdd}
-        onExport={() => setModal("export")}
+        onExport={() => void exportCopies()}
         onPreferences={openPreferences}
         inputRef={inputRef}
       />
+
+      {viewMode !== "insights" && preset !== "compare" ? (
+        <FilterRail
+          sort={sort}
+          onSort={setSort}
+          filters={filters}
+          onToggle={toggleQuickFilter}
+          albums={albums}
+          onAlbum={(album) => void openAlbum(album)}
+          onCreateAlbum={(name) => void makeAlbum(name)}
+          duplicateCount={dupes.length}
+        />
+      ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         {preset === "compare" ? (
@@ -911,6 +1122,12 @@ export function Workspace() {
             onRate={(rating) => {
               if (primary) rate(primary.id, rating);
             }}
+            onColor={(color) => primary && colorItem(primary.id, color)}
+            onRotate={() => primary && rotateItem(primary.id)}
+            onNotes={(notes) => primary && saveNotes(primary.id, notes)}
+            onKeywords={(keywords) => primary && saveKeywords(primary.id, keywords)}
+            onCopyPath={() => primary && copyItemPath(primary)}
+            onReveal={() => primary?.sourcePath && void revealPath(primary.sourcePath).catch(() => undefined)}
           />
         ) : null}
       </div>
@@ -927,6 +1144,12 @@ export function Workspace() {
           onRate={(rating) => {
             if (primary) rate(primary.id, rating);
           }}
+          onColor={(color) => primary && colorItem(primary.id, color)}
+          onRotate={() => primary && rotateItem(primary.id)}
+          onNotes={(notes) => primary && saveNotes(primary.id, notes)}
+          onKeywords={(keywords) => primary && saveKeywords(primary.id, keywords)}
+          onCopyPath={() => primary && copyItemPath(primary)}
+          onReveal={() => primary?.sourcePath && void revealPath(primary.sourcePath).catch(() => undefined)}
         />
       ) : null}
 
@@ -935,6 +1158,9 @@ export function Workspace() {
           count={selectedIds.length}
           canDelete={desktopBridgeAvailable() && items.some((item) => selectedIds.includes(item.id) && item.sourcePath)}
           onFlag={(flag) => void flagSelection(flag)}
+          onRate={(rating) => rateSelected(rating)}
+          onRotate={() => selectedIds.forEach((id) => rotateItem(id))}
+          onExport={() => void exportCopies()}
           onRemove={() => void removeSelected()}
           onDelete={() => setConfirmDelete(true)}
           onClear={() => setSelectedIds([])}
@@ -1016,6 +1242,18 @@ export function Workspace() {
           onClose={closeLightbox}
           onPrev={() => stepLightbox(-1)}
           onNext={() => stepLightbox(1)}
+          strip={lightboxPool.slice(Math.max(0, lightboxIndex - 8), lightboxIndex + 9)}
+          onJump={(id) => {
+            setLightboxId(id);
+            setPrimaryId(id);
+          }}
+          onRotate={() => rotateItem(lightboxItem.id)}
+          onCopyPath={() => copyItemPath(lightboxItem)}
+          onReveal={() =>
+            lightboxItem.sourcePath
+              ? void revealPath(lightboxItem.sourcePath).catch(() => undefined)
+              : undefined
+          }
         />
       ) : null}
     </div>

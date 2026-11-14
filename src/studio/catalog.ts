@@ -1,4 +1,4 @@
-import type { FlagStatus, MediaFormat, StudioItem } from "./types";
+import type { FlagStatus, MediaFormat, SortKey, StudioItem } from "./types";
 
 type Seed = [
   fileName: string,
@@ -102,6 +102,11 @@ export function itemFromRecord(record: {
     longitude: number | null;
   } | null;
   flag: string | null;
+  colorLabel?: string | null;
+  rotation?: number;
+  notes?: string | null;
+  keywords?: string[];
+  indexedAt?: number;
 }): StudioItem {
   const fileName = record.filePath.split(/[/\\]/).filter(Boolean).pop() ?? record.filePath;
   const folder = parentFolder(record.filePath);
@@ -135,6 +140,18 @@ export function itemFromRecord(record: {
     flag: record.flag === "pick" || record.flag === "reject" ? record.flag : "unflagged",
     faces: [],
     subjects: [],
+    colorLabel:
+      record.colorLabel === "red" ||
+      record.colorLabel === "yellow" ||
+      record.colorLabel === "green" ||
+      record.colorLabel === "blue" ||
+      record.colorLabel === "purple"
+        ? record.colorLabel
+        : null,
+    rotation: ((record.rotation ?? 0) % 360 + 360) % 360,
+    notes: record.notes ?? "",
+    keywords: record.keywords ?? [],
+    indexedAt: record.indexedAt ?? null,
     ...placed(folder, id, exif?.latitude, exif?.longitude),
   };
 }
@@ -232,6 +249,11 @@ export function inventItems(folder: string, format: MediaFormat): StudioItem[] {
       geotagged: false,
       faces: [],
       subjects: [],
+      colorLabel: null,
+      rotation: 0,
+      notes: "",
+      keywords: [],
+      indexedAt: Math.floor(stamp / 1000),
       ...coordinatesFor(folder.trim() || "Inbox", id),
     };
   });
@@ -246,6 +268,36 @@ export function frameBackground(seed: string): string {
   const hue = Math.abs(hash) % 360;
   const second = (hue + 32) % 360;
   return `linear-gradient(160deg, hsl(${hue} 24% 24%) 0%, hsl(${second} 30% 12%) 68%, #0f1115 100%)`;
+}
+
+export function sortItems(items: StudioItem[], key: SortKey): StudioItem[] {
+  const copy = items.slice();
+  copy.sort((left, right) => {
+    switch (key) {
+      case "name":
+        return left.fileName.localeCompare(right.fileName);
+      case "size":
+        return right.fileSize - left.fileSize;
+      case "rating":
+        return (right.rating ?? -1) - (left.rating ?? -1);
+      case "camera":
+        return left.camera.localeCompare(right.camera) || captureMillis(right.capturedAt) - captureMillis(left.capturedAt);
+      default:
+        return captureMillis(right.capturedAt) - captureMillis(left.capturedAt) || left.fileName.localeCompare(right.fileName);
+    }
+  });
+  return copy;
+}
+
+export function duplicateIds(items: StudioItem[]): string[] {
+  const groups = new Map<string, string[]>();
+  for (const item of items) {
+    const key = item.hash || item.sourcePath || item.id;
+    const list = groups.get(key) ?? [];
+    list.push(item.id);
+    groups.set(key, list);
+  }
+  return [...groups.values()].filter((group) => group.length > 1).flat();
 }
 
 export function nextFlag(flag: FlagStatus): FlagStatus {
@@ -307,6 +359,11 @@ function seedItem(row: Seed, id: string): StudioItem {
     geotagged: true,
     faces: [],
     subjects: [],
+    colorLabel: null,
+    rotation: 0,
+    notes: "",
+    keywords: [],
+    indexedAt: Math.floor(Date.parse(capturedAt) / 1000) || null,
     ...coordinatesFor(folder, id),
   };
 }

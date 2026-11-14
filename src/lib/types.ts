@@ -32,6 +32,16 @@ export type MediaRecord = {
   playPath: string | null;
   flag: string | null;
   exif: ExifSnapshot | null;
+  colorLabel?: string | null;
+  rotation?: number;
+  notes?: string | null;
+  keywords?: string[];
+};
+
+export type AlbumRecord = {
+  id: number;
+  name: string;
+  count: number;
 };
 
 export type LibrarySummary = {
