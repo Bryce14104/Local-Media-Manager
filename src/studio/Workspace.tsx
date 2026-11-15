@@ -915,20 +915,6 @@ export function Workspace() {
     if (ids[0]) anchorRef.current = ids[0];
   }
 
-  async function flagSelection(flag: FlagStatus) {
-    const chosen = new Set(selectedIds);
-    setItems((current) => current.map((item) => (chosen.has(item.id) ? { ...item, flag } : item)));
-    const paths = items
-      .filter((item) => chosen.has(item.id) && item.sourcePath)
-      .map((item) => item.sourcePath as string);
-    if (!desktopBridgeAvailable() || paths.length === 0) return;
-    try {
-      await setFlags(paths, flag === "unflagged" ? null : flag);
-    } catch (error) {
-      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
-    }
-  }
-
   async function removeSelected() {
     const drop = new Set(selectedIds);
     const paths = items
@@ -1134,16 +1120,6 @@ export function Workspace() {
     setTelemetry((current) => ({ ...current, scanLabel: "Copied path" }));
   }
 
-  function rateSelected(rating: number | null) {
-    const chosen = new Set(selectedIds);
-    setItems((current) => current.map((item) => (chosen.has(item.id) ? { ...item, rating } : item)));
-    for (const item of items) {
-      if (chosen.has(item.id) && item.sourcePath && desktopBridgeAvailable()) {
-        void setRating(item.sourcePath, rating).catch(() => undefined);
-      }
-    }
-  }
-
   function exportSelection(format: string, destination: string) {
     const count = selectedIds.length > 0 ? selectedIds.length : visible.length;
     setModal(null);
@@ -1322,15 +1298,16 @@ export function Workspace() {
         <SelectionBar
           count={selectedIds.length}
           canDelete={desktopBridgeAvailable() && items.some((item) => selectedIds.includes(item.id) && item.sourcePath)}
-          onFlag={(flag) => void flagSelection(flag)}
-          onRate={(rating) => rateSelected(rating)}
           onRotate={() => selectedIds.forEach((id) => rotateItem(id))}
           onExport={() => void exportCopies()}
           onBatchEdit={openBatchEdit}
           onAutoGrade={() => void autoGradeSelection()}
           onRemove={() => void removeSelected()}
           onDelete={() => setConfirmDelete(true)}
-          onClear={() => setSelectedIds([])}
+          onClear={() => {
+            setSelectedIds([]);
+            setSelectMode(false);
+          }}
         />
       ) : null}
 

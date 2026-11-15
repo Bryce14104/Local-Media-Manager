@@ -1,10 +1,6 @@
-import type { FlagStatus } from "../../studio/types";
-
 type SelectionBarProps = {
   count: number;
   canDelete: boolean;
-  onFlag: (flag: FlagStatus) => void;
-  onRate: (rating: number | null) => void;
   onRotate: () => void;
   onExport: () => void;
   onBatchEdit: () => void;
@@ -17,8 +13,6 @@ type SelectionBarProps = {
 export function SelectionBar({
   count,
   canDelete,
-  onFlag,
-  onRate,
   onRotate,
   onExport,
   onBatchEdit,
@@ -29,34 +23,66 @@ export function SelectionBar({
 }: SelectionBarProps) {
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-14 z-40 flex justify-center px-3">
-      <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-center gap-1 rounded-full border border-[#2ee0c5]/40 bg-[#171b22] px-2 py-1.5 shadow-2xl shadow-black/40">
-        <span className="px-2 font-mono text-xs text-[#2ee0c5]">{count} selected</span>
-        <BarButton label="Pick" onClick={() => onFlag("pick")} />
-        <BarButton label="Reject" onClick={() => onFlag("reject")} />
-        <BarButton label="★1" onClick={() => onRate(1)} />
-        <BarButton label="★5" onClick={() => onRate(5)} />
-        <BarButton label="Unrate" onClick={() => onRate(null)} />
-        <BarButton label="Rotate" onClick={onRotate} />
-        <BarButton label="Batch edit" onClick={onBatchEdit} />
-        <BarButton label="Auto grade" onClick={onAutoGrade} />
-        <BarButton label="Export copies" onClick={onExport} />
-        <BarButton label="Remove from app" onClick={onRemove} />
-        <BarButton label="Delete from disk" onClick={onDelete} disabled={!canDelete} />
-        <BarButton label="Clear" onClick={onClear} />
+      <div className="pointer-events-auto flex max-w-full flex-wrap items-center gap-2 rounded-2xl border border-line bg-card/95 px-2 py-2 shadow-2xl shadow-black/50 backdrop-blur-md">
+        <p className="px-2 text-xs text-mute">
+          <span className="font-medium text-foam">{count}</span> selected
+        </p>
+        <Rule />
+        <Action label="Edit" hint="Grade all selected" onClick={onBatchEdit} accent />
+        <Action label="Auto grade" hint="Read each preview" onClick={onAutoGrade} />
+        <Action label="Export" hint="Copy files out" onClick={onExport} />
+        <Action label="Rotate" hint="Turn 90°" onClick={onRotate} />
+        <Rule />
+        <Action label="Remove from library" hint="Keep files on disk" onClick={onRemove} />
+        <Action label="Delete files" hint="Erase from disk" onClick={onDelete} danger disabled={!canDelete} />
+        <Rule />
+        <Action label="Deselect" hint="Clear the selection" onClick={onClear} quiet />
       </div>
     </div>
   );
 }
 
-function BarButton({ label, onClick, disabled = false }: { label: string; onClick: () => void; disabled?: boolean }) {
+function Rule() {
+  return <span className="hidden h-6 w-px bg-line sm:block" />;
+}
+
+function Action({
+  label,
+  hint,
+  onClick,
+  accent,
+  danger,
+  quiet,
+  disabled,
+}: {
+  label: string;
+  hint: string;
+  onClick: () => void;
+  accent?: boolean;
+  danger?: boolean;
+  quiet?: boolean;
+  disabled?: boolean;
+}) {
   return (
     <button
       type="button"
+      title={hint}
       onClick={onClick}
       disabled={disabled}
-      className="rounded-full px-2.5 py-1 text-xs text-foam hover:bg-white/5 disabled:cursor-not-allowed disabled:text-mute"
+      className={`rounded-xl px-2.5 py-1.5 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
+        accent
+          ? "bg-teal font-medium text-teal-ink"
+          : danger
+            ? "text-danger hover:bg-danger/10"
+            : quiet
+              ? "text-mute hover:bg-raised hover:text-foam"
+              : "text-foam hover:bg-raised"
+      }`}
     >
-      {label}
+      <span className="block leading-none">{label}</span>
+      <span className={`mt-0.5 block text-[10px] leading-none ${accent ? "text-teal-ink/70" : "text-mute"}`}>
+        {hint}
+      </span>
     </button>
   );
 }
