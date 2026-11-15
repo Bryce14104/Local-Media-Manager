@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ConceptIndex } from "../../lib/types";
-import { presentConcepts, type CaptionChip, type InsightGroup } from "../../studio/concepts";
+import { libraryOverview, presentConcepts, type InsightGroup, type LibraryBucket } from "../../studio/concepts";
 import type { StudioItem } from "../../studio/types";
 import { FrameStill } from "./FrameStill";
 
@@ -13,67 +13,59 @@ type Props = {
   onShowSubject: (value: string) => void;
 };
 
-type Focus =
-  | { type: "group"; id: string }
-  | { type: "caption"; tag: string };
+type Focus = { type: "burst"; id: string } | { type: "bucket"; id: string };
 
-export function InsightsView({
-  items,
-  index,
-  pending,
-  onOpen,
-  onShowFrames,
-  onShowSubject,
-}: Props) {
+export function InsightsView({ items, index, pending, onOpen, onShowFrames, onShowSubject }: Props) {
   const [query, setQuery] = useState("");
   const [focus, setFocus] = useState<Focus | null>(null);
   const presented = useMemo(() => (pending ? null : presentConcepts(items, index)), [items, index, pending]);
+  const overview = useMemo(() => (pending ? null : libraryOverview(items)), [items, pending]);
 
   const filtered = useMemo(() => {
-    if (!presented) return null;
+    if (!presented || !overview) return null;
     const needle = query.trim().toLowerCase();
-    if (!needle) return presented;
-    return {
-      bursts: presented.bursts.filter((group) => groupMatches(group, needle)),
-      semantic: presented.semantic.filter((group) => groupMatches(group, needle)),
-      people: presented.people.filter((group) => groupMatches(group, needle)),
-      captions: presented.captions.filter((chip) => chipMatches(chip, needle)),
+    const match = (label: string, summary: string, files: StudioItem[]) => {
+      if (!needle) return true;
+      return [label, summary, ...files.map((item) => item.fileName)].join(" ").toLowerCase().includes(needle);
     };
-  }, [presented, query]);
+    return {
+      bursts: presented.bursts.filter((group) => match(group.label, group.summary, group.items)),
+      cameras: overview.cameras.filter((bucket) => match(bucket.label, bucket.summary, bucket.items)),
+      scenes: overview.scenes.filter((bucket) => match(bucket.label, bucket.summary, bucket.items)),
+      folders: overview.folders.filter((bucket) => match(bucket.label, bucket.summary, bucket.items)),
+      months: overview.months.filter((bucket) => match(bucket.label, bucket.summary, bucket.items)),
+    };
+  }, [overview, presented, query]);
 
   useEffect(() => {
     if (!filtered || !focus) return;
     const alive =
-      focus.type === "caption"
-        ? filtered.captions.some((chip) => chip.tag === focus.tag)
-        : [...filtered.bursts, ...filtered.semantic, ...filtered.people].some((group) => group.id === focus.id);
+      focus.type === "burst"
+        ? filtered.bursts.some((group) => group.id === focus.id)
+        : [...filtered.cameras, ...filtered.scenes, ...filtered.folders, ...filtered.months].some(
+            (bucket) => bucket.id === focus.id,
+          );
     if (!alive) setFocus(null);
   }, [filtered, focus]);
 
-  if (!filtered || !presented) {
+  if (!filtered || !presented || !overview) {
     return (
       <div data-insights-view className="grid min-h-0 flex-1 place-items-center px-6 text-sm text-mute">
-        Reading clusters and captions…
+        Reading the library…
       </div>
     );
   }
 
   const active = resolveFocus(filtered, focus);
-  const total =
-    presented.bursts.length + presented.semantic.length + presented.people.length + presented.captions.length;
   const visibleCount =
-    filtered.bursts.length + filtered.semantic.length + filtered.people.length + filtered.captions.length;
+    filtered.bursts.length +
+    filtered.cameras.length +
+    filtered.scenes.length +
+    filtered.folders.length +
+    filtered.months.length;
 
-  function selectGroup(id: string) {
-    setFocus((current) => (current?.type === "group" && current.id === id ? null : { type: "group", id }));
-  }
-
-  function selectCaption(tag: string) {
-    setFocus((current) => (current?.type === "caption" && current.tag === tag ? null : { type: "caption", tag }));
-  }
-
-  function reveal(target: { kind: InsightGroup["kind"] | "caption"; label: string; raw: string; items: StudioItem[] }) {
-    if (target.kind === "semantic") {
+  function reveal(target: { kind: string; raw: string; label: string; items: StudioItem[] }) {
+    if (target.kind === "scene") {
       onShowSubject(target.raw);
       return;
     }
@@ -90,36 +82,45 @@ export function InsightsView({
           <div className="min-w-0">
             <h1 className="text-sm font-medium tracking-wide">AI Insights</h1>
             <p className="text-[11px] text-mute">
-              {presented.bursts.length} collections · {presented.captions.length} captions
+              {items.length} files · {overview.cameras.length} cameras · {overview.videos} videos · {overview.geotagged}{" "}
+              with GPS
             </p>
           </div>
           <label className="ml-auto w-full sm:w-72">
-            <span className="sr-only">Search captions and collections</span>
+            <span className="sr-only">Search collections</span>
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search captions and collections"
+              placeholder="Search cameras, scenes, folders"
               className="w-full rounded-full border border-line bg-card px-3 py-1.5 text-sm outline-none placeholder:text-mute focus:border-teal"
             />
           </label>
         </div>
+        <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <Stat label="Stills" value={overview.stills} />
+          <Stat label="RAW" value={overview.raw} />
+          <Stat label="Rated" value={overview.rated} />
+          <Stat label="Scenes" value={overview.scenes.length} />
+          <Stat label="Folders" value={overview.folders.length} />
+        </dl>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {total === 0 ? (
+        {visibleCount === 0 ? (
           <EmptyState
-            title="Nothing grouped yet"
-            body="Shelf groups short sequences and caption tags on this machine after the local vision pass."
+            title={query.trim() ? "No matches" : "Nothing grouped yet"}
+            body={
+              query.trim()
+                ? `Nothing matches “${query.trim()}”.`
+                : "Add media and Shelf will group bursts, cameras, scenes, and folders here."
+            }
           />
-        ) : visibleCount === 0 ? (
-          <EmptyState title="No matches" body={`Nothing in the library is captioned with “${query.trim()}”.`} />
         ) : (
           <div className="space-y-8">
             {active ? (
               <FocusTray
                 title={active.label}
                 summary={active.summary}
-                caption={active.caption}
                 items={active.items}
                 onOpen={onOpen}
                 onReveal={() => reveal(active)}
@@ -127,56 +128,80 @@ export function InsightsView({
             ) : null}
 
             {filtered.bursts.length > 0 ? (
-              <Section
-                title="Smart collections"
-                hint="Sequences shot within a few minutes"
-                count={filtered.bursts.length}
-              >
-                <div className="flex gap-3 overflow-x-auto pb-1">
+              <Section title="Smart collections" hint="Sequences shot within a few minutes" count={filtered.bursts.length}>
+                <Row>
                   {filtered.bursts.map((group) => (
-                    <button
+                    <GroupCard
                       key={group.id}
-                      type="button"
-                      data-burst={group.label}
-                      aria-pressed={focus?.type === "group" && focus.id === group.id}
-                      onClick={() => selectGroup(group.id)}
-                      className={`w-60 shrink-0 rounded-2xl border p-2 text-left ${
-                        focus?.type === "group" && focus.id === group.id
-                          ? "border-teal bg-teal/5"
-                          : "border-line bg-card hover:border-mute"
-                      }`}
-                    >
-                      <Stack items={group.items} />
-                      <p className="mt-2 truncate text-sm">{group.label}</p>
-                      <p className="truncate text-[11px] text-mute">{group.summary}</p>
-                    </button>
+                      pressed={focus?.type === "burst" && focus.id === group.id}
+                      items={group.items}
+                      label={group.label}
+                      summary={group.summary}
+                      onClick={() =>
+                        setFocus((current) =>
+                          current?.type === "burst" && current.id === group.id ? null : { type: "burst", id: group.id },
+                        )
+                      }
+                    />
                   ))}
-                </div>
+                </Row>
               </Section>
             ) : null}
 
-            {filtered.captions.length > 0 ? (
-              <Section title="Captions" hint="Search a tag to browse those frames" count={filtered.captions.length}>
-                <div className="flex flex-wrap gap-1.5">
-                  {filtered.captions.map((chip) => {
-                    const selected = focus?.type === "caption" && focus.tag === chip.tag;
-                    return (
-                      <button
-                        key={chip.tag}
-                        type="button"
-                        data-caption={chip.tag}
-                        aria-pressed={selected}
-                        onClick={() => selectCaption(chip.tag)}
-                        className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs ${
-                          selected ? "border-teal bg-teal/15 text-teal" : "border-line hover:border-teal hover:text-teal"
-                        }`}
-                      >
-                        {chip.label}
-                        <span className={selected ? "text-teal/80" : "text-mute"}>{chip.count}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+            {filtered.scenes.length > 0 ? (
+              <Section title="Scenes" hint="What the local vision model tagged in the roll" count={filtered.scenes.length}>
+                <ChipRow
+                  buckets={filtered.scenes}
+                  selectedId={focus?.type === "bucket" ? focus.id : null}
+                  onSelect={(id) =>
+                    setFocus((current) => (current?.type === "bucket" && current.id === id ? null : { type: "bucket", id }))
+                  }
+                />
+              </Section>
+            ) : null}
+
+            {filtered.cameras.length > 0 ? (
+              <Section title="Cameras" hint="Jump to every frame from a body" count={filtered.cameras.length}>
+                <Row>
+                  {filtered.cameras.map((bucket) => (
+                    <GroupCard
+                      key={bucket.id}
+                      pressed={focus?.type === "bucket" && focus.id === bucket.id}
+                      items={bucket.items}
+                      label={bucket.label}
+                      summary={bucket.summary}
+                      onClick={() =>
+                        setFocus((current) =>
+                          current?.type === "bucket" && current.id === bucket.id ? null : { type: "bucket", id: bucket.id },
+                        )
+                      }
+                    />
+                  ))}
+                </Row>
+              </Section>
+            ) : null}
+
+            {filtered.folders.length > 0 ? (
+              <Section title="Folders" hint="Where the files live on disk" count={filtered.folders.length}>
+                <ChipRow
+                  buckets={filtered.folders}
+                  selectedId={focus?.type === "bucket" ? focus.id : null}
+                  onSelect={(id) =>
+                    setFocus((current) => (current?.type === "bucket" && current.id === id ? null : { type: "bucket", id }))
+                  }
+                />
+              </Section>
+            ) : null}
+
+            {filtered.months.length > 0 ? (
+              <Section title="Months" hint="Capture time" count={filtered.months.length}>
+                <ChipRow
+                  buckets={filtered.months}
+                  selectedId={focus?.type === "bucket" ? focus.id : null}
+                  onSelect={(id) =>
+                    setFocus((current) => (current?.type === "bucket" && current.id === id ? null : { type: "bucket", id }))
+                  }
+                />
               </Section>
             ) : null}
           </div>
@@ -186,17 +211,24 @@ export function InsightsView({
   );
 }
 
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl border border-line bg-card px-3 py-2">
+      <dt className="text-[10px] uppercase tracking-[0.14em] text-mute">{label}</dt>
+      <dd className="font-mono text-sm">{value}</dd>
+    </div>
+  );
+}
+
 function FocusTray({
   title,
   summary,
-  caption,
   items,
   onOpen,
   onReveal,
 }: {
   title: string;
   summary: string;
-  caption: string | null;
   items: StudioItem[];
   onOpen: (id: string) => void;
   onReveal: () => void;
@@ -206,10 +238,7 @@ function FocusTray({
       <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-medium">{title}</h2>
-          <p className="text-[11px] text-mute">
-            {summary}
-            {caption ? ` · ${caption}` : ""}
-          </p>
+          <p className="text-[11px] text-mute">{summary}</p>
         </div>
         <button
           type="button"
@@ -222,31 +251,19 @@ function FocusTray({
       </div>
       <div className="grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-2">
         {items.map((item) => (
-          <div key={item.id}>
-            <button type="button" onClick={() => onOpen(item.id)} className="block w-full text-left" title={item.fileName}>
-              <div className="aspect-square overflow-hidden rounded-xl border border-line bg-studio">
-                <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
-              </div>
-              <p className="mt-1 truncate text-[11px] text-mute">{item.fileName}</p>
-            </button>
-          </div>
+          <button key={item.id} type="button" onClick={() => onOpen(item.id)} className="block w-full text-left" title={item.fileName}>
+            <div className="aspect-square overflow-hidden rounded-xl border border-line bg-studio">
+              <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
+            </div>
+            <p className="mt-1 truncate text-[11px] text-mute">{item.fileName}</p>
+          </button>
         ))}
       </div>
     </section>
   );
 }
 
-function Section({
-  title,
-  hint,
-  count,
-  children,
-}: {
-  title: string;
-  hint: string;
-  count: number;
-  children: ReactNode;
-}) {
+function Section({ title, hint, count, children }: { title: string; hint: string; count: number; children: ReactNode }) {
   return (
     <section>
       <div className="mb-2 flex items-baseline justify-between gap-3">
@@ -256,6 +273,71 @@ function Section({
       <p className="mb-3 text-[11px] text-mute">{hint}</p>
       {children}
     </section>
+  );
+}
+
+function Row({ children }: { children: ReactNode }) {
+  return <div className="flex gap-3 overflow-x-auto pb-1">{children}</div>;
+}
+
+function GroupCard({
+  pressed,
+  items,
+  label,
+  summary,
+  onClick,
+}: {
+  pressed: boolean;
+  items: StudioItem[];
+  label: string;
+  summary: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={onClick}
+      className={`w-60 shrink-0 rounded-2xl border p-2 text-left ${
+        pressed ? "border-teal bg-teal/5" : "border-line bg-card hover:border-mute"
+      }`}
+    >
+      <Stack items={items} />
+      <p className="mt-2 truncate text-sm">{label}</p>
+      <p className="truncate text-[11px] text-mute">{summary}</p>
+    </button>
+  );
+}
+
+function ChipRow({
+  buckets,
+  selectedId,
+  onSelect,
+}: {
+  buckets: LibraryBucket[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {buckets.map((bucket) => {
+        const selected = selectedId === bucket.id;
+        return (
+          <button
+            key={bucket.id}
+            type="button"
+            aria-pressed={selected}
+            onClick={() => onSelect(bucket.id)}
+            className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-xs ${
+              selected ? "border-teal bg-teal/15 text-teal" : "border-line hover:border-teal hover:text-teal"
+            }`}
+          >
+            {bucket.label}
+            <span className={selected ? "text-teal/80" : "text-mute"}>{bucket.items.length}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -286,41 +368,24 @@ function Stack({ items }: { items: StudioItem[] }) {
 }
 
 function resolveFocus(
-  presented: ReturnType<typeof presentConcepts>,
+  filtered: {
+    bursts: InsightGroup[];
+    cameras: LibraryBucket[];
+    scenes: LibraryBucket[];
+    folders: LibraryBucket[];
+    months: LibraryBucket[];
+  },
   focus: Focus | null,
-): { kind: InsightGroup["kind"] | "caption"; label: string; summary: string; caption: string | null; raw: string; personId: string | null; items: StudioItem[] } | null {
+): { kind: string; label: string; summary: string; raw: string; items: StudioItem[] } | null {
   if (!focus) return null;
-  if (focus.type === "caption") {
-    const chip = presented.captions.find((entry) => entry.tag === focus.tag);
-    if (!chip) return null;
-    return {
-      kind: "caption",
-      label: chip.label,
-      summary: chip.count === 1 ? "1 frame" : `${chip.count} frames`,
-      caption: chip.caption,
-      raw: chip.tag,
-      personId: null,
-      items: chip.items,
-    };
+  if (focus.type === "burst") {
+    const group = filtered.bursts.find((entry) => entry.id === focus.id);
+    if (!group) return null;
+    return { kind: "burst", label: group.label, summary: group.summary, raw: group.raw, items: group.items };
   }
-  const group = [...presented.bursts, ...presented.semantic, ...presented.people].find((entry) => entry.id === focus.id);
-  if (!group) return null;
-  return {
-    kind: group.kind,
-    label: group.label,
-    summary: group.summary,
-    caption: null,
-    raw: group.raw,
-    personId: group.personId,
-    items: group.items,
-  };
-}
-
-function groupMatches(group: InsightGroup, needle: string): boolean {
-  const haystack = [group.label, group.summary, group.raw, ...group.items.map((item) => item.fileName)].join(" ").toLowerCase();
-  return haystack.includes(needle);
-}
-
-function chipMatches(chip: CaptionChip, needle: string): boolean {
-  return `${chip.tag} ${chip.label} ${chip.caption}`.toLowerCase().includes(needle);
+  const bucket = [...filtered.cameras, ...filtered.scenes, ...filtered.folders, ...filtered.months].find(
+    (entry) => entry.id === focus.id,
+  );
+  if (!bucket) return null;
+  return { kind: bucket.kind, label: bucket.label, summary: bucket.summary, raw: bucket.raw, items: bucket.items };
 }

@@ -21,13 +21,9 @@ import {
   setNotes,
   setRating,
   setRotation,
-  listAlbums,
-  createAlbum,
-  addToAlbum,
-  albumMediaIds,
   copyOriginals,
 } from "../lib/api";
-import type { AlbumRecord, ConceptIndex, MediaKind, MediaRecord } from "../lib/types";
+import type { ConceptIndex, MediaKind, MediaRecord } from "../lib/types";
 import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
 import { PreferencesModal } from "../components/drawers/PreferencesModal";
@@ -45,6 +41,7 @@ import { itemsFromFiles } from "./previews";
 import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
 import { applyInsights } from "./insights";
 import { applySelection, type PointerMods } from "./selection";
+import { readSlideshowSettings, writeSlideshowSettings, type SlideshowSettings } from "./slideshow";
 import type { MapZoom } from "./mapRegions";
 import { applySearchMode, filterLabel, matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
 import type {
@@ -52,7 +49,6 @@ import type {
   GeoBounds,
   ColorLabel,
   FlagStatus,
-  Filter,
   LayoutPreset,
   SortKey,
   PanelMode,
@@ -83,7 +79,7 @@ export function Workspace() {
   const [viewMode, setViewMode] = useState<ViewMode>("compact");
   const [gridZoom, setGridZoom] = useState(readGridZoom);
   const [sort, setSort] = useState<SortKey>("captured");
-  const [albums, setAlbums] = useState<AlbumRecord[]>([]);
+  const [slideshow, setSlideshow] = useState(readSlideshowSettings);
   const [preset, setPreset] = useState<LayoutPreset>("browse");
   const [panelMode, setPanelMode] = useState<PanelMode>("hidden");
   const [panelCollapsed, setPanelCollapsed] = useState(false);
@@ -149,9 +145,6 @@ export function Workspace() {
         }
         const library = media.map(presentRecord);
         setItems(snapshot ? applyInsights(library, snapshot) : library);
-        void listAlbums()
-          .then(setAlbums)
-          .catch(() => undefined);
       })
       .catch(() => {
         if (!cancel) setConceptsLive(false);
@@ -720,43 +713,9 @@ export function Workspace() {
     setSelectedIds([next.id]);
   }
 
-  function toggleQuickFilter(filter: Filter) {
-    const marked = upsertFilter([], filter)[0];
-    if (!marked) return;
-    setFilters((current) =>
-      current.some((entry) => entry.id === marked.id)
-        ? current.filter((entry) => entry.id !== marked.id)
-        : upsertFilter(current, filter),
-    );
-  }
-
-  async function openAlbum(album: AlbumRecord) {
-    try {
-      const ids = desktopBridgeAvailable() ? await albumMediaIds(album.id) : [];
-      const mapped = ids.map((id) => `library-${id}`);
-      setFilters((current) => upsertFilter(current.filter((filter) => filter.kind !== "album"), {
-        kind: "album",
-        albumId: album.id,
-        ids: mapped,
-        label: album.name,
-      }));
-    } catch (error) {
-      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
-    }
-  }
-
-  async function makeAlbum(name: string) {
-    if (!desktopBridgeAvailable()) return;
-    try {
-      const album = await createAlbum(name);
-      const mediaIds = selectedIds
-        .map((id) => Number(id.replace("library-", "")))
-        .filter((id) => Number.isFinite(id));
-      if (mediaIds.length > 0) await addToAlbum(album.id, mediaIds);
-      setAlbums(await listAlbums());
-    } catch (error) {
-      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
-    }
+  function changeSlideshow(next: SlideshowSettings) {
+    setSlideshow(next);
+    writeSlideshowSettings(next);
   }
 
   async function exportCopies() {
@@ -1060,16 +1019,7 @@ export function Workspace() {
       />
 
       {viewMode !== "insights" && preset !== "compare" ? (
-        <FilterRail
-          sort={sort}
-          onSort={setSort}
-          filters={filters}
-          onToggle={toggleQuickFilter}
-          albums={albums}
-          onAlbum={(album) => void openAlbum(album)}
-          onCreateAlbum={(name) => void makeAlbum(name)}
-          duplicateCount={dupes.length}
-        />
+        <FilterRail sort={sort} onSort={setSort} />
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -1202,6 +1152,8 @@ export function Workspace() {
           onMaxZoom={setCacheZoom}
           bounds={cacheBounds}
           onSelectArea={beginCacheSelect}
+          slideshow={slideshow}
+          onSlideshow={changeSlideshow}
         />
       ) : null}
       {confirmDelete ? (
@@ -1254,6 +1206,9 @@ export function Workspace() {
               ? void revealPath(lightboxItem.sourcePath).catch(() => undefined)
               : undefined
           }
+          poolIds={lightboxPool.map((frame) => frame.id)}
+          slideshow={slideshow}
+          onSlideshow={changeSlideshow}
         />
       ) : null}
     </div>

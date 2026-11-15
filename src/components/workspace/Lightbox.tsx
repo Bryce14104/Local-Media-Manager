@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { formatTimestamp } from "../../lib/format";
+import type { SlideshowSettings } from "../../studio/slideshow";
 import type { StudioItem } from "../../studio/types";
 import { ProgressiveMedia } from "./ProgressiveMedia";
+import { SlideshowControls } from "./SlideshowControls";
 
 type LightboxProps = {
   item: StudioItem;
@@ -17,6 +19,9 @@ type LightboxProps = {
   onRotate?: () => void;
   onReveal?: () => void;
   onCopyPath?: () => void;
+  poolIds?: string[];
+  slideshow: SlideshowSettings;
+  onSlideshow: (settings: SlideshowSettings) => void;
 };
 
 export function Lightbox({
@@ -33,6 +38,9 @@ export function Lightbox({
   onRotate,
   onReveal,
   onCopyPath,
+  poolIds = [],
+  slideshow: slideshowSettings,
+  onSlideshow,
 }: LightboxProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -46,6 +54,7 @@ export function Lightbox({
   const [immersive, setImmersive] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [slideshow, setSlideshow] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     closeRef.current?.focus();
@@ -58,9 +67,37 @@ export function Lightbox({
 
   useEffect(() => {
     if (!slideshow) return;
-    const timer = window.setInterval(() => onNext(), 4000);
-    return () => window.clearInterval(timer);
-  }, [slideshow, onNext, item.id]);
+    const ids = poolIds.length > 0 ? poolIds : [item.id];
+
+    function advance() {
+      if (slideshowSettings.shuffle && ids.length > 1) {
+        const others = ids.filter((id) => id !== item.id);
+        const pick = others[Math.floor(Math.random() * others.length)];
+        if (pick) onJump?.(pick);
+        return;
+      }
+      if (index + 1 < count) {
+        onNext();
+        return;
+      }
+      if (slideshowSettings.loop && ids[0]) {
+        onJump?.(ids[0]);
+        return;
+      }
+      setSlideshow(false);
+    }
+
+    const video = rootRef.current?.querySelector("video");
+    if (slideshowSettings.waitForVideo && video && item.format === "video") {
+      video.muted = false;
+      void video.play().catch(() => undefined);
+      const onEnded = () => advance();
+      video.addEventListener("ended", onEnded);
+      return () => video.removeEventListener("ended", onEnded);
+    }
+    const timer = window.setTimeout(advance, slideshowSettings.intervalMs);
+    return () => window.clearTimeout(timer);
+  }, [count, index, item.format, item.id, onJump, onNext, poolIds, slideshow, slideshowSettings]);
 
   useEffect(() => {
     const sync = () => setImmersive(document.fullscreenElement === rootRef.current);
@@ -219,6 +256,22 @@ export function Lightbox({
         >
           {slideshow ? "Pause" : "Play"}
         </button>
+        <div className="relative pointer-events-auto">
+          <button
+            type="button"
+            aria-expanded={showSettings}
+            aria-label="Slideshow settings"
+            onClick={() => setShowSettings((current) => !current)}
+            className="rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
+          >
+            Timing
+          </button>
+          {showSettings ? (
+            <div className="absolute right-0 top-[calc(100%+0.4rem)] z-30 w-72 rounded-2xl border border-white/15 bg-card p-3 text-foam shadow-2xl">
+              <SlideshowControls settings={slideshowSettings} onChange={onSlideshow} />
+            </div>
+          ) : null}
+        </div>
         {onRotate ? (
           <button
             type="button"

@@ -3,7 +3,9 @@ import { formatLatitude, formatLongitude } from "../../studio/geo";
 import { TILE_ATTRIBUTION, TILE_BUDGET, cacheRegion, clearAllRegions, clearRegion, planRegion } from "../../studio/mapLibrary";
 import { ZOOM_STEPS, type MapZoom } from "../../studio/mapRegions";
 import { useMapLibrary } from "../../studio/useMapLibrary";
+import type { SlideshowSettings } from "../../studio/slideshow";
 import type { GeoBounds } from "../../studio/types";
+import { SlideshowControls } from "../workspace/SlideshowControls";
 import { Modal } from "./AddMediaModal";
 
 export function PreferencesModal({
@@ -12,12 +14,16 @@ export function PreferencesModal({
   onMaxZoom,
   bounds,
   onSelectArea,
+  slideshow,
+  onSlideshow,
 }: {
   onClose: () => void;
   maxZoom: MapZoom;
   onMaxZoom: (zoom: MapZoom) => void;
   bounds: GeoBounds | null;
   onSelectArea: () => void;
+  slideshow: SlideshowSettings;
+  onSlideshow: (settings: SlideshowSettings) => void;
 }) {
   const library = useMapLibrary();
   const plan = bounds ? planRegion(bounds, maxZoom) : null;
@@ -26,6 +32,13 @@ export function PreferencesModal({
   return (
     <Modal title="Preferences" onClose={onClose} wide>
       <div className="max-h-[70vh] space-y-4 overflow-auto pr-1">
+        <section>
+          <h3 className="text-sm font-medium">Slideshow</h3>
+          <p className="mt-1 mb-3 text-sm text-mute">
+            Used when you press Play on a still. Videos can wait until they finish, or follow the same timer.
+          </p>
+          <SlideshowControls settings={slideshow} onChange={onSlideshow} />
+        </section>
         <section>
           <h3 className="text-sm font-medium">Download Map Data</h3>
           <p className="mt-1 text-sm text-mute">

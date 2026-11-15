@@ -31,6 +31,98 @@ export type PresentedConcepts = {
   captions: CaptionChip[];
 };
 
+export type LibraryBucket = {
+  id: string;
+  kind: "camera" | "scene" | "folder" | "month";
+  label: string;
+  summary: string;
+  raw: string;
+  items: StudioItem[];
+};
+
+export type LibraryOverview = {
+  cameras: LibraryBucket[];
+  scenes: LibraryBucket[];
+  folders: LibraryBucket[];
+  months: LibraryBucket[];
+  stills: number;
+  videos: number;
+  raw: number;
+  rated: number;
+  geotagged: number;
+};
+
+export function libraryOverview(items: StudioItem[]): LibraryOverview {
+  return {
+    cameras: buckets(items, (item) => item.camera || "Unknown camera", "camera"),
+    scenes: buckets(
+      items.flatMap((item) =>
+        item.subjects.map((subject) => ({ key: subject.label.trim().toLowerCase(), item })),
+      ),
+      "scene",
+    ),
+    folders: buckets(items, (item) => item.folder || "Inbox", "folder"),
+    months: buckets(items, (item) => item.capturedAt.slice(0, 7), "month"),
+    stills: items.filter((item) => item.format !== "video").length,
+    videos: items.filter((item) => item.format === "video").length,
+    raw: items.filter((item) => item.format === "raw").length,
+    rated: items.filter((item) => item.rating != null).length,
+    geotagged: items.filter((item) => item.geotagged).length,
+  };
+}
+
+function buckets(items: StudioItem[], keyOf: (item: StudioItem) => string, kind: LibraryBucket["kind"]): LibraryBucket[];
+function buckets(
+  pairs: { key: string; item: StudioItem }[],
+  kind: LibraryBucket["kind"],
+): LibraryBucket[];
+function buckets(
+  source: StudioItem[] | { key: string; item: StudioItem }[],
+  keyOfOrKind: ((item: StudioItem) => string) | LibraryBucket["kind"],
+  kind?: LibraryBucket["kind"],
+): LibraryBucket[] {
+  const grouped = new Map<string, StudioItem[]>();
+  if (typeof keyOfOrKind === "function") {
+    for (const item of source as StudioItem[]) {
+      const key = keyOfOrKind(item).trim();
+      if (!key) continue;
+      const list = grouped.get(key) ?? [];
+      if (!list.some((entry) => entry.id === item.id)) list.push(item);
+      grouped.set(key, list);
+    }
+  } else {
+    for (const pair of source as { key: string; item: StudioItem }[]) {
+      const key = pair.key.trim();
+      if (!key) continue;
+      const list = grouped.get(key) ?? [];
+      if (!list.some((entry) => entry.id === pair.item.id)) list.push(pair.item);
+      grouped.set(key, list);
+    }
+    kind = keyOfOrKind;
+  }
+  const resolvedKind = kind ?? "folder";
+  return [...grouped.entries()]
+    .filter(([, members]) => members.length > 0)
+    .sort((left, right) => right[1].length - left[1].length || left[0].localeCompare(right[0]))
+    .slice(0, resolvedKind === "scene" ? 24 : 48)
+    .map(([key, members]) => ({
+      id: `${resolvedKind}:${key}`,
+      kind: resolvedKind,
+      label: resolvedKind === "month" ? monthLabel(key) : titleCase(key),
+      summary: frameSummary(members.length),
+      raw: key,
+      items: members,
+    }));
+}
+
+function monthLabel(value: string): string {
+  const [year, month] = value.split("-");
+  if (!year || !month) return value;
+  const date = new Date(Number(year), Number(month) - 1, 1);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(date);
+}
+
 export function presentConcepts(items: StudioItem[], index: ConceptIndex | null): PresentedConcepts {
   if (index == null) return deriveConcepts(items);
   return conceptsFromIndex(items, index);
