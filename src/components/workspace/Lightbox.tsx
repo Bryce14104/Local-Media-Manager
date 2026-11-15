@@ -253,17 +253,23 @@ export function Lightbox({
       </div>
 
       <header
-        className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 py-3 md:px-4 ${
-          immersive ? "opacity-0 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100" : ""
+        className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center gap-2 px-3 py-3 md:px-4 ${
+          immersive ? "bg-transparent" : "bg-gradient-to-b from-black/70 to-transparent"
         }`}
       >
-        <p className="min-w-0 flex-1 font-mono text-xs tracking-wide text-white/70">
-          {index + 1} / {count}
-          {slideshow ? " · playing" : ""}
-          {zoom > 1 ? ` · ${Math.round(zoom * 100)}%` : ""}
-        </p>
-        <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-end gap-0.5 rounded-full border border-white/12 bg-black/50 p-1 backdrop-blur-md">
-          {onEdit && item.format !== "video" ? (
+        {immersive ? null : (
+          <p className="min-w-0 flex-1 font-mono text-xs tracking-wide text-white/70">
+            {index + 1} / {count}
+            {slideshow ? " · playing" : ""}
+            {zoom > 1 ? ` · ${Math.round(zoom * 100)}%` : ""}
+          </p>
+        )}
+        <div
+          className={`pointer-events-auto flex max-w-full flex-wrap items-center justify-end gap-0.5 rounded-full border border-white/12 bg-black/50 p-1 backdrop-blur-md ${
+            immersive ? "ml-auto" : ""
+          }`}
+        >
+          {onEdit && item.format !== "video" && !immersive ? (
             <BarLabel onClick={onEdit} accent>
               Edit
             </BarLabel>
@@ -294,57 +300,66 @@ export function Lightbox({
               </div>
             ) : null}
           </div>
-          <span className="mx-0.5 hidden h-4 w-px bg-white/15 sm:block" />
-          {onRotate ? (
+          {immersive ? null : <span className="mx-0.5 hidden h-4 w-px bg-white/15 sm:block" />}
+          {immersive ? null : onRotate ? (
             <BarAction label="Rotate" onClick={onRotate}>
               <RotateIcon />
             </BarAction>
           ) : null}
-          {onCopyPath ? (
+          {immersive ? null : onCopyPath ? (
             <BarAction label="Copy path" onClick={onCopyPath}>
               <CopyIcon />
             </BarAction>
           ) : null}
-          {onReveal ? (
+          {immersive ? null : onReveal ? (
             <BarAction label="Show file" onClick={onReveal}>
               <RevealIcon />
             </BarAction>
           ) : null}
           {!clip ? (
-            <BarAction label={immersive ? "Exit" : "Full screen"} onClick={() => void toggleFullscreen()}>
+            <BarAction label={immersive ? "Exit fullscreen" : "Full screen"} onClick={() => void toggleFullscreen()}>
               {immersive ? <ExitFullIcon /> : <FullIcon />}
             </BarAction>
           ) : null}
-          <span className="mx-0.5 hidden h-4 w-px bg-white/15 sm:block" />
-          <BarIcon label="Close" onClick={onClose} buttonRef={closeRef}>
-            <CloseIcon />
-          </BarIcon>
+          {immersive ? null : (
+            <>
+              <span className="mx-0.5 hidden h-4 w-px bg-white/15 sm:block" />
+              <BarIcon label="Close" onClick={onClose} buttonRef={closeRef}>
+                <CloseIcon />
+              </BarIcon>
+            </>
+          )}
         </div>
       </header>
 
-      <button
-        type="button"
-        aria-label="Previous frame"
-        disabled={atStart}
-        onClick={onPrev}
-        className="absolute left-2 top-1/2 z-20 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full border border-white/10 bg-black/35 text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal disabled:pointer-events-none disabled:opacity-20 md:grid"
-      >
-        <Chevron direction="left" />
-      </button>
-      <button
-        type="button"
-        aria-label="Next frame"
-        disabled={atEnd}
-        onClick={onNext}
-        className="absolute right-2 top-1/2 z-20 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full border border-white/10 bg-black/35 text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal disabled:pointer-events-none disabled:opacity-20 md:grid"
-      >
-        <Chevron direction="right" />
-      </button>
+      {immersive ? null : (
+        <>
+          <button
+            type="button"
+            aria-label="Previous frame"
+            disabled={atStart}
+            onClick={onPrev}
+            className="absolute left-2 top-1/2 z-20 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full border border-white/10 bg-black/35 text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal disabled:pointer-events-none disabled:opacity-20 md:grid"
+          >
+            <Chevron direction="left" />
+          </button>
+          <button
+            type="button"
+            aria-label="Next frame"
+            disabled={atEnd}
+            onClick={onNext}
+            className="absolute right-2 top-1/2 z-20 hidden h-11 w-11 -translate-y-1/2 place-items-center rounded-full border border-white/10 bg-black/35 text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal disabled:pointer-events-none disabled:opacity-20 md:grid"
+          >
+            <Chevron direction="right" />
+          </button>
+        </>
+      )}
 
+      {immersive ? null : (
       <footer
         className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/60 to-transparent px-4 pt-10 md:px-6 ${
           clip ? "pb-20 md:pb-24" : "pb-4"
-        } ${immersive ? "opacity-0 transition-opacity duration-200 hover:opacity-100" : ""}`}
+        }`}
       >
         <div className="flex items-end justify-between gap-4">
           <div className="min-w-0 max-w-[min(100%,42rem)] rounded-md bg-black/45 px-3 py-2 backdrop-blur-sm">
@@ -394,6 +409,7 @@ export function Lightbox({
           </div>
         </div>
       </footer>
+      )}
     </div>
   );
 }
