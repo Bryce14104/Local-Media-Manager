@@ -4,7 +4,9 @@ import {
   analyzeFrame,
   applyDevelop,
   autoDevelop,
+  developSourceUrls,
   isNeutralDevelop,
+  loadDevelopImage,
   NEUTRAL_DEVELOP,
   sanitizeCrop,
   type CropRect,
@@ -45,7 +47,11 @@ export function DevelopStudio({
   const [busy, setBusy] = useState("Loading frame…");
   const [exportLabel, setExportLabel] = useState<string | null>(null);
   const [hist, setHist] = useState({ r: new Array(32).fill(0), g: new Array(32).fill(0), b: new Array(32).fill(0) });
-  const src = item.inspectUrl ?? item.proxyUrl ?? item.previewUrl ?? null;
+  const sources = useMemo(
+    () => developSourceUrls(item),
+    [item.id, item.inspectUrl, item.previewUrl, item.proxyUrl],
+  );
+  const fallbackSrc = sources[0] ?? null;
   const originalRatio = (item.width && item.height ? item.width / item.height : null) ?? null;
   const aspect = ASPECTS.find((entry) => entry.id === aspectId)?.value ?? null;
   const cropAspect = aspect === 0 ? originalRatio : aspect;
@@ -55,6 +61,7 @@ export function DevelopStudio({
     const canvas = canvasRef.current;
     const image = imageRef.current;
     if (!canvas || !image || !image.naturalWidth) return;
+    try {
     const cropMode = tool === "crop";
     const showBefore = compare === "before";
     const split = compare === "split";
@@ -73,13 +80,16 @@ export function DevelopStudio({
     const wctx = work.getContext("2d", { willReadFrequently: true });
     if (!wctx) return;
     wctx.drawImage(image, sx, sy, sw, sh, 0, 0, dw, dh);
-    if (!showBefore) {
-      const frame = wctx.getImageData(0, 0, dw, dh);
-      applyDevelop(frame, { ...settings, crop: null, straighten: 0 });
-      wctx.putImageData(frame, 0, 0);
+    try {
+      if (!showBefore) {
+        const frame = wctx.getImageData(0, 0, dw, dh);
+        applyDevelop(frame, { ...settings, crop: null, straighten: 0 });
+        wctx.putImageData(frame, 0, 0);
+      }
+      setHist(histogramFrom(wctx.getImageData(0, 0, dw, dh)));
+    } catch {
+      // Custom-protocol bitmaps can taint the canvas. The JPEG still draws.
     }
-    const bins = histogramFrom(wctx.getImageData(0, 0, dw, dh));
-    setHist(bins);
     const stage = stageRef.current;
     const room = stage?.getBoundingClientRect();
     const maxW = Math.max(160, (room?.width ?? 800) - 24);
@@ -107,25 +117,31 @@ export function DevelopStudio({
       ctx.restore();
     }
     setBusy("");
+    } catch (error) {
+      setBusy(error instanceof Error ? error.message : "Could not draw this frame.");
+    }
   }, [compare, settings, tool]);
 
   useEffect(() => {
-    if (!src) {
-      setBusy("No preview for this file.");
+    let cancel = false;
+    if (sources.length === 0) {
+      setBusy("No JPEG preview yet. Wait for Shelf to finish writing one.");
       return;
     }
-    const image = new Image();
-    image.onload = () => {
-      imageRef.current = image;
-      paint();
-    };
-    image.onerror = () => setBusy("Could not read this frame.");
-    image.src = src;
+    setBusy("Loading frame…");
+    void loadDevelopImage(sources)
+      .then((image) => {
+        if (cancel) return;
+        imageRef.current = image;
+        paint();
+      })
+      .catch((error: Error) => {
+        if (!cancel) setBusy(error.message || "Could not read this frame.");
+      });
     return () => {
-      image.onload = null;
-      image.onerror = null;
+      cancel = true;
     };
-  }, [src, paint]);
+  }, [item.id, paint, sources]);
 
   useEffect(() => {
     paint();
@@ -245,7 +261,18 @@ export function DevelopStudio({
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <div ref={stageRef} className="relative grid min-h-0 min-w-0 flex-1 place-items-center overflow-hidden bg-[#08090c]">
-          {busy ? <p className="absolute z-10 text-sm text-mute">{busy}</p> : null}
+          {busy ? (
+            <div className="absolute inset-0 z-10 grid place-items-center">
+              {fallbackSrc ? (
+                <img
+                  src={fallbackSrc}
+                  alt=""
+                  className="max-h-[calc(100dvh-8rem)] max-w-[calc(100%-1.5rem)] object-contain opacity-80"
+                />
+              ) : null}
+              <p className="absolute bottom-6 rounded-full bg-black/55 px-3 py-1 text-sm text-mute">{busy}</p>
+            </div>
+          ) : null}
           <div data-crop-stage className="relative max-h-full max-w-full">
             <canvas ref={canvasRef} className="block max-h-[calc(100dvh-8rem)] max-w-full bg-black" />
             {tool === "crop" ? (

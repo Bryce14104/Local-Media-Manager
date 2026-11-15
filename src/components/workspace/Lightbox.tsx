@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { formatTimestamp } from "../../lib/format";
 import type { SlideshowSettings } from "../../studio/slideshow";
 import type { StudioItem } from "../../studio/types";
@@ -57,10 +57,21 @@ export function Lightbox({
   const [zoom, setZoom] = useState(1);
   const [slideshow, setSlideshow] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const settingsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     closeRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    function onPointer(event: PointerEvent) {
+      if (settingsRef.current?.contains(event.target as Node)) return;
+      setShowSettings(false);
+    }
+    window.addEventListener("pointerdown", onPointer);
+    return () => window.removeEventListener("pointerdown", onPointer);
+  }, [showSettings]);
 
   useEffect(() => {
     setNatural(null);
@@ -209,10 +220,7 @@ export function Lightbox({
     const delta = event.clientX - dragX.current;
     dragX.current = null;
     if (zoom > 1) return;
-    if (Math.abs(delta) < 10) {
-      if (onEdit && item.format !== "video") onEdit();
-      return;
-    }
+    if (Math.abs(delta) < 10) return;
     if (delta > 72) onPrev();
     else if (delta < -72) onNext();
   }
@@ -245,94 +253,71 @@ export function Lightbox({
       </div>
 
       <header
-        className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-end gap-2 bg-gradient-to-b from-black/55 to-transparent px-3 py-2 md:px-4 ${
+        className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 py-3 md:px-4 ${
           immersive ? "opacity-0 transition-opacity duration-200 hover:opacity-100 focus-within:opacity-100" : ""
         }`}
       >
-        <p className="mr-auto font-mono text-xs tracking-wide text-white/70">
+        <p className="min-w-0 flex-1 font-mono text-xs tracking-wide text-white/70">
           {index + 1} / {count}
-          {slideshow ? " · slideshow" : ""}
+          {slideshow ? " · playing" : ""}
           {zoom > 1 ? ` · ${Math.round(zoom * 100)}%` : ""}
         </p>
-        {onEdit && item.format !== "video" ? (
-          <button
-            type="button"
-            onClick={onEdit}
-            className="pointer-events-auto rounded-full bg-teal px-3 py-1.5 text-sm font-medium text-teal-ink"
-          >
-            Edit
-          </button>
-        ) : null}
-        <button
-          type="button"
-          aria-label={slideshow ? "Stop slideshow" : "Slideshow"}
-          onClick={() => setSlideshow((current) => !current)}
-          className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
-        >
-          {slideshow ? "Pause" : "Play"}
-        </button>
-        <div className="relative pointer-events-auto">
-          <button
-            type="button"
-            aria-expanded={showSettings}
-            aria-label="Slideshow settings"
-            onClick={() => setShowSettings((current) => !current)}
-            className="rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
-          >
-            Timing
-          </button>
-          {showSettings ? (
-            <div className="absolute right-0 top-[calc(100%+0.4rem)] z-30 w-72 rounded-2xl border border-white/15 bg-card p-3 text-foam shadow-2xl">
-              <SlideshowControls settings={slideshowSettings} onChange={onSlideshow} />
-            </div>
+        <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/12 bg-black/50 p-1 backdrop-blur-md">
+          {onEdit && item.format !== "video" ? (
+            <BarLabel onClick={onEdit} accent>
+              Edit
+            </BarLabel>
           ) : null}
+          <div className="relative" ref={settingsRef}>
+            <div className="flex overflow-hidden rounded-full border border-white/10">
+              <button
+                type="button"
+                onClick={() => setSlideshow((current) => !current)}
+                className={`px-3 py-1.5 text-xs ${slideshow ? "bg-teal text-teal-ink" : "text-foam hover:bg-white/10"}`}
+              >
+                {slideshow ? "Pause" : "Slideshow"}
+              </button>
+              <button
+                type="button"
+                aria-label="Slideshow settings"
+                aria-expanded={showSettings}
+                onClick={() => setShowSettings((current) => !current)}
+                className="border-l border-white/10 px-2 text-foam hover:bg-white/10"
+              >
+                <Caret />
+              </button>
+            </div>
+            {showSettings ? (
+              <div className="absolute right-0 top-[calc(100%+0.5rem)] z-30 w-72 rounded-2xl border border-white/12 bg-[#171b22] p-3 text-foam shadow-2xl">
+                <p className="mb-2 text-[11px] uppercase tracking-[0.14em] text-mute">Slideshow</p>
+                <SlideshowControls settings={slideshowSettings} onChange={onSlideshow} />
+              </div>
+            ) : null}
+          </div>
+          {onRotate ? (
+            <BarIcon label="Rotate" onClick={onRotate}>
+              <RotateIcon />
+            </BarIcon>
+          ) : null}
+          {onCopyPath ? (
+            <BarIcon label="Copy path" onClick={onCopyPath}>
+              <CopyIcon />
+            </BarIcon>
+          ) : null}
+          {onReveal ? (
+            <BarIcon label="Reveal in Finder" onClick={onReveal}>
+              <RevealIcon />
+            </BarIcon>
+          ) : null}
+          {!clip ? (
+            <BarIcon label={immersive ? "Exit full screen" : "Full screen"} onClick={() => void toggleFullscreen()}>
+              {immersive ? <ExitFullIcon /> : <FullIcon />}
+            </BarIcon>
+          ) : null}
+          <BarIcon label="Close" onClick={onClose} buttonRef={closeRef}>
+            <CloseIcon />
+          </BarIcon>
         </div>
-        {onRotate ? (
-          <button
-            type="button"
-            aria-label="Rotate"
-            onClick={onRotate}
-            className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
-          >
-            Rotate
-          </button>
-        ) : null}
-        {onCopyPath ? (
-          <button
-            type="button"
-            onClick={onCopyPath}
-            className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
-          >
-            Copy path
-          </button>
-        ) : null}
-        {onReveal ? (
-          <button
-            type="button"
-            onClick={onReveal}
-            className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
-          >
-            Reveal
-          </button>
-        ) : null}
-        {!clip ? (
-          <button
-            type="button"
-            aria-label={immersive ? "Exit full screen" : "Full screen"}
-            onClick={() => void toggleFullscreen()}
-            className="pointer-events-auto grid h-9 w-9 place-items-center rounded-md border border-white/15 bg-black/45 text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
-          >
-            {immersive ? <ExitFullIcon /> : <FullIcon />}
-          </button>
-        ) : null}
-        <button
-          ref={closeRef}
-          type="button"
-          onClick={onClose}
-          className="pointer-events-auto rounded-full border border-white/15 bg-black/45 px-3 py-1.5 text-sm text-foam backdrop-blur-sm transition hover:border-teal hover:text-teal"
-        >
-          Close
-        </button>
       </header>
 
       <button
@@ -365,7 +350,6 @@ export function Lightbox({
             <p className="mt-1 font-mono text-[11px] text-white/55">
               {captured}
               {width && height ? ` · ${width} × ${height}` : ""}
-              {item.format !== "video" ? " · click to develop" : ""}
             </p>
           </div>
           {strip.length > 1 ? (
@@ -409,6 +393,102 @@ export function Lightbox({
         </div>
       </footer>
     </div>
+  );
+}
+
+function BarLabel({
+  children,
+  onClick,
+  accent,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  accent?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-3 py-1.5 text-xs font-medium ${
+        accent ? "bg-teal text-teal-ink" : "text-foam hover:bg-white/10"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function BarIcon({
+  label,
+  onClick,
+  children,
+  buttonRef,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+  buttonRef?: RefObject<HTMLButtonElement | null>;
+}) {
+  return (
+    <button
+      ref={buttonRef}
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="grid h-8 w-8 place-items-center rounded-full text-foam hover:bg-white/10 hover:text-teal"
+    >
+      {children}
+    </button>
+  );
+}
+
+function Caret() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+      <path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+      <path d="M3 3l8 8M11 3l-8 8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RotateIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden>
+      <path
+        d="M3.5 8A4.5 4.5 0 1 0 8 3.5h1"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+      <path d="M7 1.5 9.5 3.5 7 5.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+      <rect x="4.5" y="4.5" width="7" height="8" rx="1.2" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2.5 9.5V2.8A1.3 1.3 0 0 1 3.8 1.5H9" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  );
+}
+
+function RevealIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden>
+      <path d="M2 11.5V4.2L6.2 2.5H12v9H2z" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M2 6.5h10" fill="none" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
   );
 }
 

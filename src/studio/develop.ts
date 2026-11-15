@@ -54,6 +54,50 @@ export const NEUTRAL_DEVELOP: DevelopSettings = {
   vignette: 0,
 };
 
+export function developSourceUrls(item: {
+  proxyUrl?: string | null;
+  previewUrl?: string | null;
+  inspectUrl?: string | null;
+}): string[] {
+  return [...new Set([item.proxyUrl, item.previewUrl, item.inspectUrl].filter((url): url is string => Boolean(url)))];
+}
+
+export async function loadDevelopImage(urls: string[]): Promise<HTMLImageElement> {
+  let lastError = "No preview for this file.";
+  for (const url of urls) {
+    try {
+      const resolved = (await blobUrl(url)) ?? url;
+      const image = await decodeImage(resolved);
+      if (image.naturalWidth > 0) return image;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : "Could not read this frame.";
+    }
+  }
+  throw new Error(lastError);
+}
+
+async function blobUrl(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    if (blob.size < 32) return null;
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+}
+
+function decodeImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("Could not decode this frame."));
+    image.src = url;
+    if (image.complete && image.naturalWidth > 0) resolve(image);
+  });
+}
+
 export function parseDevelop(raw: string | null | undefined): DevelopSettings {
   if (!raw) return { ...NEUTRAL_DEVELOP };
   try {
