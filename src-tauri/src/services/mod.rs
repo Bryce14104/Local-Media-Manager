@@ -4,6 +4,7 @@ mod capture;
 mod exif;
 mod scanner;
 mod thumbs;
+mod vocab;
 mod vision;
 pub mod volumes;
 

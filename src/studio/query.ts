@@ -61,20 +61,33 @@ const STOP_WORDS = new Set([
 ]);
 
 const SUBJECT_WORDS: { words: string[]; value: string }[] = [
-  { words: ["puppies", "puppy", "dogs", "dog"], value: "dog" },
-  { words: ["kittens", "kitten", "cats", "cat"], value: "cat" },
-  { words: ["wildlife", "fauna", "wild"], value: "wildlife" },
+  { words: ["puppies", "puppy", "dogs", "dog", "canine", "hound"], value: "dog" },
+  { words: ["kittens", "kitten", "cats", "cat", "tabby", "feline"], value: "cat" },
+  { words: ["wildlife", "fauna", "wild", "animals", "animal"], value: "wildlife" },
   { words: ["birds", "bird"], value: "bird" },
-  { words: ["horses", "horse"], value: "horse" },
-  { words: ["sunsets", "sunset"], value: "sunset" },
+  { words: ["horses", "horse", "pony"], value: "horse" },
+  { words: ["sunsets", "sunset", "sunrise", "dusk"], value: "sunset" },
   { words: ["drones", "drone", "aerials", "aerial"], value: "drone" },
-  { words: ["beaches", "beach", "seashore", "shore"], value: "beach" },
-  { words: ["boats", "boat", "speedboat", "sailboat"], value: "boat" },
+  { words: ["beaches", "beach", "seashore", "shore", "coast", "seaside", "sand"], value: "beach" },
+  { words: ["boats", "boat", "speedboat", "sailboat", "ship", "yacht"], value: "boat" },
   { words: ["lighthouses", "lighthouse", "beacon"], value: "lighthouse" },
-  { words: ["water", "waters", "ocean", "sea", "lake"], value: "water" },
-  { words: ["vehicles", "vehicle", "cars", "car"], value: "vehicle" },
-  { words: ["architecture", "buildings", "building"], value: "architecture" },
-  { words: ["people", "persons", "person"], value: "person" },
+  { words: ["water", "waters", "ocean", "sea", "lake", "river"], value: "water" },
+  { words: ["vehicles", "vehicle", "cars", "car", "auto"], value: "vehicle" },
+  { words: ["architecture", "buildings", "building", "church", "castle"], value: "architecture" },
+  { words: ["people", "persons", "person", "portrait", "portraits", "faces", "face"], value: "person" },
+  { words: ["flowers", "flower", "floral", "bloom"], value: "flower" },
+  { words: ["food", "meal", "dinner", "lunch"], value: "food" },
+  { words: ["mountains", "mountain", "alps", "alp", "peak", "peaks"], value: "mountain" },
+  { words: ["forest", "woods", "trees", "jungle"], value: "forest" },
+  { words: ["snow", "snowy", "winter", "ski", "skiing"], value: "snow" },
+  { words: ["sky", "clouds", "cloud"], value: "sky" },
+  { words: ["airplane", "airplanes", "plane", "planes", "aircraft", "jet"], value: "airplane" },
+  { words: ["motorcycle", "motorbike", "scooter"], value: "motorcycle" },
+  { words: ["bicycle", "bike", "bikes", "cycling"], value: "bicycle" },
+  { words: ["train", "trains", "railway"], value: "train" },
+  { words: ["sports", "sport", "soccer", "football", "basketball", "baseball"], value: "sports" },
+  { words: ["music", "concert", "guitar", "piano", "band"], value: "music" },
+  { words: ["night", "nighttime", "evening"], value: "night" },
 ];
 
 const STRUCTURED = /\b(?:rating:(?:>=|=)?[0-5]|type:(?:raw|jpg|jpeg|video)|flag:(?:pick|reject|unflagged)|date:\d{4}(?:-\d{2})?|camera:[^\s]+|color:(?:red|yellow|green|blue|purple)|keyword:[^\s]+|unrated|gps|duplicates|recent)/gi;
@@ -550,14 +563,45 @@ function retargetFilter(filter: ActiveFilter, aiSearch: boolean, items: StudioIt
 }
 
 function subjectValueForToken(token: string, items: StudioItem[]): string | null {
+  const labels = subjectLabels(items);
   const known = new Set<string>([
     ...SUBJECT_WORDS.flatMap((entry) => [entry.value, ...entry.words]),
-    ...subjectLabels(items),
+    ...labels,
   ]);
-  const hit = wordForms(token).find((form) => known.has(form));
+  const hit = wordForms(token).find((form) => known.has(form)) ?? closestWord(token, known);
   if (!hit) return null;
   const entry = SUBJECT_WORDS.find((candidate) => candidate.value === hit || candidate.words.includes(hit));
   return entry ? entry.value : hit;
+}
+
+function closestWord(token: string, known: Set<string>): string | null {
+  const needle = token.toLowerCase();
+  const budget = needle.length <= 3 ? 0 : needle.length <= 6 ? 1 : 2;
+  if (budget === 0) return null;
+  let best: { word: string; distance: number } | null = null;
+  for (const word of known) {
+    if (Math.abs(word.length - needle.length) > budget) continue;
+    if (word[0] !== needle[0]) continue;
+    const distance = editDistance(needle, word);
+    if (distance === 0) return word;
+    if (distance <= budget && (!best || distance < best.distance)) best = { word, distance };
+  }
+  return best?.word ?? null;
+}
+
+function editDistance(left: string, right: string): number {
+  const rows = left.length + 1;
+  const cols = right.length + 1;
+  const grid = Array.from({ length: rows }, () => new Array<number>(cols).fill(0));
+  for (let i = 0; i < rows; i += 1) grid[i][0] = i;
+  for (let j = 0; j < cols; j += 1) grid[0][j] = j;
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = left[i - 1] === right[j - 1] ? 0 : 1;
+      grid[i][j] = Math.min(grid[i - 1][j] + 1, grid[i][j - 1] + 1, grid[i - 1][j - 1] + cost);
+    }
+  }
+  return grid[left.length][right.length];
 }
 
 function takePhrase(haystack: string, phrase: string): { found: boolean; rest: string } {
@@ -578,6 +622,8 @@ function matchScore(haystack: string, needle: string): number {
   const text = haystack.toLowerCase();
   if (text.startsWith(needle)) return 3;
   if (text.includes(needle)) return 2;
+  const words = text.split(/[^a-z0-9]+/).filter(Boolean);
+  if (words.some((word) => closestWord(needle, new Set([word])) === word)) return 1;
   return 0;
 }
 

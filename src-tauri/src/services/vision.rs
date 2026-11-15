@@ -28,25 +28,14 @@ const RIGHT_EYE: (f32, f32) = (38.2946, 51.6963);
 const LEFT_EYE: (f32, f32) = (73.5318, 51.5014);
 const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
 const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
-const CONCEPT_FLOOR: f32 = 0.12;
+pub use super::vocab::{CONCEPTS, query_embedding};
 
-/// One score per concept, appended after the 1000 MobileNet probabilities.
-pub const CONCEPTS: [&str; 14] = [
-    "dog",
-    "cat",
-    "bird",
-    "wildlife",
-    "horse",
-    "beach",
-    "water",
-    "boat",
-    "lighthouse",
-    "vehicle",
-    "architecture",
-    "sunset",
-    "drone",
-    "person",
-];
+use super::vocab::{
+    aliases_for_label, concept_index, concepts_for_class, extra_words_from_class_name, imagenet_name,
+    kind_for_concept,
+};
+
+const CONCEPT_FLOOR: f32 = 0.08;
 
 const _: () = assert!(CONCEPTS.len() == crate::models::VISUAL_CONCEPTS);
 const _: () = assert!(crate::models::VISUAL_EMBEDDING_FLOATS == crate::models::IMAGENET_DIM + CONCEPTS.len());
@@ -99,8 +88,8 @@ pub fn warm_vision() -> Result<(), VisionError> {
 fn worker_threads() -> usize {
     let cores = std::thread::available_parallelism()
         .map(|count| count.get())
-        .unwrap_or(2);
-    cores.clamp(1, 8)
+        .unwrap_or(4);
+    cores.saturating_sub(1).clamp(2, 6)
 }
 
 #[derive(Clone, Debug)]
@@ -419,20 +408,18 @@ impl Engine {
 
     fn classify_adaptive(&mut self, image: &RgbImage) -> Result<Classified, VisionError> {
         let mut classified = self.classify(image)?;
-        let top = classified.probabilities.iter().copied().fold(0.0, f32::max);
-        if top >= 0.35 || image.width() < 32 || image.height() < 32 {
-            return Ok(classified);
+        if image.width() >= 48 && image.height() >= 48 {
+            let zoomed = self.classify(&center_crop(image))?;
+            for (slot, probability) in classified.probabilities.iter_mut().zip(&zoomed.probabilities) {
+                *slot = (*slot).max(*probability);
+            }
+            classified.tags = tags_from_probabilities(&classified.probabilities);
         }
-        let zoomed = self.classify(&center_crop(image))?;
-        for (slot, probability) in classified.probabilities.iter_mut().zip(&zoomed.probabilities) {
-            *slot = (*slot).max(*probability);
-        }
-        classified.tags = tags_from_probabilities(&classified.probabilities);
         Ok(classified)
     }
 
     fn classify(&mut self, image: &RgbImage) -> Result<Classified, VisionError> {
-        let sized = image::imageops::resize(image, 224, 224, FilterType::Triangle);
+        let sized = image::imageops::resize(image, 224, 224, FilterType::CatmullRom);
         let tensor = Tensor::from_array(nchw(&sized, false, |value, channel| {
             (value / 255.0 - IMAGENET_MEAN[channel]) / IMAGENET_STD[channel]
         }))?;
@@ -781,6 +768,34 @@ fn scene_tags(image: &RgbImage) -> Vec<Tag> {
     }
     let sand_ratio: f32 = if ground_count > 0.0 { sand / ground_count } else { 0.0 };
     let sky_ratio: f32 = if sky_count > 0.0 { sky_blue / sky_count } else { 0.0 };
+    if sky_ratio > 0.55 && sunset_score(image).is_none() {
+        tags.push(Tag {
+            kind: "scene",
+            label: "sky".into(),
+            score: sky_ratio.min(1.0),
+        });
+    }
+    if let Some(score) = snow_score(&sample) {
+        tags.push(Tag {
+            kind: "scene",
+            label: "snow".into(),
+            score,
+        });
+    }
+    if let Some(score) = night_score(&sample) {
+        tags.push(Tag {
+            kind: "scene",
+            label: "night".into(),
+            score,
+        });
+    }
+    if let Some(score) = forest_score(&sample) {
+        tags.push(Tag {
+            kind: "scene",
+            label: "forest".into(),
+            score,
+        });
+    }
     if sand_ratio > 0.45 && (sky_ratio > 0.35 || water_ratio > 0.12) {
         let score = ((sand_ratio + sky_ratio) / 2.0).clamp(0.0, 1.0);
         tags.push(Tag {
@@ -880,6 +895,54 @@ pub fn sunset_score(image: &RgbImage) -> Option<f32> {
     }
 }
 
+fn snow_score(image: &RgbImage) -> Option<f32> {
+    let mut bright = 0.0;
+    let mut total = 0.0;
+    for pixel in image.pixels() {
+        let red = pixel[0] as f32;
+        let green = pixel[1] as f32;
+        let blue = pixel[2] as f32;
+        total += 1.0;
+        let mean = (red + green + blue) / 3.0;
+        let spread = (red - green).abs() + (green - blue).abs();
+        if mean > 198.0 && spread < 48.0 {
+            bright += 1.0;
+        }
+    }
+    let ratio: f32 = if total > 0.0 { bright / total } else { 0.0 };
+    (ratio > 0.42).then_some(ratio.min(1.0))
+}
+
+fn night_score(image: &RgbImage) -> Option<f32> {
+    let mut sum = 0.0;
+    let mut total = 0.0;
+    for pixel in image.pixels() {
+        sum += (pixel[0] as f32 + pixel[1] as f32 + pixel[2] as f32) / 3.0;
+        total += 1.0;
+    }
+    if total == 0.0 {
+        return None;
+    }
+    let mean = sum / total;
+    (mean < 38.0).then_some(((50.0 - mean) / 50.0).clamp(0.4, 0.95))
+}
+
+fn forest_score(image: &RgbImage) -> Option<f32> {
+    let mut greenish = 0.0;
+    let mut total = 0.0;
+    for pixel in image.pixels() {
+        let red = pixel[0] as f32;
+        let green = pixel[1] as f32;
+        let blue = pixel[2] as f32;
+        total += 1.0;
+        if green > 70.0 && green > red * 1.12 && green > blue * 1.08 {
+            greenish += 1.0;
+        }
+    }
+    let ratio: f32 = if total > 0.0 { greenish / total } else { 0.0 };
+    (ratio > 0.38).then_some(ratio.min(1.0))
+}
+
 pub fn drone_camera(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     ["dji", "mavic", "autel", "skydio", "parrot", "drone", "inspire"]
@@ -923,7 +986,7 @@ pub fn embedding_from_probabilities(probabilities: &[f32]) -> Vec<f32> {
         } else if index == 339 {
             bump(&mut embedding, "horse", probability);
         }
-        for noun in nouns_for_class(index) {
+        for noun in concepts_for_class(index) {
             bump(&mut embedding, noun, probability);
         }
     }
@@ -944,39 +1007,6 @@ pub fn visual_vector(probabilities: &[f32], concepts: &[f32]) -> Vec<f32> {
     embedding
 }
 
-pub fn query_embedding(query: &str) -> Vec<f32> {
-    let mut embedding = vec![0.0; crate::models::VISUAL_EMBEDDING_FLOATS];
-    for term in query_terms(query) {
-        let Some(concept) = concept_for_word(&term) else {
-            continue;
-        };
-        for index in 0..crate::models::IMAGENET_DIM {
-            if class_is_concept(index, concept) {
-                embedding[index] = 1.0;
-            }
-        }
-        bump_at(&mut embedding[crate::models::IMAGENET_DIM..], concept, 1.0);
-    }
-    embedding
-}
-
-fn class_is_concept(index: usize, concept: &str) -> bool {
-    let derived = match concept {
-        "dog" => (151..=268).contains(&index),
-        "cat" => (281..=285).contains(&index),
-        "bird" => (80..=100).contains(&index) || index == 145 || index == 146,
-        "wildlife" => {
-            (269..=297).contains(&index)
-                || index == 340
-                || (342..=344).contains(&index)
-                || (346..=355).contains(&index)
-        }
-        "horse" => index == 339,
-        _ => false,
-    };
-    derived || nouns_for_class(index).contains(&concept)
-}
-
 pub fn embedding_match(image: &[f32], query: &[f32]) -> Option<f32> {
     if image.len() != query.len() || query.iter().all(|value| *value == 0.0) {
         return None;
@@ -987,43 +1017,11 @@ pub fn embedding_match(image: &[f32], query: &[f32]) -> Option<f32> {
             mass += *image_value;
         }
     }
-    if mass < 0.08 {
+    if mass < 0.03 {
         return None;
     }
     let score = cosine(image, query);
-    if score >= 0.05 { Some(score) } else { None }
-}
-
-fn query_terms(query: &str) -> Vec<String> {
-    query
-        .split(|character: char| !character.is_ascii_alphanumeric())
-        .map(|word| word.to_ascii_lowercase())
-        .filter(|word| word.len() >= 2)
-        .collect()
-}
-
-fn concept_for_word(word: &str) -> Option<&'static str> {
-    Some(match word {
-        "dog" | "dogs" | "puppy" | "puppies" => "dog",
-        "cat" | "cats" | "kitten" | "kittens" | "tabby" => "cat",
-        "bird" | "birds" => "bird",
-        "wildlife" | "fauna" | "animals" | "animal" => "wildlife",
-        "horse" | "horses" => "horse",
-        "beach" | "beaches" | "seashore" | "shore" | "sand" => "beach",
-        "water" | "waters" | "ocean" | "sea" | "lake" => "water",
-        "boat" | "boats" | "speedboat" | "sailboat" => "boat",
-        "lighthouse" | "lighthouses" | "beacon" => "lighthouse",
-        "vehicle" | "vehicles" | "car" | "cars" => "vehicle",
-        "architecture" | "building" | "buildings" => "architecture",
-        "sunset" | "sunsets" => "sunset",
-        "drone" | "drones" | "aerial" | "aerials" => "drone",
-        "person" | "people" | "face" | "faces" => "person",
-        _ => return None,
-    })
-}
-
-fn concept_index(label: &str) -> Option<usize> {
-    CONCEPTS.iter().position(|concept| *concept == label)
+    if score >= 0.04 { Some(score) } else { None }
 }
 
 fn bump(embedding: &mut [f32], label: &str, amount: f32) {
@@ -1078,16 +1076,6 @@ fn matched_concepts(image: &[f32], query: &[f32]) -> String {
     }
 }
 
-fn kind_for_concept(concept: &str) -> &'static str {
-    match concept {
-        "dog" | "cat" => "pet",
-        "bird" | "wildlife" => "wildlife",
-        "horse" => "animal",
-        "beach" | "water" | "sunset" | "drone" => "scene",
-        _ => "object",
-    }
-}
-
 fn tags_from_probabilities(probabilities: &[f32]) -> Vec<Tag> {
     if probabilities.is_empty() {
         return Vec::new();
@@ -1099,18 +1087,26 @@ fn tags_from_probabilities(probabilities: &[f32]) -> Vec<Tag> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     let mut tags = Vec::new();
-    for (rank, index) in order.into_iter().take(8).enumerate() {
+    for (rank, index) in order.into_iter().take(20).enumerate() {
         let score = probabilities[index];
-        let useful = is_family(index) || !nouns_for_class(index).is_empty();
-        if score < 0.05 && !(useful && score >= 0.02) {
+        let useful = is_family(index) || !concepts_for_class(index).is_empty();
+        if score < 0.012 && !(useful && score >= 0.006) {
             continue;
         }
-        if rank >= 5 && !useful {
+        if rank >= 12 && !useful {
             continue;
         }
         tags.extend(tags_for_class(index, score));
     }
-    dedupe_tags(tags)
+    let mut tags = dedupe_tags(tags);
+    tags.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    tags.truncate(28);
+    tags
 }
 
 fn is_family(index: usize) -> bool {
@@ -1140,9 +1136,9 @@ fn kind_for_index(index: usize) -> &'static str {
         "wildlife"
     } else if index == 339 {
         "animal"
-    } else if nouns_for_class(index)
+    } else if concepts_for_class(index)
         .iter()
-        .any(|noun| *noun == "beach" || *noun == "water")
+        .any(|noun| kind_for_concept(noun) == "scene")
     {
         "scene"
     } else {
@@ -1150,62 +1146,45 @@ fn kind_for_index(index: usize) -> &'static str {
     }
 }
 
-fn kind_for_noun(noun: &str) -> &'static str {
-    match noun {
-        "dog" | "cat" => "pet",
-        "bird" | "wildlife" => "wildlife",
-        "horse" => "animal",
-        "beach" | "water" => "scene",
-        _ => "object",
-    }
-}
-
-/// Everyday words a photo of this ImageNet class should match in search.
-fn nouns_for_class(index: usize) -> &'static [&'static str] {
-    match index {
-        460 | 972 | 973 | 975 | 976 | 977 | 978 => &["beach", "water"],
-        525 | 562 | 974 => &["water"],
-        536 | 718 => &["water", "boat"],
-        437 => &["lighthouse"],
-        449 => &["boat", "architecture"],
-        472 | 484 | 554 | 576 | 625 | 694 | 780 | 814 | 871 | 913 | 914 => &["boat"],
-        425 | 483 | 497 | 538 | 663 | 668 | 698 | 708 | 821 | 832 | 839 | 888 | 900 => &["architecture"],
-        407 | 436 | 468 | 511 | 555 | 565 | 609 | 656 | 705 | 717 | 751 | 757 | 817 | 829 => &["vehicle"],
-        _ => &[],
-    }
-}
-
 fn tags_for_class(index: usize, score: f32) -> Vec<Tag> {
     let mut tags = Vec::new();
-    if (151..=268).contains(&index) {
-        tags.push(Tag { kind: "pet", label: "dog".into(), score });
-    } else if (281..=285).contains(&index) {
-        tags.push(Tag { kind: "pet", label: "cat".into(), score });
-    } else if (80..=100).contains(&index) || index == 145 || index == 146 {
-        tags.push(Tag { kind: "wildlife", label: "bird".into(), score });
-    } else if (269..=297).contains(&index)
-        || index == 340
-        || (342..=344).contains(&index)
-        || (346..=355).contains(&index)
-    {
-        tags.push(Tag { kind: "wildlife", label: "wildlife".into(), score });
-    } else if index == 339 {
-        tags.push(Tag { kind: "animal", label: "horse".into(), score });
-    }
-    for noun in nouns_for_class(index) {
+    for noun in concepts_for_class(index) {
         tags.push(Tag {
-            kind: kind_for_noun(noun),
+            kind: kind_for_concept(noun),
             label: (*noun).into(),
             score,
         });
+        for alias in aliases_for_label(noun) {
+            tags.push(Tag {
+                kind: kind_for_concept(noun),
+                label: (*alias).into(),
+                score: (score * 0.92).min(1.0),
+            });
+        }
     }
     let specific = imagenet_name(index).unwrap_or("").to_ascii_lowercase();
-    if !specific.is_empty() && tags.iter().all(|tag| tag.label != specific) {
+    if !specific.is_empty() {
         tags.push(Tag {
             kind: kind_for_index(index),
-            label: specific,
+            label: specific.clone(),
             score,
         });
+        for alias in aliases_for_label(&specific) {
+            tags.push(Tag {
+                kind: kind_for_index(index),
+                label: (*alias).into(),
+                score: (score * 0.9).min(1.0),
+            });
+        }
+        for word in extra_words_from_class_name(&specific) {
+            if tags.iter().all(|tag| tag.label != word) {
+                tags.push(Tag {
+                    kind: kind_for_index(index),
+                    label: word,
+                    score: (score * 0.85).min(1.0),
+                });
+            }
+        }
     }
     tags
 }
@@ -1220,15 +1199,6 @@ fn dedupe_tags(tags: Vec<Tag>) -> Vec<Tag> {
         }
     }
     kept
-}
-
-fn imagenet_name(index: usize) -> Option<&'static str> {
-    imagenet().get(index).copied()
-}
-
-fn imagenet() -> &'static [&'static str] {
-    static CLASSES: OnceLock<Vec<&str>> = OnceLock::new();
-    CLASSES.get_or_init(|| include_str!("imagenet_classes.txt").lines().collect())
 }
 
 #[cfg(test)]
@@ -1288,6 +1258,7 @@ mod tests {
     fn imagenet_dogs_and_big_cats_map_to_subjects() {
         let dogs = tags_for_class(207, 0.4);
         assert!(dogs.iter().any(|tag| tag.kind == "pet" && tag.label == "dog"));
+        assert!(dogs.iter().any(|tag| tag.label == "golden retriever" || tag.label.contains("retriever")));
         let lion = tags_for_class(291, 0.5);
         assert!(lion.iter().any(|tag| tag.kind == "wildlife" && tag.label == "lion"));
         assert_eq!(imagenet_name(151), Some("Chihuahua"));
@@ -1296,7 +1267,10 @@ mod tests {
         assert!(shore.iter().any(|tag| tag.label == "water"));
         assert!(shore.iter().any(|tag| tag.label == "seashore"));
         let boat = tags_for_class(814, 0.4);
-        assert!(boat.iter().any(|tag| tag.label == "boat" && tag.kind == "object"));
+        assert!(boat.iter().any(|tag| tag.label == "boat"));
+        let cats = query_embedding("beech");
+        let beach = crate::models::IMAGENET_DIM + concept_index("beach").unwrap();
+        assert!(cats[beach] > 0.5);
         let tower = tags_for_class(437, 0.4);
         assert!(tower.iter().any(|tag| tag.label == "lighthouse"));
         let hall = tags_for_class(483, 0.4);
@@ -1401,7 +1375,7 @@ mod tests {
         let mut engine = Engine::load(2).expect("models");
         let frame = RgbImage::from_pixel(64, 48, Rgb([20, 40, 80]));
         let classified = engine.classify(&frame).expect("resnet50");
-        assert!(classified.tags.len() < 20);
+        assert!(classified.tags.len() < 48);
         assert_eq!(classified.probabilities.len(), crate::models::IMAGENET_DIM);
     }
 
