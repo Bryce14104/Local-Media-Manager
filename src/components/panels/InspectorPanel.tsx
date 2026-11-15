@@ -21,6 +21,7 @@ type InspectorPanelProps = {
   onKeywords?: (keywords: string[]) => void;
   onReveal?: () => void;
   onCopyPath?: () => void;
+  onEdit?: () => void;
 };
 
 export function InspectorPanel({
@@ -38,6 +39,7 @@ export function InspectorPanel({
   onKeywords,
   onReveal,
   onCopyPath,
+  onEdit,
 }: InspectorPanelProps) {
   const floating = mode === "floating";
   return (
@@ -71,6 +73,15 @@ export function InspectorPanel({
             <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-studio">
               <ProgressiveMedia item={item} fit="contain" playback="hold" />
             </div>
+            {onEdit && item.format !== "video" ? (
+              <button
+                type="button"
+                onClick={onEdit}
+                className="w-full rounded-full bg-teal px-3 py-2 text-sm font-medium text-teal-ink"
+              >
+                Develop photo
+              </button>
+            ) : null}
             <Stars rating={item.rating} onChange={onRate} />
             <div className="flex flex-wrap gap-1.5">
               {(["red", "yellow", "green", "blue", "purple"] as const).map((color) => (

@@ -134,6 +134,44 @@ body {
   animation: pipeline-slide 1.1s ease-in-out infinite;
 }
 
+.develop-slider {
+  height: 14px;
+  cursor: pointer;
+  appearance: none;
+  background: transparent;
+}
+
+.develop-slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(to right, #2ee0c5 var(--fill, 50%), #2c3340 var(--fill, 50%));
+}
+
+.develop-slider::-webkit-slider-thumb {
+  height: 12px;
+  width: 12px;
+  margin-top: -4.5px;
+  appearance: none;
+  border-radius: 999px;
+  background: #e7e9ee;
+  box-shadow: 0 0 0 1px #0b0d10;
+}
+
+.develop-slider::-moz-range-track {
+  height: 3px;
+  border: 0;
+  border-radius: 999px;
+  background: #2c3340;
+}
+
+.develop-slider::-moz-range-thumb {
+  height: 12px;
+  width: 12px;
+  border: 0;
+  border-radius: 999px;
+  background: #e7e9ee;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .lightbox-open,
   .lightbox-next,

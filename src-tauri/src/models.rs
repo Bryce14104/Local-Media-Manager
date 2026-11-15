@@ -110,6 +110,7 @@ pub struct MediaRecord {
     pub rotation: i64,
     pub notes: Option<String>,
     pub keywords: Vec<String>,
+    pub develop_json: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

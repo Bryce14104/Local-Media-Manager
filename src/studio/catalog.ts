@@ -1,3 +1,4 @@
+import { NEUTRAL_DEVELOP, parseDevelop } from "./develop";
 import type { FlagStatus, MediaFormat, SortKey, StudioItem } from "./types";
 
 type Seed = [
@@ -107,6 +108,7 @@ export function itemFromRecord(record: {
   notes?: string | null;
   keywords?: string[];
   indexedAt?: number;
+  developJson?: string | null;
 }): StudioItem {
   const fileName = record.filePath.split(/[/\\]/).filter(Boolean).pop() ?? record.filePath;
   const folder = parentFolder(record.filePath);
@@ -152,6 +154,7 @@ export function itemFromRecord(record: {
     notes: record.notes ?? "",
     keywords: record.keywords ?? [],
     indexedAt: record.indexedAt ?? null,
+    develop: parseDevelop(record.developJson),
     ...placed(folder, id, exif?.latitude, exif?.longitude),
   };
 }
@@ -254,6 +257,7 @@ export function inventItems(folder: string, format: MediaFormat): StudioItem[] {
       notes: "",
       keywords: [],
       indexedAt: Math.floor(stamp / 1000),
+      develop: { ...NEUTRAL_DEVELOP },
       ...coordinatesFor(folder.trim() || "Inbox", id),
     };
   });
@@ -278,8 +282,6 @@ export function sortItems(items: StudioItem[], key: SortKey): StudioItem[] {
         return left.fileName.localeCompare(right.fileName);
       case "size":
         return right.fileSize - left.fileSize;
-      case "rating":
-        return (right.rating ?? -1) - (left.rating ?? -1);
       case "camera":
         return left.camera.localeCompare(right.camera) || captureMillis(right.capturedAt) - captureMillis(left.capturedAt);
       default:
@@ -364,6 +366,7 @@ function seedItem(row: Seed, id: string): StudioItem {
     notes: "",
     keywords: [],
     indexedAt: Math.floor(Date.parse(capturedAt) / 1000) || null,
+    develop: { ...NEUTRAL_DEVELOP },
     ...coordinatesFor(folder, id),
   };
 }

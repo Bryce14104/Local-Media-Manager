@@ -207,6 +207,16 @@ export async function pickDirectory(title = "Choose a folder"): Promise<string |
   return typeof selected === "string" && selected.trim() ? selected : null;
 }
 
+export async function setDevelop(path: string, develop: string | null): Promise<void> {
+  assertBridge();
+  return invoke("set_develop", { path, develop });
+}
+
+export async function writeBytes(path: string, bytes: number[]): Promise<void> {
+  assertBridge();
+  return invoke("write_bytes", { path, bytes });
+}
+
 export async function copyOriginals(paths: string[], destination: string): Promise<number> {
   assertBridge();
   return invoke<number>("copy_originals", { paths, destination });

@@ -1,3 +1,4 @@
+import { stageStyle } from "../../studio/develop";
 import { gridMetrics } from "../../studio/gridZoom";
 import { formatLabel } from "../../studio/query";
 import type { PointerMods } from "../../studio/selection";
@@ -58,7 +59,7 @@ export function MediaCard({
               style={{ background: colorSwatch(item.colorLabel) }}
             />
           ) : null}
-          <div className="h-full w-full" style={{ transform: item.rotation ? `rotate(${item.rotation}deg)` : undefined }}>
+          <div className="h-full w-full" style={stageStyle(item.rotation, item.develop)}>
             <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
           </div>
           {item.format === "video" ? <PlayMark /> : null}

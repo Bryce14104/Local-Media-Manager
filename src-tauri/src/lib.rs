@@ -71,6 +71,8 @@ pub fn run() {
             commands::album_media_ids,
             commands::reveal_path,
             commands::copy_originals,
+            commands::set_develop,
+            commands::write_bytes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Shelf");

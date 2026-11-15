@@ -1,4 +1,5 @@
 import { captureMillis, coordinatesFor, fakeHash, histogram, normalizeCapture } from "./catalog";
+import { NEUTRAL_DEVELOP } from "./develop";
 import type { MediaFormat, StudioItem } from "./types";
 
 const RAW = new Set(["raw", "cr2", "cr3", "nef", "arw", "dng", "orf", "rw2", "raf", "pef", "srw"]);
@@ -52,6 +53,7 @@ export async function itemsFromFiles(
       notes: "",
       keywords: [],
       indexedAt: Math.floor(Date.now() / 1000),
+      develop: { ...NEUTRAL_DEVELOP },
       ...(meta.gps
         ? { latitude: meta.gps.latitude, longitude: meta.gps.longitude, geotagged: true }
         : { ...coordinatesFor(folder, id), geotagged: false }),

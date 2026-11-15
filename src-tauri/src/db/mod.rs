@@ -19,7 +19,7 @@ const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 const MEDIA_SELECT: &str = "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
                     indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path, flag,
-                    color_label, rotation, notes, keywords
+                    color_label, rotation, notes, keywords, develop_json
              FROM media_files";
 
 /// Values written for a newly hashed media file.
@@ -278,6 +278,18 @@ impl Library {
         let changed = conn.execute(
             "UPDATE media_files SET notes = ?1 WHERE file_path = ?2",
             params![notes, path],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound(path.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn set_develop(&self, path: &str, develop_json: Option<&str>) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE media_files SET develop_json = ?1 WHERE file_path = ?2",
+            params![develop_json, path],
         )?;
         if changed == 0 {
             return Err(DbError::NotFound(path.to_string()));
@@ -726,6 +738,7 @@ fn map_media(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaRecord> {
             .flatten()
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default(),
+        develop_json: row.get(17).ok().flatten(),
     })
 }
 
@@ -844,6 +857,25 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
             [],
         )?;
     }
+    let columns = {
+        let mut stmt = conn.prepare("PRAGMA table_info(media_files)")?;
+        stmt.query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if !columns.iter().any(|name| name == "develop_json") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN develop_json TEXT", [])?;
+    }
+    let has_v5: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 5",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_v5 == 0 {
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (5, CAST(strftime('%s', 'now') AS INTEGER))",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -905,7 +937,7 @@ mod tests {
         let library = Library::open(dir.path().join("library.sqlite")).unwrap();
         let summary = library.summary().unwrap();
 
-        assert_eq!(summary.schema_version, 4);
+        assert_eq!(summary.schema_version, 5);
         assert_eq!(summary.media_count, 0);
         for column in [
             "file_path",
@@ -923,7 +955,7 @@ mod tests {
         }
 
         let again = Library::open(dir.path().join("library.sqlite")).unwrap();
-        assert_eq!(again.summary().unwrap().schema_version, 4);
+        assert_eq!(again.summary().unwrap().schema_version, 5);
     }
 
     #[test]

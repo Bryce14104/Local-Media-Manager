@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS media_files (
     color_label TEXT CHECK (color_label IS NULL OR color_label IN ('red', 'yellow', 'green', 'blue', 'purple')),
     rotation INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
-    keywords TEXT
+    keywords TEXT,
+    develop_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS albums (

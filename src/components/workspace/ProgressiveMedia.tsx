@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { playableUrl } from "../../lib/api";
+import { stageStyle } from "../../studio/develop";
 import type { StudioItem } from "../../studio/types";
 import { FrameStill } from "./FrameStill";
 
@@ -165,7 +166,7 @@ export function ProgressiveMedia({
   return (
     <div
       className={`relative h-full w-full overflow-hidden bg-black ${className ?? ""}`}
-      style={item.rotation ? { transform: `rotate(${item.rotation}deg)` } : undefined}
+      style={stageStyle(item.rotation, item.develop)}
     >
       {layer?.still ? (
         <img src={layer.still} alt={item.fileName} draggable={false} className={`absolute inset-0 ${fitClass}`} />

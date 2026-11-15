@@ -36,6 +36,7 @@ export type MediaRecord = {
   rotation?: number;
   notes?: string | null;
   keywords?: string[];
+  developJson?: string | null;
 };
 
 export type AlbumRecord = {

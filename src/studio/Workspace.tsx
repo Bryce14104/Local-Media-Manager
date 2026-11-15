@@ -21,6 +21,7 @@ import {
   setNotes,
   setRating,
   setRotation,
+  setDevelop,
   copyOriginals,
 } from "../lib/api";
 import type { ConceptIndex, MediaKind, MediaRecord } from "../lib/types";
@@ -32,6 +33,7 @@ import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
 import { ComparePane } from "../components/workspace/ComparePane";
 import { Lightbox } from "../components/workspace/Lightbox";
+import { DevelopStudio } from "../components/develop/DevelopStudio";
 import { FilterRail } from "../components/workspace/FilterRail";
 import { InsightsView } from "../components/workspace/InsightsView";
 import { MediaStage } from "../components/workspace/MediaStage";
@@ -41,6 +43,7 @@ import { itemsFromFiles } from "./previews";
 import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
 import { applyInsights } from "./insights";
 import { applySelection, type PointerMods } from "./selection";
+import { isNeutralDevelop, type DevelopSettings } from "./develop";
 import { readSlideshowSettings, writeSlideshowSettings, type SlideshowSettings } from "./slideshow";
 import type { MapZoom } from "./mapRegions";
 import { applySearchMode, filterLabel, matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
@@ -80,6 +83,7 @@ export function Workspace() {
   const [gridZoom, setGridZoom] = useState(readGridZoom);
   const [sort, setSort] = useState<SortKey>("captured");
   const [slideshow, setSlideshow] = useState(readSlideshowSettings);
+  const [developOpen, setDevelopOpen] = useState(false);
   const [preset, setPreset] = useState<LayoutPreset>("browse");
   const [panelMode, setPanelMode] = useState<PanelMode>("hidden");
   const [panelCollapsed, setPanelCollapsed] = useState(false);
@@ -288,6 +292,15 @@ export function Workspace() {
         return;
       }
       if (typing || modal || confirmDelete) return;
+      if ((event.key === "e" || event.key === "E") && lightboxId && !developOpen) {
+        const current = items.find((item) => item.id === lightboxId);
+        if (current && current.format !== "video") {
+          event.preventDefault();
+          setDevelopOpen(true);
+          return;
+        }
+      }
+      if (developOpen) return;
       const focusId = lightboxId ?? primaryId;
       if (lightboxId) {
         if (event.key === "ArrowRight" || event.key === "ArrowDown") {
@@ -349,7 +362,7 @@ export function Workspace() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirmDelete, lightboxId, modal, panelMode, preset, primaryId, selectedIds, selectingCache, viewMode, visible]);
+  }, [confirmDelete, developOpen, lightboxId, modal, panelMode, preset, primaryId, selectedIds, selectingCache, viewMode, visible]);
 
   useEffect(() => {
     if (lightboxId && !items.some((item) => item.id === lightboxId)) setLightboxId(null);
@@ -631,6 +644,7 @@ export function Workspace() {
   function closeLightbox() {
     const id = lightboxId;
     if (!id) return;
+    setDevelopOpen(false);
     lightboxIdRef.current = null;
     setLightboxId(null);
     requestAnimationFrame(() => {
@@ -711,6 +725,14 @@ export function Workspace() {
     setPrimaryId(next.id);
     anchorRef.current = next.id;
     setSelectedIds([next.id]);
+  }
+
+  function saveDevelop(id: string, next: DevelopSettings) {
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, develop: next } : item)));
+    const path = items.find((item) => item.id === id)?.sourcePath;
+    if (!path || !desktopBridgeAvailable()) return;
+    const payload = isNeutralDevelop(next) ? null : JSON.stringify(next);
+    void setDevelop(path, payload).catch(() => undefined);
   }
 
   function changeSlideshow(next: SlideshowSettings) {
@@ -1078,6 +1100,14 @@ export function Workspace() {
             onKeywords={(keywords) => primary && saveKeywords(primary.id, keywords)}
             onCopyPath={() => primary && copyItemPath(primary)}
             onReveal={() => primary?.sourcePath && void revealPath(primary.sourcePath).catch(() => undefined)}
+            onEdit={
+              primary && primary.format !== "video"
+                ? () => {
+                    viewItem(primary.id);
+                    setDevelopOpen(true);
+                  }
+                : undefined
+            }
           />
         ) : null}
       </div>
@@ -1100,6 +1130,14 @@ export function Workspace() {
           onKeywords={(keywords) => primary && saveKeywords(primary.id, keywords)}
           onCopyPath={() => primary && copyItemPath(primary)}
           onReveal={() => primary?.sourcePath && void revealPath(primary.sourcePath).catch(() => undefined)}
+          onEdit={
+            primary && primary.format !== "video"
+              ? () => {
+                  viewItem(primary.id);
+                  setDevelopOpen(true);
+                }
+              : undefined
+          }
         />
       ) : null}
 
@@ -1209,6 +1247,15 @@ export function Workspace() {
           poolIds={lightboxPool.map((frame) => frame.id)}
           slideshow={slideshow}
           onSlideshow={changeSlideshow}
+          onEdit={lightboxItem.format === "video" ? undefined : () => setDevelopOpen(true)}
+        />
+      ) : null}
+      {developOpen && lightboxItem && lightboxItem.format !== "video" ? (
+        <DevelopStudio
+          item={lightboxItem}
+          settings={lightboxItem.develop}
+          onChange={(next) => saveDevelop(lightboxItem.id, next)}
+          onClose={() => setDevelopOpen(false)}
         />
       ) : null}
     </div>

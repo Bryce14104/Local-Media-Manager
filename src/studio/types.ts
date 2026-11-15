@@ -1,10 +1,12 @@
+import type { DevelopSettings } from "./develop";
+
 export type MediaFormat = "raw" | "jpg" | "video";
 
 export type FlagStatus = "unflagged" | "pick" | "reject";
 
 export type ColorLabel = "red" | "yellow" | "green" | "blue" | "purple";
 
-export type SortKey = "captured" | "name" | "size" | "rating" | "camera";
+export type SortKey = "captured" | "name" | "size" | "camera";
 
 export type ViewMode = "compact" | "timeline" | "map" | "insights";
 
@@ -71,6 +73,7 @@ export type StudioItem = {
   notes: string;
   keywords: string[];
   indexedAt: number | null;
+  develop: DevelopSettings;
 };
 
 export type FaceMark = {

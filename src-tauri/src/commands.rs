@@ -303,3 +303,19 @@ pub fn copy_originals(
         .copy_originals(&paths, &destination)
         .map_err(|err| err.to_string())
 }
+
+#[tauri::command]
+pub fn set_develop(path: String, develop: Option<String>, state: State<'_, Library>) -> Result<(), String> {
+    state.set_develop(&path, develop.as_deref()).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn write_bytes(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    let file = Path::new(&path);
+    if let Some(parent) = file.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    std::fs::write(file, bytes).map_err(|err| err.to_string())
+}

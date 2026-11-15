@@ -19,6 +19,7 @@ type LightboxProps = {
   onRotate?: () => void;
   onReveal?: () => void;
   onCopyPath?: () => void;
+  onEdit?: () => void;
   poolIds?: string[];
   slideshow: SlideshowSettings;
   onSlideshow: (settings: SlideshowSettings) => void;
@@ -38,6 +39,7 @@ export function Lightbox({
   onRotate,
   onReveal,
   onCopyPath,
+  onEdit,
   poolIds = [],
   slideshow: slideshowSettings,
   onSlideshow,
@@ -207,6 +209,10 @@ export function Lightbox({
     const delta = event.clientX - dragX.current;
     dragX.current = null;
     if (zoom > 1) return;
+    if (Math.abs(delta) < 10) {
+      if (onEdit && item.format !== "video") onEdit();
+      return;
+    }
     if (delta > 72) onPrev();
     else if (delta < -72) onNext();
   }
@@ -248,6 +254,15 @@ export function Lightbox({
           {slideshow ? " · slideshow" : ""}
           {zoom > 1 ? ` · ${Math.round(zoom * 100)}%` : ""}
         </p>
+        {onEdit && item.format !== "video" ? (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="pointer-events-auto rounded-full bg-teal px-3 py-1.5 text-sm font-medium text-teal-ink"
+          >
+            Edit
+          </button>
+        ) : null}
         <button
           type="button"
           aria-label={slideshow ? "Stop slideshow" : "Slideshow"}
@@ -350,6 +365,7 @@ export function Lightbox({
             <p className="mt-1 font-mono text-[11px] text-white/55">
               {captured}
               {width && height ? ` · ${width} × ${height}` : ""}
+              {item.format !== "video" ? " · click to develop" : ""}
             </p>
           </div>
           {strip.length > 1 ? (

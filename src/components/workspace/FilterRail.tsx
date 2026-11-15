@@ -18,7 +18,6 @@ export function FilterRail({ sort, onSort }: FilterRailProps) {
           <option value="captured">Date</option>
           <option value="name">Name</option>
           <option value="size">Size</option>
-          <option value="rating">Rating</option>
           <option value="camera">Camera</option>
         </select>
       </label>
