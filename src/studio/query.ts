@@ -24,7 +24,7 @@ const ACTIONS: { action: StudioAction; label: string; hint: string; keywords: st
   { action: "view-people", label: "AI Insights", hint: "Bursts, cameras, scenes, and folders", keywords: "ai insights clusters bursts collections scenes cameras folders" },
   { action: "toggle-inspector", label: "Toggle info panel", hint: "Dock, float, or hide", keywords: "toggle inspector info panel exif" },
   { action: "clear-filters", label: "Clear filters", hint: "Show the full roll", keywords: "clear filters reset" },
-  { action: "preferences", label: "Preferences", hint: "Draw a map area to cache, or clear tiles", keywords: "preferences settings map tiles download cache zoom area" },
+  { action: "preferences", label: "Preferences", hint: "Auto-scan plugged drives, or draw a map area to cache", keywords: "preferences settings map tiles download cache zoom area auto scan drive plug" },
   { action: "slideshow", label: "Slideshow", hint: "Play the current view", keywords: "slideshow play auto" },
   { action: "rotate", label: "Rotate 90°", hint: "Turn the selected frame", keywords: "rotate turn orientation" },
 ];

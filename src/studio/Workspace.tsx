@@ -57,6 +57,7 @@ import {
   isNeutralDevelop,
   type DevelopSettings,
 } from "./develop";
+import { AUTO_SCAN_POLL_MS, newlyPlugged, readAutoScanOnPlug, writeAutoScanOnPlug } from "./libraryPrefs";
 import { readSlideshowSettings, writeSlideshowSettings, type SlideshowSettings } from "./slideshow";
 import type { MapZoom } from "./mapRegions";
 import { applySearchMode, filterLabel, matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
@@ -96,6 +97,8 @@ export function Workspace() {
   const [gridZoom, setGridZoom] = useState(readGridZoom);
   const [sort, setSort] = useState<SortKey>("captured");
   const [slideshow, setSlideshow] = useState(readSlideshowSettings);
+  const [autoScanOnPlug, setAutoScanOnPlug] = useState(readAutoScanOnPlug);
+  const autoScanBusy = useRef(false);
   const [developOpen, setDevelopOpen] = useState(false);
   const [batchDevelop, setBatchDevelop] = useState(false);
   const [preset, setPreset] = useState<LayoutPreset>("browse");
@@ -263,6 +266,60 @@ export function Workspace() {
       stop?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!desktopBridgeAvailable() || !autoScanOnPlug) return;
+    let cancel = false;
+    let previous: VolumeRecord[] | null = null;
+
+    async function tick() {
+      if (cancel || autoScanBusy.current) return;
+      const next = await listVolumes().catch(() => null);
+      if (!next || cancel) return;
+      setVolumes(next);
+      if (previous == null) {
+        previous = next;
+        return;
+      }
+      const plugged = newlyPlugged(previous, next);
+      previous = next;
+      if (plugged.length === 0) return;
+      autoScanBusy.current = true;
+      try {
+        for (const volume of plugged) {
+          if (cancel) return;
+          setTelemetry((current) => ({
+            ...current,
+            scanLabel: `Scanning ${volume.label}`,
+            syncLabel: "SQLite · writing",
+          }));
+          const report = await rescanWatched(volume.fingerprint);
+          if (cancel) return;
+          const { media } = await fetchLibrary();
+          setItems(media.map(presentRecord));
+          await refreshSources();
+          previous = await listVolumes().catch(() => next);
+          setTelemetry((current) => ({
+            ...current,
+            scanLabel: report.indexed
+              ? `${volume.label} · ${report.indexed} new · ${report.unchanged} unchanged`
+              : `${volume.label} · no new files`,
+          }));
+        }
+      } catch (error) {
+        setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+      } finally {
+        autoScanBusy.current = false;
+      }
+    }
+
+    void tick();
+    const timer = window.setInterval(() => void tick(), AUTO_SCAN_POLL_MS);
+    return () => {
+      cancel = true;
+      window.clearInterval(timer);
+    };
+  }, [autoScanOnPlug]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -826,6 +883,11 @@ export function Workspace() {
     writeSlideshowSettings(next);
   }
 
+  function changeAutoScanOnPlug(enabled: boolean) {
+    setAutoScanOnPlug(enabled);
+    writeAutoScanOnPlug(enabled);
+  }
+
   async function refreshSources() {
     if (!desktopBridgeAvailable()) return;
     const [nextVolumes, nextWatches, nextAlbums] = await Promise.all([
@@ -1349,6 +1411,8 @@ export function Workspace() {
           onSelectArea={beginCacheSelect}
           slideshow={slideshow}
           onSlideshow={changeSlideshow}
+          autoScanOnPlug={autoScanOnPlug}
+          onAutoScanOnPlug={changeAutoScanOnPlug}
         />
       ) : null}
       {confirmDelete ? (

@@ -247,7 +247,9 @@ export async function listWatches(): Promise<WatchedRoot[]> {
   return invoke<WatchedRoot[]>("list_watches");
 }
 
-export async function rescanWatched(): Promise<ScanReport> {
+export async function rescanWatched(volumeFingerprint?: string): Promise<ScanReport> {
   assertBridge();
-  return invoke<ScanReport>("rescan_watched");
+  return invoke<ScanReport>("rescan_watched", {
+    volumeFingerprint: volumeFingerprint ?? null,
+  });
 }

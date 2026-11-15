@@ -80,6 +80,7 @@ pub fn list_watches(state: State<'_, Library>) -> Result<Vec<WatchedRoot>, Strin
 
 #[tauri::command]
 pub async fn rescan_watched(
+    volume_fingerprint: Option<String>,
     state: State<'_, Library>,
     app: AppHandle,
 ) -> Result<ScanReport, String> {
@@ -88,7 +89,7 @@ pub async fn rescan_watched(
     let report = async_runtime::spawn_blocking({
         let library = library.clone();
         move || {
-            services::rescan_watched_with(&library, |done, total| {
+            services::rescan_watched_with(&library, volume_fingerprint.as_deref(), |done, total| {
                 emit_progress(&progress_app, "index", done, total, "Rescanning");
             })
             .map_err(|err| err.to_string())

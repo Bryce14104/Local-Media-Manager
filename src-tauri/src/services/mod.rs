@@ -350,16 +350,44 @@ pub fn sync_volumes(library: &Library) {
     }
 }
 
+pub fn newly_plugged<'a>(previous: &[VolumeRecord], current: &'a [VolumeRecord]) -> Vec<&'a VolumeRecord> {
+    current
+        .iter()
+        .filter(|now| {
+            now.online
+                && previous
+                    .iter()
+                    .any(|was| was.fingerprint == now.fingerprint && !was.online)
+        })
+        .collect()
+}
+
 pub fn rescan_watched_with<F>(
     library: &Library,
+    volume_fingerprint: Option<&str>,
     mut progress: F,
 ) -> Result<ScanReport, ServiceError>
 where
     F: FnMut(usize, usize),
 {
     sync_volumes(library);
-    let watches = library.list_watches()?;
+    let mut watches = library.list_watches()?;
     let volumes = library.list_volumes().unwrap_or_default();
+    if let Some(fingerprint) = volume_fingerprint {
+        let Some(volume) = volumes.iter().find(|item| item.fingerprint == fingerprint) else {
+            progress(0, 0);
+            return Ok(ScanReport {
+                root: String::new(),
+                discovered: 0,
+                indexed: 0,
+                unchanged: 0,
+                failed: 0,
+                errors: vec!["That drive is not in the library.".into()],
+                duration_ms: 0,
+            });
+        };
+        watches.retain(|watch| watch.volume_id == Some(volume.id));
+    }
     if watches.is_empty() {
         progress(0, 0);
         return Ok(ScanReport {
@@ -568,6 +596,56 @@ mod tests {
         names.sort();
         assert!(names.iter().any(|path| path.ends_with("still.jpg")));
         assert!(names.iter().any(|path| path.ends_with("clip.mp4")));
+    }
+
+    #[test]
+    fn newly_plugged_only_when_a_known_drive_comes_back() {
+        let offline = VolumeRecord {
+            id: 1,
+            fingerprint: "uuid:cam".into(),
+            label: "Camera".into(),
+            last_mount: "/Volumes/missing".into(),
+            last_seen_at: 1,
+            online: false,
+            media_count: 12,
+        };
+        let still_online = VolumeRecord {
+            id: 2,
+            fingerprint: "uuid:home".into(),
+            label: "Home".into(),
+            last_mount: "/".into(),
+            last_seen_at: 1,
+            online: true,
+            media_count: 3,
+        };
+        let previous = vec![offline.clone(), still_online.clone()];
+        let mut plugged = offline.clone();
+        plugged.online = true;
+        plugged.last_mount = "/Volumes/Camera".into();
+        let current = vec![plugged, still_online];
+        let found = newly_plugged(&previous, &current);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].fingerprint, "uuid:cam");
+        assert!(newly_plugged(&current, &current).is_empty());
+    }
+
+    #[test]
+    fn rescan_a_remembered_drive_picks_up_new_files() {
+        let disk = tempfile::tempdir().unwrap();
+        std::fs::write(disk.path().join("one.jpg"), b"jpeg-bytes").unwrap();
+        let database = tempfile::tempdir().unwrap();
+        let library = Library::open(database.path().join("library.sqlite")).unwrap();
+        index_directory(&library, disk.path()).unwrap();
+        std::fs::write(disk.path().join("two.jpg"), b"jpeg-bytes").unwrap();
+
+        let fingerprint = library.list_volumes().unwrap()[0].fingerprint.clone();
+        let unknown = rescan_watched_with(&library, Some("uuid:missing"), |_, _| {}).unwrap();
+        assert!(unknown.errors.iter().any(|error| error.contains("not in the library")));
+        assert_eq!(library.list_media().unwrap().len(), 1);
+
+        let report = rescan_watched_with(&library, Some(&fingerprint), |_, _| {}).unwrap();
+        assert_eq!(report.indexed, 1);
+        assert_eq!(library.list_media().unwrap().len(), 2);
     }
 
     #[test]

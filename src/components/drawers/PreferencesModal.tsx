@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { formatBytes } from "../../lib/format";
 import { formatLatitude, formatLongitude } from "../../studio/geo";
 import { TILE_ATTRIBUTION, TILE_BUDGET, cacheRegion, clearAllRegions, clearRegion, planRegion } from "../../studio/mapLibrary";
@@ -16,6 +17,8 @@ export function PreferencesModal({
   onSelectArea,
   slideshow,
   onSlideshow,
+  autoScanOnPlug,
+  onAutoScanOnPlug,
 }: {
   onClose: () => void;
   maxZoom: MapZoom;
@@ -24,14 +27,42 @@ export function PreferencesModal({
   onSelectArea: () => void;
   slideshow: SlideshowSettings;
   onSlideshow: (settings: SlideshowSettings) => void;
+  autoScanOnPlug: boolean;
+  onAutoScanOnPlug: (enabled: boolean) => void;
 }) {
   const library = useMapLibrary();
+  const scroller = useRef<HTMLDivElement>(null);
   const plan = bounds ? planRegion(bounds, maxZoom) : null;
   const zoomLabel = ZOOM_STEPS.find((step) => step.zoom === maxZoom)?.label ?? "Detail";
 
+  useEffect(() => {
+    scroller.current?.scrollTo({ top: 0 });
+  }, []);
+
   return (
     <Modal title="Preferences" onClose={onClose} wide>
-      <div className="max-h-[70vh] space-y-4 overflow-auto pr-1">
+      <div ref={scroller} className="max-h-[70vh] space-y-4 overflow-auto pr-1">
+        <section>
+          <h3 className="text-sm font-medium">Drives</h3>
+          <p className="mt-1 mb-3 text-sm text-mute">
+            Shelf already keeps 720p previews when a disk is unplugged. Turn this on to index new files as soon as a
+            remembered drive is connected again.
+          </p>
+          <label className="flex items-center justify-between gap-3 text-sm">
+            Scan when a remembered drive is plugged in
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoScanOnPlug}
+              onClick={() => onAutoScanOnPlug(!autoScanOnPlug)}
+              className={`h-6 w-10 shrink-0 rounded-full border ${autoScanOnPlug ? "border-teal bg-teal/40" : "border-line bg-studio"}`}
+            >
+              <span
+                className={`block h-5 w-5 rounded-full bg-foam transition ${autoScanOnPlug ? "translate-x-4" : "translate-x-0.5"}`}
+              />
+            </button>
+          </label>
+        </section>
         <section>
           <h3 className="text-sm font-medium">Slideshow</h3>
           <p className="mt-1 mb-3 text-sm text-mute">
