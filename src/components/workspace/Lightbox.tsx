@@ -262,7 +262,7 @@ export function Lightbox({
           {slideshow ? " · playing" : ""}
           {zoom > 1 ? ` · ${Math.round(zoom * 100)}%` : ""}
         </p>
-        <div className="pointer-events-auto flex items-center gap-1 rounded-full border border-white/12 bg-black/50 p-1 backdrop-blur-md">
+        <div className="pointer-events-auto flex max-w-full flex-wrap items-center justify-end gap-0.5 rounded-full border border-white/12 bg-black/50 p-1 backdrop-blur-md">
           {onEdit && item.format !== "video" ? (
             <BarLabel onClick={onEdit} accent>
               Edit
@@ -294,26 +294,28 @@ export function Lightbox({
               </div>
             ) : null}
           </div>
+          <span className="mx-0.5 hidden h-4 w-px bg-white/15 sm:block" />
           {onRotate ? (
-            <BarIcon label="Rotate" onClick={onRotate}>
+            <BarAction label="Rotate" onClick={onRotate}>
               <RotateIcon />
-            </BarIcon>
+            </BarAction>
           ) : null}
           {onCopyPath ? (
-            <BarIcon label="Copy path" onClick={onCopyPath}>
+            <BarAction label="Copy path" onClick={onCopyPath}>
               <CopyIcon />
-            </BarIcon>
+            </BarAction>
           ) : null}
           {onReveal ? (
-            <BarIcon label="Reveal in Finder" onClick={onReveal}>
+            <BarAction label="Show file" onClick={onReveal}>
               <RevealIcon />
-            </BarIcon>
+            </BarAction>
           ) : null}
           {!clip ? (
-            <BarIcon label={immersive ? "Exit full screen" : "Full screen"} onClick={() => void toggleFullscreen()}>
+            <BarAction label={immersive ? "Exit" : "Full screen"} onClick={() => void toggleFullscreen()}>
               {immersive ? <ExitFullIcon /> : <FullIcon />}
-            </BarIcon>
+            </BarAction>
           ) : null}
+          <span className="mx-0.5 hidden h-4 w-px bg-white/15 sm:block" />
           <BarIcon label="Close" onClick={onClose} buttonRef={closeRef}>
             <CloseIcon />
           </BarIcon>
@@ -414,6 +416,27 @@ function BarLabel({
       }`}
     >
       {children}
+    </button>
+  );
+}
+
+function BarAction({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs text-foam/90 hover:bg-white/10 hover:text-teal"
+    >
+      <span className="opacity-80">{children}</span>
+      {label}
     </button>
   );
 }
