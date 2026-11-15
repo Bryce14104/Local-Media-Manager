@@ -28,13 +28,20 @@ pub fn run() {
                 let boxed: Box<dyn std::error::Error> = Box::new(err);
                 boxed
             })?;
+            let cache = directory.join("models");
+            std::fs::create_dir_all(&cache)?;
             if let Ok(resources) = app.path().resource_dir() {
-                let models = resources.join("models");
-                if models.join("resnet50.onnx").is_file() {
-                    // The vision worker reads this before the first session is built.
-                    unsafe { std::env::set_var("SHELF_MODELS", models) };
+                let bundled = resources.join("models");
+                for name in ["tokenizer.json", "clip-vision.onnx", "clip-text.onnx"] {
+                    let source = bundled.join(name);
+                    let dest = cache.join(name);
+                    if source.is_file() && !dest.is_file() {
+                        let _ = std::fs::copy(&source, &dest);
+                    }
                 }
             }
+            // CLIP weights download here on first launch if they were not bundled.
+            unsafe { std::env::set_var("SHELF_MODELS", &cache) };
             if let Err(error) = services::warm_vision() {
                 eprintln!("shelf index: CRITICAL ort initialization failed: {error}");
                 let boxed: Box<dyn std::error::Error> = Box::new(error);

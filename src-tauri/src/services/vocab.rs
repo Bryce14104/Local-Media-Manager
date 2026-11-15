@@ -1,7 +1,7 @@
-//! Photographer-facing words on top of ImageNet classes.
+//! Photographer-facing words, synonyms, and typo fixes for CLIP queries.
 //!
-//! ResNet-50 still outputs 1000 class probabilities. This module maps those
-//! into more tags, everyday synonyms, and a query vector that tolerates typos.
+//! CLIP encodes free text. This module still rewrites common misspellings
+//! onto scene words (beach, retriever, sunset) before that encode.
 
 use std::sync::OnceLock;
 
@@ -176,7 +176,7 @@ pub fn extra_words_from_class_name(name: &str) -> Vec<String> {
 }
 
 pub fn query_embedding(query: &str) -> Vec<f32> {
-    let mut embedding = vec![0.0; crate::models::VISUAL_EMBEDDING_FLOATS];
+    let mut embedding = vec![0.0; crate::models::IMAGENET_DIM + CONCEPTS.len()];
     let intent = resolve_query(query);
     for index in intent.class_indices {
         if index < crate::models::IMAGENET_DIM {

@@ -1,6 +1,7 @@
 //! File-system scanning and EXIF reading, then a write into the local catalog.
 
 mod capture;
+mod clip;
 mod exif;
 mod scanner;
 mod thumbs;

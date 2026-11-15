@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# CLIP weights are downloaded on first launch / test (too large for git)
+src-tauri/models/clip-vision.onnx
+src-tauri/models/clip-text.onnx
+src-tauri/models/vocab.json
+src-tauri/models/merges.txt
+src-tauri/models/tokenizer_config.json
+
 # Local catalogs created while trying the app from the repo root
 *.sqlite
 *.sqlite-journal

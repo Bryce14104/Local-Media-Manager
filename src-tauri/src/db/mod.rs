@@ -538,7 +538,7 @@ impl Library {
                     media_files.media_kind, media_files.exif_json
              FROM media_files
              LEFT JOIN media_embeddings ON media_embeddings.media_id = media_files.id
-             WHERE media_files.media_kind != 'video'
+             WHERE (media_files.media_kind != 'video' OR media_files.thumbnail_path IS NOT NULL)
                AND (media_embeddings.embedding IS NULL OR length(media_embeddings.embedding) != ?1)
              ORDER BY media_files.id",
         )?;

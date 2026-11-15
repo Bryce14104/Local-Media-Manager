@@ -1,9 +1,9 @@
 //! Local subject recognition.
 //!
-//! ResNet-50 runs inside this process. Its ImageNet class probabilities
-//! become a visual embedding stored in SQLite. Search compares that embedding
-//! with the query. Sunset, beach, water, and lighthouse also come from the
-//! pixels. Drone comes from the camera name. Nothing leaves the machine.
+//! CLIP ViT-B/32 embeds each still into 512 floats and scores a photographer
+//! tag bank plus open-vocabulary search. Color heuristics still add sunset,
+//! beach, water, and lighthouse. Drone comes from the camera name. Weights
+//! stay on this machine after the first download.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -12,7 +12,6 @@ use image::imageops::FilterType;
 use image::{Rgb, RgbImage};
 use ndarray::Array4;
 use ort::session::Session;
-use ort::value::Tensor;
 use thiserror::Error;
 
 use crate::db::{DbError, Library, VisionTarget};
@@ -26,8 +25,6 @@ pub const SAME_PERSON: f32 = 0.36;
 const STRIDES: [u32; 3] = [8, 16, 32];
 const RIGHT_EYE: (f32, f32) = (38.2946, 51.6963);
 const LEFT_EYE: (f32, f32) = (73.5318, 51.5014);
-const IMAGENET_MEAN: [f32; 3] = [0.485, 0.456, 0.406];
-const IMAGENET_STD: [f32; 3] = [0.229, 0.224, 0.225];
 pub use super::vocab::{CONCEPTS, query_embedding};
 
 use super::vocab::{
@@ -38,7 +35,7 @@ use super::vocab::{
 const CONCEPT_FLOOR: f32 = 0.08;
 
 const _: () = assert!(CONCEPTS.len() == crate::models::VISUAL_CONCEPTS);
-const _: () = assert!(crate::models::VISUAL_EMBEDDING_FLOATS == crate::models::IMAGENET_DIM + CONCEPTS.len());
+const _: () = assert!(crate::models::VISUAL_EMBEDDING_FLOATS == crate::models::CLIP_DIM);
 
 #[derive(Debug, Error)]
 pub enum VisionError {
@@ -54,33 +51,30 @@ pub enum VisionError {
     BadOutput(usize),
 }
 
-const TAGGER_MODEL: &str = "resnet50.onnx";
-
 pub fn warm_vision() -> Result<(), VisionError> {
     let threads = worker_threads();
     let started = std::time::Instant::now();
-    let mut engine = Engine::load(threads)?;
-    let model = model_path(TAGGER_MODEL);
+    Engine::load(threads)?;
     eprintln!(
-        "shelf index: ort initialized in {} ms, {TAGGER_MODEL} loaded from {}",
-        started.elapsed().as_millis(),
-        model.display()
+        "shelf index: CLIP ViT-B/32 ready in {} ms",
+        started.elapsed().as_millis()
     );
     let blank = RgbImage::new(224, 224);
     let started = std::time::Instant::now();
-    let classified = engine.classify(&blank)?;
-    if classified.probabilities.len() != crate::models::IMAGENET_DIM {
+    let embedding = clip_engine(|clip| clip.encode_image(&blank))?;
+    if embedding.len() != crate::models::CLIP_DIM {
         eprintln!(
-            "shelf index: CRITICAL Session::run returned {} floats, expected {}",
-            classified.probabilities.len(),
-            crate::models::IMAGENET_DIM
+            "shelf index: CRITICAL CLIP returned {} floats, expected {}",
+            embedding.len(),
+            crate::models::CLIP_DIM
         );
-        return Err(VisionError::BadOutput(classified.probabilities.len()));
+        return Err(VisionError::BadOutput(embedding.len()));
     }
+    let _ = clip_engine(|clip| clip.encode_text("a photo of a dog"))?;
     eprintln!(
-        "shelf index: Session::run {TAGGER_MODEL} ok in {} ms -> {} floats",
+        "shelf index: CLIP image embed ok in {} ms -> {} floats",
         started.elapsed().as_millis(),
-        classified.probabilities.len()
+        embedding.len()
     );
     Ok(())
 }
@@ -116,10 +110,10 @@ struct Heads<'a> {
     kps: [&'a [f32]; 3],
 }
 
-struct Engine {
-    tagger: Option<Session>,
-    input_name: String,
-    output_name: String,
+struct Engine;
+
+fn clip_engine<T>(op: impl FnOnce(&mut super::clip::Clip) -> Result<T, VisionError>) -> Result<T, VisionError> {
+    super::clip::with_engine(worker_threads(), op)
 }
 
 struct PreparedFrame {
@@ -145,18 +139,15 @@ where
         }
         return Ok(());
     }
-    eprintln!("shelf index: {} frames waiting for an ONNX embedding", pending.len());
-    progress(0, pending.len(), "Loading vision models");
-    let mut engine = match Engine::load(worker_threads()) {
-        Ok(engine) => engine,
-        Err(error) => {
-            eprintln!("shelf index: CRITICAL ort could not load the ONNX models: {error}");
-            return Err(error);
-        }
-    };
+    eprintln!("shelf index: {} frames waiting for a CLIP embedding", pending.len());
+    progress(0, pending.len(), "Loading CLIP");
+    if let Err(error) = Engine::load(worker_threads()) {
+        eprintln!("shelf index: CRITICAL CLIP could not load: {error}");
+        return Err(error);
+    }
     for (index, target) in pending.iter().enumerate() {
         progress(index, pending.len(), "Running ONNX on image pixels");
-        match prepare_frame(&mut engine, target) {
+        match prepare_frame(target) {
             Ok(prepared) => {
                 let names = prepared
                     .labels
@@ -178,7 +169,6 @@ where
             }
         }
     }
-    engine.drop_tagger();
     progress(0, 0, "Clustering");
     if let Err(error) = library.rebuild_concepts() {
         eprintln!("shelf index: could not write clusters and captions: {error}");
@@ -187,7 +177,7 @@ where
     Ok(())
 }
 
-fn prepare_frame(engine: &mut Engine, target: &VisionTarget) -> Result<PreparedFrame, VisionError> {
+fn prepare_frame(target: &VisionTarget) -> Result<PreparedFrame, VisionError> {
     let Some(image) = load_pixels(target) else {
         eprintln!("shelf index: CRITICAL no decodable pixels in {}", target.file_path);
         return Err(VisionError::Decode(target.file_path.clone()));
@@ -197,8 +187,15 @@ fn prepare_frame(engine: &mut Engine, target: &VisionTarget) -> Result<PreparedF
         target.media_kind, target.file_path
     );
     let mut tags = scene_tags(&image);
-    let classified = engine.classify_adaptive(&image)?;
-    tags.extend(classified.tags);
+    let embedding = clip_engine(|clip| clip.encode_image(&image))?;
+    let clip_tags = clip_engine(|clip| Ok(clip.tags_for(&embedding)))?;
+    for clip_tag in clip_tags {
+        tags.push(Tag {
+            kind: clip_tag.kind,
+            label: clip_tag.label,
+            score: clip_tag.score,
+        });
+    }
     if drone_camera(&camera_text(target)) {
         tags.push(Tag {
             kind: "scene",
@@ -206,23 +203,6 @@ fn prepare_frame(engine: &mut Engine, target: &VisionTarget) -> Result<PreparedF
             score: 1.0,
         });
     }
-    let mut concepts = vec![0.0; CONCEPTS.len()];
-    fold_tags(&mut concepts, &tags);
-    for (index, score) in concepts.iter().copied().enumerate() {
-        if score < CONCEPT_FLOOR {
-            continue;
-        }
-        let label = CONCEPTS[index];
-        if tags.iter().any(|tag| tag.label == label) {
-            continue;
-        }
-        tags.push(Tag {
-            kind: kind_for_concept(label),
-            label: label.to_string(),
-            score,
-        });
-    }
-    let embedding = visual_vector(&classified.probabilities, &concepts);
     let labels: Vec<(String, String, f32)> = dedupe_tags(tags)
         .into_iter()
         .map(|tag| (tag.kind.to_string(), tag.label, tag.score))
@@ -309,10 +289,12 @@ fn center_crop(image: &RgbImage) -> RgbImage {
 
 pub fn search_embeddings(library: &Library, query: &str) -> Result<Vec<AiSearchHit>, VisionError> {
     let started = std::time::Instant::now();
-    let query_vec = query_embedding(query);
+    Engine::load(worker_threads())?;
+    let query_vec = clip_engine(|clip| clip.query_vector(query))?;
+    let rewritten = super::clip::rewrite_query(query);
     let rows = library.visual_embeddings()?;
     eprintln!(
-        "shelf search: scoring {} ONNX embeddings for {query:?}",
+        "shelf search: CLIP scoring {} embeddings for {query:?} (normalized {rewritten:?})",
         rows.len()
     );
     let mut hits = Vec::new();
@@ -326,15 +308,15 @@ pub fn search_embeddings(library: &Library, query: &str) -> Result<Vec<AiSearchH
             );
             continue;
         }
-        let Some(score) = embedding_match(embedding, &query_vec) else {
+        let score = super::clip::cosine(embedding, &query_vec);
+        if score < 0.22 {
             continue;
-        };
-        let label = matched_concepts(embedding, &query_vec);
+        }
         hits.push(AiSearchHit {
             media_id: *media_id,
             path: path.clone(),
             score,
-            label,
+            label: rewritten.clone(),
         });
     }
     hits.sort_by(|left, right| {
@@ -383,66 +365,8 @@ fn camera_text(target: &VisionTarget) -> String {
 
 impl Engine {
     fn load(threads: usize) -> Result<Self, VisionError> {
-        let environment = environment()?;
-        let tagger = session(environment, TAGGER_MODEL, threads)?;
-        let input_name = tagger
-            .inputs()
-            .first()
-            .map(|input| input.name().to_string())
-            .unwrap_or_else(|| "data".to_string());
-        let output_name = tagger
-            .outputs()
-            .first()
-            .map(|output| output.name().to_string())
-            .unwrap_or_else(|| "output".to_string());
-        Ok(Self {
-            tagger: Some(tagger),
-            input_name,
-            output_name,
-        })
-    }
-
-    fn drop_tagger(&mut self) {
-        self.tagger = None;
-    }
-
-    fn classify_adaptive(&mut self, image: &RgbImage) -> Result<Classified, VisionError> {
-        let mut classified = self.classify(image)?;
-        if image.width() >= 48 && image.height() >= 48 {
-            let zoomed = self.classify(&center_crop(image))?;
-            for (slot, probability) in classified.probabilities.iter_mut().zip(&zoomed.probabilities) {
-                *slot = (*slot).max(*probability);
-            }
-            classified.tags = tags_from_probabilities(&classified.probabilities);
-        }
-        Ok(classified)
-    }
-
-    fn classify(&mut self, image: &RgbImage) -> Result<Classified, VisionError> {
-        let sized = image::imageops::resize(image, 224, 224, FilterType::CatmullRom);
-        let tensor = Tensor::from_array(nchw(&sized, false, |value, channel| {
-            (value / 255.0 - IMAGENET_MEAN[channel]) / IMAGENET_STD[channel]
-        }))?;
-        let started = std::time::Instant::now();
-        let tagger = self
-            .tagger
-            .as_mut()
-            .ok_or_else(|| VisionError::MissingModel(TAGGER_MODEL.to_string()))?;
-        let outputs = tagger.run(ort::inputs![self.input_name.as_str() => tensor])?;
-        let (_shape, data) = outputs[self.output_name.as_str()].try_extract_tensor::<f32>()?;
-        let probabilities = probabilities_from_logits(data);
-        eprintln!(
-            "shelf index: Session::run {TAGGER_MODEL} in {} ms -> {} floats",
-            started.elapsed().as_millis(),
-            probabilities.len()
-        );
-        if probabilities.len() != crate::models::IMAGENET_DIM {
-            return Err(VisionError::BadOutput(probabilities.len()));
-        }
-        Ok(Classified {
-            tags: tags_from_probabilities(&probabilities),
-            probabilities,
-        })
+        super::clip::with_engine(threads, |_| Ok(()))?;
+        Ok(Self)
     }
 }
 
@@ -1372,25 +1296,26 @@ mod tests {
 
     #[test]
     fn models_run_on_a_plain_frame() {
-        let mut engine = Engine::load(2).expect("models");
+        Engine::load(2).expect("models");
         let frame = RgbImage::from_pixel(64, 48, Rgb([20, 40, 80]));
-        let classified = engine.classify(&frame).expect("resnet50");
-        assert!(classified.tags.len() < 48);
-        assert_eq!(classified.probabilities.len(), crate::models::IMAGENET_DIM);
+        let embedding = clip_engine(|clip| clip.encode_image(&frame)).expect("clip vision");
+        assert_eq!(embedding.len(), crate::models::CLIP_DIM);
+        let tags = clip_engine(|clip| Ok(clip.tags_for(&embedding))).expect("tags");
+        assert!(tags.len() < 32);
     }
 
     #[test]
-    fn cat_logits_match_a_cat_query_and_not_a_lighthouse() {
-        let mut probabilities = vec![0.0; 1000];
-        probabilities[282] = 0.82;
-        probabilities[10] = 0.05;
-        let embedding = visual_vector(&probabilities, &[0.0; CONCEPTS.len()]);
-        assert_eq!(embedding.len(), crate::models::VISUAL_EMBEDDING_FLOATS);
-        assert!((embedding[282] - 0.82).abs() < 1e-6);
-        let cat = query_embedding("cats");
-        let tower = query_embedding("lighthouse");
-        assert!(embedding_match(&embedding, &cat).unwrap() > 0.2);
-        assert!(embedding_match(&embedding, &tower).is_none());
+    fn cat_query_is_closer_than_a_lighthouse() {
+        Engine::load(2).expect("models");
+        let cat = clip_engine(|clip| clip.encode_text("cat")).expect("cat");
+        let cats = clip_engine(|clip| clip.encode_text("cats")).expect("cats");
+        let tower = clip_engine(|clip| clip.encode_text("lighthouse")).expect("tower");
+        assert!(
+            super::super::clip::cosine(&cat, &cats) > super::super::clip::cosine(&cat, &tower),
+            "cat {} lighthouse {}",
+            super::super::clip::cosine(&cat, &cats),
+            super::super::clip::cosine(&cat, &tower)
+        );
     }
 
     #[test]
@@ -1443,6 +1368,9 @@ mod tests {
         let stored = library.visual_embeddings().unwrap();
         assert_eq!(stored.len(), 2);
         assert!(stored.iter().all(|(_, _, vector)| vector.len() == crate::models::VISUAL_EMBEDDING_FLOATS));
-        assert!(stored.iter().all(|(_, _, vector)| vector.iter().take(crate::models::IMAGENET_DIM).sum::<f32>() > 0.5));
+        assert!(stored.iter().all(|(_, _, vector)| {
+            let norm = vector.iter().map(|value| value * value).sum::<f32>().sqrt();
+            (norm - 1.0).abs() < 0.05
+        }));
     }
 }

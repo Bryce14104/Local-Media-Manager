@@ -221,11 +221,11 @@ pub struct LabelRecord {
     pub score: f32,
 }
 
-/// Length of the vector stored for each frame: 1000 ImageNet probabilities
-/// from ResNet-50 `Session::run`, then one score per visual concept.
+/// CLIP ViT-B/32 image/text embedding length.
+pub const CLIP_DIM: usize = 512;
 pub const IMAGENET_DIM: usize = 1000;
 pub const VISUAL_CONCEPTS: usize = 27;
-pub const VISUAL_EMBEDDING_FLOATS: usize = IMAGENET_DIM + VISUAL_CONCEPTS;
+pub const VISUAL_EMBEDDING_FLOATS: usize = CLIP_DIM;
 
 /// One frame ranked by the in-process visual embedding.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
