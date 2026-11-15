@@ -1146,7 +1146,6 @@ export function Workspace() {
         preset={preset}
         onPreset={applyPreset}
         onAdd={openAdd}
-        onExport={() => void exportCopies()}
         onPreferences={openPreferences}
         inputRef={inputRef}
       />

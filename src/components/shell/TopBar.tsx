@@ -17,7 +17,6 @@ type TopBarProps = {
   preset: LayoutPreset;
   onPreset: (preset: LayoutPreset) => void;
   onAdd: () => void;
-  onExport: () => void;
   onPreferences: () => void;
   inputRef: RefObject<HTMLInputElement | null>;
 };
@@ -50,7 +49,6 @@ export function TopBar({
   preset,
   onPreset,
   onAdd,
-  onExport,
   onPreferences,
   inputRef,
 }: TopBarProps) {
@@ -166,7 +164,6 @@ export function TopBar({
 
         <div className="hidden items-center gap-1 lg:flex">
           <Action label="Add media" onClick={onAdd} />
-          <Action label="Batch export" onClick={onExport} />
         </div>
 
         <div className="relative lg:hidden">
@@ -194,7 +191,6 @@ export function TopBar({
                 />
               ))}
               <MenuRow label="Add media" onClick={() => { onAdd(); setMenuOpen(false); }} />
-              <MenuRow label="Batch export" onClick={() => { onExport(); setMenuOpen(false); }} />
               <MenuRow
                 label="Preferences"
                 onClick={() => {
