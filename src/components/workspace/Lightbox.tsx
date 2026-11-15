@@ -221,8 +221,15 @@ export function Lightbox({
     if (dragX.current == null) return;
     const delta = event.clientX - dragX.current;
     dragX.current = null;
+    if (Math.abs(delta) < 10) {
+      if (zoom > 1) {
+        setZoom(1);
+        return;
+      }
+      setImmersive((current) => !current);
+      return;
+    }
     if (zoom > 1) return;
-    if (Math.abs(delta) < 10) return;
     if (delta > 72) onPrev();
     else if (delta < -72) onNext();
   }
@@ -260,10 +267,12 @@ export function Lightbox({
         }`}
       >
         {immersive ? null : (
-          <p className="min-w-0 flex-1 font-mono text-xs tracking-wide text-white/70">
-            {index + 1} / {count}
-            {slideshow ? " · playing" : ""}
-            {zoom > 1 ? ` · ${Math.round(zoom * 100)}%` : ""}
+          <p className="min-w-0 flex-1 truncate text-sm text-white/80">
+            {item.fileName}
+            <span className="ml-2 font-mono text-[11px] text-white/45">
+              {index + 1} / {count}
+              {slideshow ? " · playing" : ""}
+            </span>
           </p>
         )}
         <div
@@ -362,59 +371,77 @@ export function Lightbox({
 
       {immersive ? null : (
       <footer
-        className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/60 to-transparent px-4 pt-10 md:px-6 ${
-          clip ? "pb-20 md:pb-24" : "pb-4"
+        className={`pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black/80 to-transparent px-3 pt-12 ${
+          clip ? "pb-16 md:pb-20" : "pb-3"
         }`}
       >
-        <div className="flex items-end justify-between gap-4">
-          <div className="min-w-0 max-w-[min(100%,42rem)] rounded-md bg-black/45 px-3 py-2 backdrop-blur-sm">
-            <p className="truncate text-sm font-medium tracking-tight">{item.fileName}</p>
-            <p className="mt-1 font-mono text-[11px] text-white/55">
-              {captured}
-              {width && height ? ` · ${width} × ${height}` : ""}
-            </p>
-          </div>
-          {strip.length > 1 ? (
-            <div className="pointer-events-auto hidden max-w-[min(52rem,55vw)] gap-1 overflow-x-auto md:flex">
-              {strip.map((frame) => (
-                <button
-                  key={frame.id}
-                  type="button"
-                  onClick={() => onJump?.(frame.id)}
-                  className={`h-12 w-12 shrink-0 overflow-hidden rounded border ${
-                    frame.id === item.id ? "border-teal" : "border-white/20"
-                  }`}
-                >
-                  {frame.previewUrl ? (
-                    <img src={frame.previewUrl} alt="" className="h-full w-full object-cover" />
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          <div className="pointer-events-auto flex md:hidden">
-            <button
-              type="button"
-              aria-label="Previous frame"
-              disabled={atStart}
-              onClick={onPrev}
-              className="grid h-10 w-10 place-items-center rounded-full border border-white/10 text-foam disabled:opacity-20"
-            >
-              <Chevron direction="left" />
-            </button>
-            <button
-              type="button"
-              aria-label="Next frame"
-              disabled={atEnd}
-              onClick={onNext}
-              className="ml-2 grid h-10 w-10 place-items-center rounded-full border border-white/10 text-foam disabled:opacity-20"
-            >
-              <Chevron direction="right" />
-            </button>
-          </div>
+        <p className="pointer-events-none mb-2 hidden truncate px-1 font-mono text-[11px] text-white/50 md:block">
+          {captured}
+          {width && height ? ` · ${width} × ${height}` : ""}
+          {item.camera && item.camera !== "Unknown camera" ? ` · ${item.camera}` : ""}
+        </p>
+        {strip.length > 1 ? (
+          <Filmstrip items={strip} currentId={item.id} onJump={onJump} />
+        ) : null}
+        <div className="pointer-events-auto mt-2 flex justify-center md:hidden">
+          <button
+            type="button"
+            aria-label="Previous frame"
+            disabled={atStart}
+            onClick={onPrev}
+            className="grid h-10 w-10 place-items-center rounded-full border border-white/10 text-foam disabled:opacity-20"
+          >
+            <Chevron direction="left" />
+          </button>
+          <button
+            type="button"
+            aria-label="Next frame"
+            disabled={atEnd}
+            onClick={onNext}
+            className="ml-2 grid h-10 w-10 place-items-center rounded-full border border-white/10 text-foam disabled:opacity-20"
+          >
+            <Chevron direction="right" />
+          </button>
         </div>
       </footer>
       )}
+    </div>
+  );
+}
+
+function Filmstrip({
+  items,
+  currentId,
+  onJump,
+}: {
+  items: StudioItem[];
+  currentId: string;
+  onJump?: (id: string) => void;
+}) {
+  const scroller = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const node = scroller.current?.querySelector(`[data-strip="${CSS.escape(currentId)}"]`);
+    if (node instanceof HTMLElement) {
+      node.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+    }
+  }, [currentId]);
+  return (
+    <div ref={scroller} className="pointer-events-auto flex gap-1 overflow-x-auto">
+      {items.map((frame) => (
+        <button
+          key={frame.id}
+          type="button"
+          data-strip={frame.id}
+          onClick={() => onJump?.(frame.id)}
+          className={`h-14 w-14 shrink-0 overflow-hidden rounded-md ${
+            frame.id === currentId ? "ring-2 ring-teal ring-offset-1 ring-offset-black" : "opacity-65 hover:opacity-100"
+          }`}
+        >
+          {frame.previewUrl ? (
+            <img src={frame.previewUrl} alt="" className="h-full w-full object-cover" />
+          ) : null}
+        </button>
+      ))}
     </div>
   );
 }

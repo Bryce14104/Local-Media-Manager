@@ -265,9 +265,10 @@ export function Workspace() {
         target instanceof HTMLTextAreaElement ||
         target instanceof HTMLSelectElement;
       const command = event.metaKey || event.ctrlKey;
-      if (command && event.key.toLowerCase() === "a") {
+        if (command && event.key.toLowerCase() === "a") {
         if (typing || modal || confirmDelete || lightboxId || viewMode === "map" || viewMode === "insights" || preset === "compare") return;
         event.preventDefault();
+        setSelectMode(true);
         const ids = visible.map((item) => item.id);
         setSelectedIds(ids);
         if (ids[0]) {
@@ -297,6 +298,10 @@ export function Workspace() {
           return;
         }
         if (typing) return;
+        if (selectMode) {
+          setSelectMode(false);
+          return;
+        }
         if (selectedIds.length > 0) {
           setSelectedIds([]);
           return;
@@ -375,7 +380,7 @@ export function Workspace() {
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [confirmDelete, developOpen, lightboxId, modal, panelMode, preset, primaryId, selectedIds, selectingCache, viewMode, visible]);
+  }, [confirmDelete, developOpen, lightboxId, modal, panelMode, preset, primaryId, selectMode, selectedIds, selectingCache, viewMode, visible]);
 
   useEffect(() => {
     if (lightboxId && !items.some((item) => item.id === lightboxId)) setLightboxId(null);
@@ -642,14 +647,12 @@ export function Workspace() {
 
   function openItem(id: string) {
     setPrimaryId(id);
-    setSelectedIds((current) => (current.includes(id) ? current : [id]));
     if (preset === "inspect") setPanelMode("docked");
   }
 
   function viewItem(id: string) {
     setPrimaryId(id);
     anchorRef.current = id;
-    setSelectedIds([id]);
     lightboxIdRef.current = id;
     setLightboxId(id);
   }
@@ -679,7 +682,6 @@ export function Workspace() {
     setLightboxId(next.id);
     setPrimaryId(next.id);
     anchorRef.current = next.id;
-    setSelectedIds([next.id]);
   }
 
   function toggleItem(id: string) {
@@ -739,7 +741,9 @@ export function Workspace() {
     if (!next) return;
     setPrimaryId(next.id);
     anchorRef.current = next.id;
-    setSelectedIds([next.id]);
+    requestAnimationFrame(() => {
+      document.getElementById(`frame-${next.id}`)?.scrollIntoView({ block: "nearest" });
+    });
   }
 
   function saveDevelop(id: string, next: DevelopSettings) {
@@ -1341,7 +1345,7 @@ export function Workspace() {
           onClose={closeLightbox}
           onPrev={() => stepLightbox(-1)}
           onNext={() => stepLightbox(1)}
-          strip={lightboxPool.slice(Math.max(0, lightboxIndex - 8), lightboxIndex + 9)}
+          strip={lightboxPool.slice(Math.max(0, lightboxIndex - 16), lightboxIndex + 17)}
           onJump={(id) => {
             setLightboxId(id);
             setPrimaryId(id);

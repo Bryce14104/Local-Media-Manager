@@ -40,15 +40,12 @@ export function MediaStage({
   gridZoom,
   selectedIds,
   primaryId,
-  onOpen,
   onView,
   selectMode,
   onSelectMode,
   onSelect,
   onSelectVisible,
   onToggle,
-  onRate,
-  onFlag,
   onClearFilters,
   filteredEmpty,
   onRegion,
@@ -61,13 +58,16 @@ export function MediaStage({
   const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null);
 
   function selectOnMap(id: string) {
-    onOpen(id);
+    onView(id);
     setFocus({ id, nonce: Date.now() });
   }
 
   function activate(id: string, mods: PointerMods) {
-    if (selectMode || mods.shift || mods.toggle) onSelect(id, mods);
-    else onView(id);
+    if (selectMode || mods.shift || mods.toggle) {
+      onSelect(id, mods);
+      return;
+    }
+    onView(id);
   }
 
   if (viewMode === "map") {
@@ -92,23 +92,23 @@ export function MediaStage({
 
   return (
     <section className={`flex min-h-0 min-w-0 flex-1 flex-col ${className ?? ""}`}>
-      <header className="flex items-center gap-3 px-4 py-3">
+      <header className="flex items-center gap-3 px-3 py-2">
         <p className="text-xs text-mute">
-          {items.length === total ? `${total} frames on this machine` : `${items.length} of ${total} frames`}
+          {items.length === total ? `${total} photos` : `${items.length} of ${total}`}
         </p>
         <button
           type="button"
           aria-pressed={selectMode}
           onClick={() => onSelectMode(!selectMode)}
-          className={`rounded-full px-3 py-1 text-xs ${
-            selectMode ? "bg-teal text-teal-ink" : "border border-line text-foam hover:border-teal"
+          className={`ml-auto rounded-full px-2.5 py-1 text-[11px] ${
+            selectMode ? "bg-teal text-teal-ink" : "text-mute hover:text-foam"
           }`}
         >
-          {selectMode ? "Selecting" : "Select"}
+          {selectMode ? "Done" : "Select"}
         </button>
         {selectMode ? (
-          <button type="button" onClick={onSelectVisible} className="text-xs text-teal hover:underline">
-            Select visible
+          <button type="button" onClick={onSelectVisible} className="text-[11px] text-mute hover:text-foam">
+            All visible
           </button>
         ) : null}
       </header>
@@ -138,10 +138,9 @@ export function MediaStage({
             zoom={gridZoom}
             selectedIds={selectedIds}
             primaryId={primaryId}
+            selectMode={selectMode}
             onOpen={activate}
             onToggle={onToggle}
-            onRate={onRate}
-            onFlag={onFlag}
           />
         ) : (
           <Grid
@@ -149,10 +148,9 @@ export function MediaStage({
             zoom={gridZoom}
             selectedIds={selectedIds}
             primaryId={primaryId}
+            selectMode={selectMode}
             onOpen={activate}
             onToggle={onToggle}
-            onRate={onRate}
-            onFlag={onFlag}
           />
         )}
       </div>
@@ -165,19 +163,17 @@ function Grid({
   zoom,
   selectedIds,
   primaryId,
+  selectMode,
   onOpen,
   onToggle,
-  onRate,
-  onFlag,
 }: {
   items: StudioItem[];
   zoom: number;
   selectedIds: string[];
   primaryId: string | null;
+  selectMode: boolean;
   onOpen: (id: string, mods: PointerMods) => void;
   onToggle: (id: string) => void;
-  onRate: (id: string, rating: number | null) => void;
-  onFlag: (id: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [windowed, setWindowed] = useState({ width: 0, start: 0, end: items.length, padTop: 0, padBottom: 0, cols: 1 });
@@ -249,11 +245,10 @@ function Grid({
             item={item}
             zoom={zoom}
             selected={selected.has(item.id)}
-            primary={primaryId === item.id}
+            focused={primaryId === item.id && !selected.has(item.id) && selectedIds.length === 0}
+            selectMode={selectMode}
             onOpen={(mods) => onOpen(item.id, mods)}
             onToggle={() => onToggle(item.id)}
-            onRate={(rating) => onRate(item.id, rating)}
-            onFlag={() => onFlag(item.id)}
           />
         ))}
       </div>
