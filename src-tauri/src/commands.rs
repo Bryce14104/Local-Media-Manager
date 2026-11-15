@@ -1,7 +1,7 @@
 //! Tauri commands the React UI calls through `invoke`.
 
 use crate::db::Library;
-use crate::models::{JobProgress, LibrarySummary, MediaRecord, ScanReport};
+use crate::models::{ExportReport, JobProgress, LibrarySummary, MediaRecord, ScanReport, VolumeRecord, WatchedRoot};
 use crate::services;
 use serde::Serialize;
 use std::path::Path;
@@ -58,10 +58,46 @@ pub fn library_summary(state: State<'_, Library>) -> Result<LibrarySummary, Stri
 #[tauri::command]
 pub fn list_media(state: State<'_, Library>) -> Result<Vec<MediaRecord>, String> {
     let mut media = state.list_media().map_err(|err| err.to_string())?;
+    services::sync_volumes(&state);
+    services::hydrate_origins(&state, &mut media);
     for record in &mut media {
         services::attach_sidecars(record);
     }
     Ok(media)
+}
+
+#[tauri::command]
+pub fn list_volumes(state: State<'_, Library>) -> Result<Vec<VolumeRecord>, String> {
+    services::sync_volumes(&state);
+    state.list_volumes().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn list_watches(state: State<'_, Library>) -> Result<Vec<WatchedRoot>, String> {
+    services::sync_volumes(&state);
+    state.list_watches().map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub async fn rescan_watched(
+    state: State<'_, Library>,
+    app: AppHandle,
+) -> Result<ScanReport, String> {
+    let library = Library::clone(&*state);
+    let progress_app = app.clone();
+    let report = async_runtime::spawn_blocking({
+        let library = library.clone();
+        move || {
+            services::rescan_watched_with(&library, |done, total| {
+                emit_progress(&progress_app, "index", done, total, "Rescanning");
+            })
+            .map_err(|err| err.to_string())
+        }
+    })
+    .await
+    .map_err(|err| err.to_string())??;
+    spawn_catalog_jobs(library, app);
+    Ok(report)
 }
 
 #[tauri::command]
@@ -302,6 +338,15 @@ pub fn copy_originals(
     state
         .copy_originals(&paths, &destination)
         .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn export_media(
+    paths: Vec<String>,
+    destination: String,
+    state: State<'_, Library>,
+) -> Result<ExportReport, String> {
+    services::export_media(&state, &paths, &destination).map_err(|err| err.to_string())
 }
 
 #[tauri::command]

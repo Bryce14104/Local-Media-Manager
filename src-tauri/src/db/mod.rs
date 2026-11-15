@@ -7,7 +7,7 @@ mod concepts;
 
 use crate::models::{
     AlbumRecord, ConceptIndex, ExifSnapshot, FaceRecord, InsightSnapshot, LabelRecord, MediaKind,
-    MediaRecord, PersonRecord,
+    MediaRecord, PersonRecord, VolumeRecord, WatchedRoot,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
@@ -19,7 +19,7 @@ const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 const MEDIA_SELECT: &str = "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
                     indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path, flag,
-                    color_label, rotation, notes, keywords, develop_json
+                    color_label, rotation, notes, keywords, develop_json, volume_id, relative_path
              FROM media_files";
 
 /// Values written for a newly hashed media file.
@@ -35,6 +35,8 @@ pub struct NewMedia<'a> {
     pub media_kind: MediaKind,
     pub exif_json: Option<&'a str>,
     pub captured_at: Option<i64>,
+    pub volume_id: Option<i64>,
+    pub relative_path: Option<&'a str>,
 }
 
 #[derive(Debug, Error)]
@@ -141,8 +143,8 @@ impl Library {
         conn.execute(
             "INSERT INTO media_files (
                 file_path, content_hash, file_size, created_at, modified_at,
-                indexed_at, media_kind, exif_json, captured_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                indexed_at, media_kind, exif_json, captured_at, volume_id, relative_path
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
              ON CONFLICT(file_path) DO UPDATE SET
                 content_hash = excluded.content_hash,
                 file_size = excluded.file_size,
@@ -152,6 +154,8 @@ impl Library {
                 media_kind = excluded.media_kind,
                 exif_json = excluded.exif_json,
                 captured_at = excluded.captured_at,
+                volume_id = COALESCE(excluded.volume_id, media_files.volume_id),
+                relative_path = COALESCE(excluded.relative_path, media_files.relative_path),
                 vision_at = CASE
                     WHEN media_files.content_hash IS NOT excluded.content_hash THEN NULL
                     ELSE media_files.vision_at
@@ -166,9 +170,106 @@ impl Library {
                 media.media_kind.as_str(),
                 media.exif_json,
                 media.captured_at,
+                media.volume_id,
+                media.relative_path,
             ],
         )?;
         Ok(())
+    }
+
+    pub fn upsert_volume(&self, fingerprint: &str, label: &str, mount: &str) -> Result<i64, DbError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO volumes (fingerprint, label, last_mount, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(fingerprint) DO UPDATE SET
+                label = excluded.label,
+                last_mount = excluded.last_mount,
+                last_seen_at = excluded.last_seen_at",
+            params![fingerprint, label, mount, unix_now()],
+        )?;
+        let id = conn.query_row(
+            "SELECT id FROM volumes WHERE fingerprint = ?1",
+            params![fingerprint],
+            |row| row.get(0),
+        )?;
+        Ok(id)
+    }
+
+    pub fn find_by_volume_path(&self, volume_id: i64, relative: &str) -> Result<Option<MediaRecord>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(&format!(
+            "{MEDIA_SELECT} WHERE volume_id = ?1 AND relative_path = ?2"
+        ))?;
+        Ok(stmt.query_row(params![volume_id, relative], map_media).optional()?)
+    }
+
+    pub fn set_file_path(&self, id: i64, path: &str) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute("UPDATE media_files SET file_path = ?1 WHERE id = ?2", params![path, id])?;
+        Ok(())
+    }
+
+    pub fn add_watch(&self, path: &str, volume_id: Option<i64>, relative: &str) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO watched_roots (path, volume_id, relative_path, added_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(path) DO UPDATE SET
+                volume_id = excluded.volume_id,
+                relative_path = excluded.relative_path",
+            params![path, volume_id, relative, unix_now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_volume(&self, id: i64, volume_id: i64, relative: &str) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE media_files SET volume_id = ?1, relative_path = ?2 WHERE id = ?3",
+            params![volume_id, relative, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_watches(&self) -> Result<Vec<WatchedRoot>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, path, volume_id, relative_path FROM watched_roots ORDER BY path",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(WatchedRoot {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                volume_id: row.get(2)?,
+                relative_path: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn list_volumes(&self) -> Result<Vec<VolumeRecord>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT volumes.id, volumes.fingerprint, volumes.label, volumes.last_mount, volumes.last_seen_at,
+                    COUNT(media_files.id)
+             FROM volumes
+             LEFT JOIN media_files ON media_files.volume_id = volumes.id
+             GROUP BY volumes.id
+             ORDER BY volumes.label COLLATE NOCASE ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let mount: String = row.get(3)?;
+            Ok(VolumeRecord {
+                id: row.get(0)?,
+                fingerprint: row.get(1)?,
+                label: row.get(2)?,
+                last_mount: mount.clone(),
+                last_seen_at: row.get(4)?,
+                online: Path::new(&mount).is_dir(),
+                media_count: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     /// Set or clear the rating for a path that is already indexed.
@@ -704,6 +805,7 @@ fn delete_owned_thumbnail(path: Option<&str>) {
         if let Some(stem) = file.file_stem() {
             let name = stem.to_string_lossy();
             let _ = std::fs::remove_file(file.with_file_name(format!("{name}.1080.jpg")));
+            let _ = std::fs::remove_file(file.with_file_name(format!("{name}.720.jpg")));
             let _ = std::fs::remove_file(file.with_file_name(format!("{name}.play.mp4")));
         }
     }
@@ -739,6 +841,12 @@ fn map_media(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaRecord> {
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default(),
         develop_json: row.get(17).ok().flatten(),
+        volume_id: row.get(18).ok().flatten(),
+        volume_label: None,
+        volume_mount: None,
+        relative_path: row.get(19).ok().flatten(),
+        original_online: true,
+        plug_hint: None,
     })
 }
 
@@ -876,6 +984,52 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
             [],
         )?;
     }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS volumes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fingerprint TEXT NOT NULL UNIQUE,
+            label TEXT NOT NULL,
+            last_mount TEXT NOT NULL,
+            last_seen_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS watched_roots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            path TEXT NOT NULL UNIQUE,
+            volume_id INTEGER REFERENCES volumes(id),
+            relative_path TEXT,
+            added_at INTEGER NOT NULL
+        );",
+    )?;
+    let watch_columns = {
+        let mut stmt = conn.prepare("PRAGMA table_info(watched_roots)")?;
+        stmt.query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if !watch_columns.iter().any(|name| name == "relative_path") {
+        conn.execute("ALTER TABLE watched_roots ADD COLUMN relative_path TEXT", [])?;
+    }
+    let columns = {
+        let mut stmt = conn.prepare("PRAGMA table_info(media_files)")?;
+        stmt.query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if !columns.iter().any(|name| name == "volume_id") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN volume_id INTEGER", [])?;
+    }
+    if !columns.iter().any(|name| name == "relative_path") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN relative_path TEXT", [])?;
+    }
+    let has_v6: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 6",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_v6 == 0 {
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (6, CAST(strftime('%s', 'now') AS INTEGER))",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -937,7 +1091,7 @@ mod tests {
         let library = Library::open(dir.path().join("library.sqlite")).unwrap();
         let summary = library.summary().unwrap();
 
-        assert_eq!(summary.schema_version, 5);
+        assert_eq!(summary.schema_version, 6);
         assert_eq!(summary.media_count, 0);
         for column in [
             "file_path",
@@ -955,7 +1109,7 @@ mod tests {
         }
 
         let again = Library::open(dir.path().join("library.sqlite")).unwrap();
-        assert_eq!(again.summary().unwrap().schema_version, 5);
+        assert_eq!(again.summary().unwrap().schema_version, 6);
     }
 
     #[test]
@@ -1022,6 +1176,8 @@ mod tests {
                     media_kind: MediaKind::Image,
                     exif_json: None,
                     captured_at: None,
+            volume_id: None,
+            relative_path: None,
                 })
                 .unwrap();
         }
@@ -1063,6 +1219,8 @@ mod tests {
                 media_kind: MediaKind::Image,
                 exif_json: None,
                 captured_at: Some(1_700_000_000),
+            volume_id: None,
+            relative_path: None,
             })
             .unwrap();
 
@@ -1093,6 +1251,8 @@ mod tests {
                 media_kind: MediaKind::Image,
                 exif_json: None,
                 captured_at: Some(1_600_000_000),
+            volume_id: None,
+            relative_path: None,
             })
             .unwrap();
         library
@@ -1105,6 +1265,8 @@ mod tests {
                 media_kind: MediaKind::Image,
                 exif_json: None,
                 captured_at: Some(1_700_000_000),
+            volume_id: None,
+            relative_path: None,
             })
             .unwrap();
         library
@@ -1117,6 +1279,8 @@ mod tests {
                 media_kind: MediaKind::Image,
                 exif_json: None,
                 captured_at: None,
+            volume_id: None,
+            relative_path: None,
             })
             .unwrap();
 
@@ -1150,6 +1314,8 @@ mod tests {
                 media_kind: MediaKind::Image,
                 exif_json: None,
                 captured_at: Some(20),
+            volume_id: None,
+            relative_path: None,
             })
             .unwrap();
         let media_id = library.list_media().unwrap()[0].id;
@@ -1227,6 +1393,8 @@ mod tests {
                     media_kind: MediaKind::Image,
                     exif_json: None,
                     captured_at: Some(captured_at),
+            volume_id: None,
+            relative_path: None,
                 })
                 .unwrap();
         }
@@ -1305,6 +1473,8 @@ mod tests {
                 media_kind: MediaKind::Image,
                 exif_json: None,
                 captured_at: Some(20),
+            volume_id: None,
+            relative_path: None,
             })
             .unwrap();
         library
@@ -1335,6 +1505,8 @@ mod tests {
                 media_kind: MediaKind::Image,
                 exif_json: None,
                 captured_at: Some(20),
+            volume_id: None,
+            relative_path: None,
             })
             .unwrap();
         let dest = dir.path().join("out");
@@ -1343,5 +1515,22 @@ mod tests {
             .unwrap();
         assert_eq!(copied, 1);
         assert!(dest.join("a.jpg").is_file());
+    }
+
+    #[test]
+    fn volumes_are_remembered_by_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::open(dir.path().join("library.sqlite")).unwrap();
+        let first = library.upsert_volume("uuid:abc", "Drive E", "/Volumes/E").unwrap();
+        let again = library.upsert_volume("uuid:abc", "Photos", "/media/photos").unwrap();
+        assert_eq!(first, again);
+        let volumes = library.list_volumes().unwrap();
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].label, "Photos");
+        assert_eq!(volumes[0].last_mount, "/media/photos");
+        library
+            .add_watch("/media/photos/cam", Some(first), "cam")
+            .unwrap();
+        assert_eq!(library.list_watches().unwrap()[0].relative_path.as_deref(), Some("cam"));
     }
 }

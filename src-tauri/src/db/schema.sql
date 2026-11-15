@@ -10,6 +10,22 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS volumes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fingerprint TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    last_mount TEXT NOT NULL,
+    last_seen_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS watched_roots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL UNIQUE,
+    volume_id INTEGER REFERENCES volumes(id),
+    relative_path TEXT,
+    added_at INTEGER NOT NULL
+);
+
 -- One row per media file Shelf has seen.
 -- file_path      absolute path on this machine
 -- content_hash   lowercase SHA-256 of the file bytes
@@ -43,7 +59,9 @@ CREATE TABLE IF NOT EXISTS media_files (
     rotation INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
     keywords TEXT,
-    develop_json TEXT
+    develop_json TEXT,
+    volume_id INTEGER REFERENCES volumes(id),
+    relative_path TEXT
 );
 
 CREATE TABLE IF NOT EXISTS albums (

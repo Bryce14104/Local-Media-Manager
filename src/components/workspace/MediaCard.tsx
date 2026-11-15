@@ -63,6 +63,11 @@ export function MediaCard({
             <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
           </div>
           {item.format === "video" ? <PlayMark /> : null}
+          {item.originalOnline ? null : (
+            <span className="pointer-events-none absolute right-1 top-1 z-10 rounded bg-black/60 px-1 text-[10px] text-white/80">
+              720p
+            </span>
+          )}
           {item.rating ? (
             <span className="pointer-events-none absolute bottom-1 left-1 z-10 rounded bg-black/55 px-1 font-mono text-[10px] text-gold">
               {"★".repeat(item.rating)}

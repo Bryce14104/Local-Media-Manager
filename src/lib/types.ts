@@ -37,6 +37,35 @@ export type MediaRecord = {
   notes?: string | null;
   keywords?: string[];
   developJson?: string | null;
+  volumeId?: number | null;
+  volumeLabel?: string | null;
+  volumeMount?: string | null;
+  relativePath?: string | null;
+  originalOnline?: boolean;
+  plugHint?: string | null;
+};
+
+export type VolumeRecord = {
+  id: number;
+  fingerprint: string;
+  label: string;
+  lastMount: string;
+  lastSeenAt: number;
+  online: boolean;
+  mediaCount: number;
+};
+
+export type WatchedRoot = {
+  id: number;
+  path: string;
+  volumeId: number | null;
+  relativePath: string | null;
+};
+
+export type ExportReport = {
+  originals: number;
+  proxies: number;
+  missing: string[];
 };
 
 export type AlbumRecord = {

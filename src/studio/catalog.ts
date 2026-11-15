@@ -109,6 +109,10 @@ export function itemFromRecord(record: {
   keywords?: string[];
   indexedAt?: number;
   developJson?: string | null;
+  volumeId?: number | null;
+  volumeLabel?: string | null;
+  originalOnline?: boolean;
+  plugHint?: string | null;
 }): StudioItem {
   const fileName = record.filePath.split(/[/\\]/).filter(Boolean).pop() ?? record.filePath;
   const folder = parentFolder(record.filePath);
@@ -155,6 +159,10 @@ export function itemFromRecord(record: {
     keywords: record.keywords ?? [],
     indexedAt: record.indexedAt ?? null,
     develop: parseDevelop(record.developJson),
+    originalOnline: record.originalOnline !== false,
+    plugHint: record.plugHint ?? null,
+    volumeId: record.volumeId ?? null,
+    volumeLabel: record.volumeLabel ?? null,
     ...placed(folder, id, exif?.latitude, exif?.longitude),
   };
 }
@@ -258,6 +266,10 @@ export function inventItems(folder: string, format: MediaFormat): StudioItem[] {
       keywords: [],
       indexedAt: Math.floor(stamp / 1000),
       develop: { ...NEUTRAL_DEVELOP },
+      originalOnline: true,
+      plugHint: null,
+      volumeId: null,
+      volumeLabel: null,
       ...coordinatesFor(folder.trim() || "Inbox", id),
     };
   });
@@ -367,6 +379,10 @@ function seedItem(row: Seed, id: string): StudioItem {
     keywords: [],
     indexedAt: Math.floor(Date.parse(capturedAt) / 1000) || null,
     develop: { ...NEUTRAL_DEVELOP },
+    originalOnline: true,
+    plugHint: null,
+    volumeId: null,
+    volumeLabel: null,
     ...coordinatesFor(folder, id),
   };
 }

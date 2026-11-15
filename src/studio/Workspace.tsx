@@ -22,11 +22,17 @@ import {
   setRating,
   setRotation,
   setDevelop,
-  copyOriginals,
+  albumMediaIds,
+  exportMedia,
+  listAlbums,
+  listVolumes,
+  listWatches,
+  rescanWatched,
 } from "../lib/api";
-import type { ConceptIndex, MediaKind, MediaRecord } from "../lib/types";
+import type { AlbumRecord, ConceptIndex, MediaKind, MediaRecord, VolumeRecord, WatchedRoot } from "../lib/types";
 import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
+import { PlugDriveModal } from "../components/drawers/PlugDriveModal";
 import { PreferencesModal } from "../components/drawers/PreferencesModal";
 import { InspectorPanel } from "../components/panels/InspectorPanel";
 import { TopBar } from "../components/shell/TopBar";
@@ -35,6 +41,7 @@ import { ComparePane } from "../components/workspace/ComparePane";
 import { Lightbox } from "../components/workspace/Lightbox";
 import { DevelopStudio } from "../components/develop/DevelopStudio";
 import { FilterRail } from "../components/workspace/FilterRail";
+import { SourceList } from "../components/workspace/SourceList";
 import { InsightsView } from "../components/workspace/InsightsView";
 import { MediaStage } from "../components/workspace/MediaStage";
 import { SelectionBar } from "../components/workspace/SelectionBar";
@@ -104,6 +111,11 @@ export function Workspace() {
   const [cacheZoom, setCacheZoom] = useState<MapZoom>(12);
   const [cacheBounds, setCacheBounds] = useState<GeoBounds | null>(null);
   const [selectingCache, setSelectingCache] = useState(false);
+  const [volumes, setVolumes] = useState<VolumeRecord[]>([]);
+  const [watches, setWatches] = useState<WatchedRoot[]>([]);
+  const [albums, setAlbums] = useState<AlbumRecord[]>([]);
+  const [plugHint, setPlugHint] = useState<string | null>(null);
+  const [wantOriginal, setWantOriginal] = useState(false);
   const [conceptIndex, setConceptIndex] = useState<ConceptIndex | null>(null);
   const [conceptsLive, setConceptsLive] = useState(() => desktopBridgeAvailable());
   const [telemetry, setTelemetry] = useState<Telemetry>(INITIAL_TELEMETRY);
@@ -149,6 +161,7 @@ export function Workspace() {
         }
         const library = media.map(presentRecord);
         setItems(snapshot ? applyInsights(library, snapshot) : library);
+        void refreshSources();
       })
       .catch(() => {
         if (!cancel) setConceptsLive(false);
@@ -644,6 +657,7 @@ export function Workspace() {
   function closeLightbox() {
     const id = lightboxId;
     if (!id) return;
+    setWantOriginal(false);
     setDevelopOpen(false);
     lightboxIdRef.current = null;
     setLightboxId(null);
@@ -655,6 +669,7 @@ export function Workspace() {
   }
 
   function stepLightbox(delta: number) {
+    setWantOriginal(false);
     const id = lightboxIdRef.current;
     const pool = visible.some((item) => item.id === id) ? visible : items;
     const index = pool.findIndex((item) => item.id === id);
@@ -740,10 +755,62 @@ export function Workspace() {
     writeSlideshowSettings(next);
   }
 
+  async function refreshSources() {
+    if (!desktopBridgeAvailable()) return;
+    const [nextVolumes, nextWatches, nextAlbums] = await Promise.all([
+      listVolumes().catch(() => []),
+      listWatches().catch(() => []),
+      listAlbums().catch(() => []),
+    ]);
+    setVolumes(nextVolumes);
+    setWatches(nextWatches);
+    setAlbums(nextAlbums);
+  }
+
+  function requireOriginal(item: StudioItem | null, action: () => void) {
+    if (!item) return;
+    if (item.originalOnline) {
+      action();
+      return;
+    }
+    setPlugHint(item.plugHint ?? `Plug in ${item.volumeLabel ?? "the remembered drive"} to see full resolution`);
+  }
+
+  function applySource(filter: ActiveFilter) {
+    setFilters((current) => [
+      ...current.filter(
+        (item) =>
+          item.kind !== "volume" &&
+          item.kind !== "folder" &&
+          item.kind !== "album" &&
+          item.kind !== "offline" &&
+          !(item.kind === "flag" && item.id === "picks") &&
+          !(item.kind === "type" && item.id === "videos"),
+      ),
+      filter,
+    ]);
+  }
+
+  async function openAlbum(album: AlbumRecord) {
+    if (!desktopBridgeAvailable()) {
+      applySource({ id: `album-${album.id}`, kind: "album", albumId: album.id, ids: [], label: album.name });
+      return;
+    }
+    const ids = await albumMediaIds(album.id).catch(() => [] as number[]);
+    applySource({
+      id: `album-${album.id}`,
+      kind: "album",
+      albumId: album.id,
+      ids: ids.map((id) => `library-${id}`),
+      label: album.name,
+    });
+  }
+
   async function exportCopies() {
-    const paths = items
-      .filter((item) => (selectedIds.length > 0 ? selectedIds.includes(item.id) : visible.some((row) => row.id === item.id)) && item.sourcePath)
-      .map((item) => item.sourcePath as string);
+    const chosen = items.filter((item) =>
+      (selectedIds.length > 0 ? selectedIds.includes(item.id) : visible.some((row) => row.id === item.id)) && item.sourcePath,
+    );
+    const paths = chosen.map((item) => item.sourcePath as string);
     if (!desktopBridgeAvailable() || paths.length === 0) {
       setModal("export");
       return;
@@ -751,8 +818,12 @@ export function Workspace() {
     try {
       const destination = await pickDirectory("Export copies");
       if (!destination) return;
-      const copied = await copyOriginals(paths, destination);
-      setTelemetry((current) => ({ ...current, exportLabel: `Copied ${copied} originals to ${destination}` }));
+      const report = await exportMedia(paths, destination);
+      const parts = [`${report.originals} originals`, report.proxies ? `${report.proxies} 720p copies` : null]
+        .filter(Boolean)
+        .join(" · ");
+      setTelemetry((current) => ({ ...current, exportLabel: `Exported ${parts} to ${destination}` }));
+      if (report.missing[0]) setPlugHint(report.missing[0] ?? null);
     } catch (error) {
       setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
     }
@@ -899,6 +970,7 @@ export function Workspace() {
         media.map(presentRecord),
         `Indexed ${report.indexed} · ${report.unchanged} already in the library`,
       );
+      void refreshSources();
     } catch (error) {
       setImportError(errorMessage(error));
       setImportMessage(null);
@@ -1045,6 +1117,46 @@ export function Workspace() {
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        {preset !== "compare" && viewMode !== "insights" ? (
+          <SourceList
+            volumes={volumes}
+            watches={watches}
+            albums={albums}
+            filters={filters}
+            onFilter={applySource}
+            onClear={() =>
+              setFilters((current) =>
+                current.filter(
+                  (item) =>
+                    item.kind !== "volume" &&
+                    item.kind !== "folder" &&
+                    item.kind !== "album" &&
+                    item.kind !== "offline" &&
+                    item.id !== "picks" &&
+                    item.id !== "videos",
+                ),
+              )
+            }
+            onRescan={() => {
+              if (!desktopBridgeAvailable()) return;
+              void rescanWatched()
+                .then(async (report) => {
+                  const { media } = await fetchLibrary();
+                  setItems(media.map(presentRecord));
+                  await refreshSources();
+                  setTelemetry((current) => ({
+                    ...current,
+                    scanLabel: `Rescanned ${report.indexed} new · ${report.unchanged} unchanged`,
+                  }));
+                })
+                .catch((error) => {
+                  setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+                });
+            }}
+            onAddFolder={() => void browseFolders()}
+            onOpenAlbum={(album) => void openAlbum(album)}
+          />
+        ) : null}
         {preset === "compare" ? (
           <ComparePane pair={comparePair} onClear={() => setSelectedIds([])} />
         ) : viewMode === "insights" ? (
@@ -1099,7 +1211,11 @@ export function Workspace() {
             onNotes={(notes) => primary && saveNotes(primary.id, notes)}
             onKeywords={(keywords) => primary && saveKeywords(primary.id, keywords)}
             onCopyPath={() => primary && copyItemPath(primary)}
-            onReveal={() => primary?.sourcePath && void revealPath(primary.sourcePath).catch(() => undefined)}
+            onReveal={() =>
+              requireOriginal(primary, () => {
+                if (primary?.sourcePath) void revealPath(primary.sourcePath).catch(() => undefined);
+              })
+            }
             onEdit={
               primary && primary.format !== "video"
                 ? () => {
@@ -1129,7 +1245,11 @@ export function Workspace() {
           onNotes={(notes) => primary && saveNotes(primary.id, notes)}
           onKeywords={(keywords) => primary && saveKeywords(primary.id, keywords)}
           onCopyPath={() => primary && copyItemPath(primary)}
-          onReveal={() => primary?.sourcePath && void revealPath(primary.sourcePath).catch(() => undefined)}
+          onReveal={() =>
+            requireOriginal(primary, () => {
+              if (primary?.sourcePath) void revealPath(primary.sourcePath).catch(() => undefined);
+            })
+          }
           onEdit={
             primary && primary.format !== "video"
               ? () => {
@@ -1215,6 +1335,7 @@ export function Workspace() {
           </div>
         </Modal>
       ) : null}
+      {plugHint ? <PlugDriveModal hint={plugHint} onClose={() => setPlugHint(null)} /> : null}
       {modal === "export" ? (
         <BatchExportModal
           count={selectedIds.length}
@@ -1224,7 +1345,11 @@ export function Workspace() {
       ) : null}
       {lightboxItem ? (
         <Lightbox
-          item={lightboxItem}
+          item={
+            wantOriginal && lightboxItem.originalOnline && lightboxItem.originalUrl
+              ? { ...lightboxItem, inspectUrl: lightboxItem.originalUrl }
+              : lightboxItem
+          }
           before={lightboxIndex > 0 ? (lightboxPool[lightboxIndex - 1] ?? null) : null}
           after={lightboxPool[lightboxIndex + 1] ?? null}
           index={Math.max(0, lightboxIndex)}
@@ -1240,9 +1365,14 @@ export function Workspace() {
           onRotate={() => rotateItem(lightboxItem.id)}
           onCopyPath={() => copyItemPath(lightboxItem)}
           onReveal={() =>
-            lightboxItem.sourcePath
-              ? void revealPath(lightboxItem.sourcePath).catch(() => undefined)
-              : undefined
+            requireOriginal(lightboxItem, () => {
+              if (lightboxItem.sourcePath) void revealPath(lightboxItem.sourcePath).catch(() => undefined);
+            })
+          }
+          onOriginal={() =>
+            requireOriginal(lightboxItem, () => {
+              setWantOriginal(true);
+            })
           }
           poolIds={lightboxPool.map((frame) => frame.id)}
           slideshow={slideshow}
@@ -1305,13 +1435,14 @@ function withPreview(
   const previewUrl = mediaSrc(thumbnailPath);
   const proxyUrl = mediaSrc(proxyPath) ?? previewUrl;
   const playUrl = mediaSrc(playPath);
-  const original = mediaSrc(filePath);
+  const original = item.originalOnline ? mediaSrc(filePath) : null;
   return {
     ...item,
     previewUrl,
     proxyUrl,
     playUrl,
     playFile: playPath ?? null,
-    inspectUrl: item.format === "video" ? playUrl : (original ?? proxyUrl ?? previewUrl),
+    inspectUrl: item.format === "video" ? playUrl : (proxyUrl ?? previewUrl),
+    originalUrl: item.format === "video" ? playUrl : original,
   };
 }

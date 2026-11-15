@@ -1,9 +1,10 @@
-//! Grid posters, 1080p stills, and a web-playable video proxy.
+//! Grid posters, 720p stills, and a 3 fps web-playable video proxy.
 //!
 //! Stills and RAW embedded JPEGs are scaled in-process. Video posters come
-//! from one ffmpeg frame. The lightbox paints the 1920 JPEG immediately; a
-//! H.264 MP4 next to it is what the webview can actually play.
-//! Work stays off the UI thread; see `generate_missing_thumbnails`.
+//! from one ffmpeg frame. The lightbox paints the 720p JPEG immediately; a
+//! H.264 MP4 next to it is what the webview can actually play while the
+//! original disk is unplugged. Work stays off the UI thread; see
+//! `generate_missing_thumbnails`.
 
 use crate::db::Library;
 use crate::models::{MediaKind, MediaRecord, ThumbnailReady};
@@ -18,7 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
 const MAX_EDGE: u32 = 480;
-const PROXY_EDGE: u32 = 1920;
+const PROXY_EDGE: u32 = 1280;
 const MAX_SOURCE: u64 = 80 * 1024 * 1024;
 const MIN_EMBEDDED: usize = 2 * 1024;
 static FRAME_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -68,6 +69,9 @@ where
         .into_iter()
         .filter(|record| {
             if record.content_hash.is_none() {
+                return false;
+            }
+            if !Path::new(&record.file_path).is_file() {
                 return false;
             }
             if record.media_kind == MediaKind::Video && !ffmpeg {
@@ -135,7 +139,8 @@ pub fn attach_sidecars(record: &mut MediaRecord) {
 }
 
 fn sidecar_ready(thumb: &Path) -> (Option<String>, Option<String>) {
-    (existing_file(&proxy_path(thumb)), existing_file(&play_path(thumb)))
+    let proxy = existing_file(&proxy_path(thumb)).or_else(|| existing_file(&legacy_proxy_path(thumb)));
+    (proxy, existing_file(&play_path(thumb)))
 }
 
 fn existing_file(path: &Path) -> Option<String> {
@@ -143,6 +148,11 @@ fn existing_file(path: &Path) -> Option<String> {
 }
 
 pub fn proxy_path(thumbnail: &Path) -> PathBuf {
+    let stem = thumbnail.file_stem().unwrap_or_default().to_string_lossy();
+    thumbnail.with_file_name(format!("{stem}.720.jpg"))
+}
+
+fn legacy_proxy_path(thumbnail: &Path) -> PathBuf {
     let stem = thumbnail.file_stem().unwrap_or_default().to_string_lossy();
     thumbnail.with_file_name(format!("{stem}.1080.jpg"))
 }
@@ -178,7 +188,7 @@ fn preview_incomplete(thumbnail: Option<&str>, kind: MediaKind) -> bool {
         return true;
     };
     let thumb = Path::new(path);
-    if !thumb.is_file() || !proxy_path(thumb).is_file() {
+    if !thumb.is_file() || (!proxy_path(thumb).is_file() && !legacy_proxy_path(thumb).is_file()) {
         return true;
     }
     kind == MediaKind::Video && !play_path(thumb).is_file()
@@ -332,23 +342,20 @@ fn transcode(bin: &Path, source: &Path, destination: &Path, audio: bool) -> bool
             "-map",
             "0:v:0",
             "-vf",
-            "scale=1920:1080:force_original_aspect_ratio=decrease:force_divisible_by=2",
+            "fps=3,scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2",
+            "-an",
             "-c:v",
             "libx264",
             "-preset",
             "veryfast",
             "-crf",
-            "23",
+            "28",
             "-pix_fmt",
             "yuv420p",
             "-movflags",
             "+faststart",
         ]);
-    if audio {
-        command.args(["-map", "0:a?", "-c:a", "aac", "-ac", "2", "-b:a", "128k"]);
-    } else {
-        command.arg("-an");
-    }
+    let _ = audio;
     command
         .arg(destination)
         .stdin(Stdio::null())

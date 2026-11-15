@@ -49,6 +49,9 @@ pub fn run() {
             commands::log_search,
             commands::library_summary,
             commands::list_media,
+            commands::list_volumes,
+            commands::list_watches,
+            commands::rescan_watched,
             commands::scan_directory,
             commands::index_paths,
             commands::set_rating,
@@ -71,6 +74,7 @@ pub fn run() {
             commands::album_media_ids,
             commands::reveal_path,
             commands::copy_originals,
+            commands::export_media,
             commands::set_develop,
             commands::write_bytes,
         ])

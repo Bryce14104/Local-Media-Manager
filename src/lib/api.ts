@@ -1,6 +1,16 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { AlbumRecord, ConceptIndex, InsightSnapshot, LibrarySummary, MediaRecord, ScanReport } from "./types";
+import type {
+  AlbumRecord,
+  ConceptIndex,
+  ExportReport,
+  InsightSnapshot,
+  LibrarySummary,
+  MediaRecord,
+  ScanReport,
+  VolumeRecord,
+  WatchedRoot,
+} from "./types";
 
 export class BridgeError extends Error {
   readonly offline: boolean;
@@ -220,4 +230,24 @@ export async function writeBytes(path: string, bytes: number[]): Promise<void> {
 export async function copyOriginals(paths: string[], destination: string): Promise<number> {
   assertBridge();
   return invoke<number>("copy_originals", { paths, destination });
+}
+
+export async function exportMedia(paths: string[], destination: string): Promise<ExportReport> {
+  assertBridge();
+  return invoke<ExportReport>("export_media", { paths, destination });
+}
+
+export async function listVolumes(): Promise<VolumeRecord[]> {
+  assertBridge();
+  return invoke<VolumeRecord[]>("list_volumes");
+}
+
+export async function listWatches(): Promise<WatchedRoot[]> {
+  assertBridge();
+  return invoke<WatchedRoot[]>("list_watches");
+}
+
+export async function rescanWatched(): Promise<ScanReport> {
+  assertBridge();
+  return invoke<ScanReport>("rescan_watched");
 }

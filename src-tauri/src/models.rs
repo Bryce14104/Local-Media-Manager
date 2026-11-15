@@ -111,6 +111,41 @@ pub struct MediaRecord {
     pub notes: Option<String>,
     pub keywords: Vec<String>,
     pub develop_json: Option<String>,
+    pub volume_id: Option<i64>,
+    pub volume_label: Option<String>,
+    pub volume_mount: Option<String>,
+    pub relative_path: Option<String>,
+    pub original_online: bool,
+    pub plug_hint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeRecord {
+    pub id: i64,
+    pub fingerprint: String,
+    pub label: String,
+    pub last_mount: String,
+    pub last_seen_at: i64,
+    pub online: bool,
+    pub media_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WatchedRoot {
+    pub id: i64,
+    pub path: String,
+    pub volume_id: Option<i64>,
+    pub relative_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportReport {
+    pub originals: usize,
+    pub proxies: usize,
+    pub missing: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

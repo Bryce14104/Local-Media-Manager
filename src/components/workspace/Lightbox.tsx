@@ -18,6 +18,7 @@ type LightboxProps = {
   onJump?: (id: string) => void;
   onRotate?: () => void;
   onReveal?: () => void;
+  onOriginal?: () => void;
   onCopyPath?: () => void;
   onEdit?: () => void;
   poolIds?: string[];
@@ -38,6 +39,7 @@ export function Lightbox({
   onJump,
   onRotate,
   onReveal,
+  onOriginal,
   onCopyPath,
   onEdit,
   poolIds = [],
@@ -315,6 +317,9 @@ export function Lightbox({
             <BarAction label="Show file" onClick={onReveal}>
               <RevealIcon />
             </BarAction>
+          ) : null}
+          {immersive ? null : onOriginal ? (
+            <BarLabel onClick={onOriginal}>{item.originalOnline ? "Original" : "Full res"}</BarLabel>
           ) : null}
           {!clip ? (
             <BarAction label={immersive ? "Exit fullscreen" : "Full screen"} onClick={() => void toggleFullscreen()}>

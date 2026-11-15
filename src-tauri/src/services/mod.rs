@@ -5,13 +5,15 @@ mod exif;
 mod scanner;
 mod thumbs;
 mod vision;
+pub mod volumes;
 
 pub use thumbs::{attach_sidecars, generate_missing_thumbnails_with};
 pub use vision::{recognize_library, search_embeddings, warm_vision};
 
 use crate::db::{DbError, Library, NewMedia};
-use crate::models::ScanReport;
-use std::path::Path;
+use crate::models::{ExportReport, MediaRecord, ScanReport, VolumeRecord};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use thiserror::Error;
 
@@ -98,6 +100,10 @@ where
         return Err(ServiceError::Empty);
     }
 
+    for raw in &roots {
+        remember_root(library, Path::new(raw));
+    }
+
     let discovered = files.len();
     eprintln!("shelf index: scanning {}", roots.join(", "));
     let (indexed, unchanged, loop_failed, loop_errors) =
@@ -142,6 +148,7 @@ where
     F: FnMut(usize, usize),
 {
     let started = Instant::now();
+    remember_root(library, root);
     eprintln!("shelf index: scanning {}", root.display());
     let batch = scan_directory(root)?;
     let discovered = batch.files.len();
@@ -204,7 +211,21 @@ fn index_one(
     file: &crate::models::ScannedFile,
 ) -> Result<IndexOutcome, ServiceError> {
     let path = file.path_string();
-    if let Some(existing) = library.find_by_path(&path)? {
+    let volume = volumes::detect(&file.path);
+    let volume_id = library.upsert_volume(&volume.fingerprint, &volume.label, &volume.mount)?;
+    let relative = volumes::relative_to(&file.path, &volume.mount);
+
+    let mut existing = library.find_by_path(&path)?;
+    if existing.is_none() {
+        existing = library.find_by_volume_path(volume_id, &relative)?;
+        if let Some(row) = existing.as_ref()
+            && row.file_path != path
+        {
+            library.set_file_path(row.id, &path)?;
+        }
+    }
+    if let Some(existing) = existing {
+        library.set_volume(existing.id, volume_id, &relative)?;
         let same_size = i64::try_from(file.file_size)
             .ok()
             .is_some_and(|size| size == existing.file_size);
@@ -261,9 +282,202 @@ fn index_one(
         media_kind: file.media_kind,
         exif_json: exif_json.as_deref(),
         captured_at,
+        volume_id: Some(volume_id),
+        relative_path: Some(&relative),
     })?;
 
     Ok(IndexOutcome::Indexed { note })
+}
+
+fn remember_root(library: &Library, root: &Path) {
+    if !root.exists() {
+        return;
+    }
+    let volume = volumes::detect(root);
+    let Ok(volume_id) = library.upsert_volume(&volume.fingerprint, &volume.label, &volume.mount) else {
+        return;
+    };
+    let relative = volumes::relative_to(root, &volume.mount);
+    let _ = library.add_watch(&root.display().to_string(), Some(volume_id), &relative);
+}
+
+pub fn hydrate_origins(library: &Library, records: &mut [MediaRecord]) {
+    let volumes = library.list_volumes().unwrap_or_default();
+    let by_id: HashMap<i64, VolumeRecord> = volumes.into_iter().map(|volume| (volume.id, volume)).collect();
+    for record in records {
+        let Some(volume_id) = record.volume_id else {
+            record.original_online = Path::new(&record.file_path).is_file();
+            continue;
+        };
+        let Some(volume) = by_id.get(&volume_id) else {
+            record.original_online = Path::new(&record.file_path).is_file();
+            continue;
+        };
+        record.volume_label = Some(volume.label.clone());
+        record.volume_mount = Some(volume.last_mount.clone());
+        let relative = record.relative_path.clone().unwrap_or_default();
+        let remounted = volumes::join_mount(&volume.last_mount, &relative);
+        if remounted.is_file() && remounted.to_string_lossy() != record.file_path {
+            let next = remounted.to_string_lossy().into_owned();
+            let _ = library.set_file_path(record.id, &next);
+            record.file_path = next;
+        }
+        let on_volume = Path::new(&record.file_path).starts_with(&volume.last_mount);
+        record.original_online =
+            remounted.is_file() || (on_volume && Path::new(&record.file_path).is_file());
+        record.plug_hint = Some(volumes::plug_hint(
+            &volume.label,
+            &volume.last_mount,
+            record.original_online,
+        ));
+    }
+}
+
+pub fn sync_volumes(library: &Library) {
+    let Ok(known) = library.list_volumes() else {
+        return;
+    };
+    let live = volumes::live_mounts();
+    for volume in known {
+        if Path::new(&volume.last_mount).is_dir() {
+            let detected = volumes::detect(Path::new(&volume.last_mount));
+            let _ = library.upsert_volume(&detected.fingerprint, &detected.label, &detected.mount);
+            continue;
+        }
+        if let Some(found) = live.iter().find(|item| item.fingerprint == volume.fingerprint) {
+            let _ = library.upsert_volume(&found.fingerprint, &found.label, &found.mount);
+        }
+    }
+}
+
+pub fn rescan_watched_with<F>(
+    library: &Library,
+    mut progress: F,
+) -> Result<ScanReport, ServiceError>
+where
+    F: FnMut(usize, usize),
+{
+    sync_volumes(library);
+    let watches = library.list_watches()?;
+    let volumes = library.list_volumes().unwrap_or_default();
+    if watches.is_empty() {
+        progress(0, 0);
+        return Ok(ScanReport {
+            root: String::new(),
+            discovered: 0,
+            indexed: 0,
+            unchanged: 0,
+            failed: 0,
+            errors: vec!["No remembered folders yet.".into()],
+            duration_ms: 0,
+        });
+    }
+    let mut combined = ScanReport {
+        root: String::new(),
+        discovered: 0,
+        indexed: 0,
+        unchanged: 0,
+        failed: 0,
+        errors: Vec::new(),
+        duration_ms: 0,
+    };
+    let roots: Vec<PathBuf> = watches
+        .iter()
+        .map(|watch| resolve_watch(watch, &volumes))
+        .collect();
+    let online: Vec<PathBuf> = roots.into_iter().filter(|root| root.is_dir()).collect();
+    if online.is_empty() {
+        combined.errors.push("Remembered folders are offline. Plug the drive back in.".into());
+        return Ok(combined);
+    }
+    combined.root = online
+        .iter()
+        .map(|root| root.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let paths: Vec<String> = online.iter().map(|root| root.display().to_string()).collect();
+    let report = index_paths_with(library, &paths, &mut progress)?;
+    Ok(report)
+}
+
+fn resolve_watch(watch: &crate::models::WatchedRoot, volumes: &[VolumeRecord]) -> PathBuf {
+    let current = PathBuf::from(&watch.path);
+    if current.is_dir() {
+        return current;
+    }
+    let Some(volume_id) = watch.volume_id else {
+        return current;
+    };
+    let Some(volume) = volumes.iter().find(|item| item.id == volume_id) else {
+        return current;
+    };
+    let Some(relative) = watch.relative_path.as_deref() else {
+        return current;
+    };
+    volumes::join_mount(&volume.last_mount, relative)
+}
+
+pub fn export_media(library: &Library, paths: &[String], destination: &str) -> Result<ExportReport, DbError> {
+    let dest = Path::new(destination);
+    std::fs::create_dir_all(dest)?;
+    let mut report = ExportReport::default();
+    for path in paths {
+        let mut record = match library.find_by_path(path)? {
+            Some(record) => record,
+            None => {
+                report.missing.push(format!("{path}: not in the library"));
+                continue;
+            }
+        };
+        hydrate_origins(library, std::slice::from_mut(&mut record));
+        thumbs::attach_sidecars(&mut record);
+        let source = Path::new(&record.file_path);
+        if source.is_file() {
+            copy_named(source, dest, source.file_name().unwrap_or_default(), &mut report.originals)?;
+            continue;
+        }
+        if let Some(proxy) = record.proxy_path.as_deref().or(record.thumbnail_path.as_deref()) {
+            let proxy_path = Path::new(proxy);
+            if proxy_path.is_file() {
+                let stem = source.file_stem().and_then(|name| name.to_str()).unwrap_or("frame");
+                let name = format!("{stem}-720.jpg");
+                copy_named(proxy_path, dest, std::ffi::OsStr::new(&name), &mut report.proxies)?;
+                if let Some(hint) = record.plug_hint {
+                    report.missing.push(hint);
+                }
+                continue;
+            }
+        }
+        report.missing.push(
+            record
+                .plug_hint
+                .unwrap_or_else(|| format!("Plug the drive back in to export {path}")),
+        );
+    }
+    Ok(report)
+}
+
+fn copy_named(
+    source: &Path,
+    dest: &Path,
+    name: &std::ffi::OsStr,
+    count: &mut usize,
+) -> Result<(), DbError> {
+    let mut target = dest.join(name);
+    if target.exists() {
+        let stem = Path::new(name)
+            .file_stem()
+            .and_then(|part| part.to_str())
+            .unwrap_or("frame");
+        let ext = Path::new(name)
+            .extension()
+            .and_then(|part| part.to_str())
+            .unwrap_or("");
+        target = dest.join(format!("{stem}-{count}.{ext}"));
+    }
+    std::fs::copy(source, target)?;
+    *count += 1;
+    Ok(())
 }
 
 fn push_note(errors: &mut Vec<String>, message: String) {
@@ -296,6 +510,10 @@ mod tests {
         assert_eq!(media[0].file_size, 10);
         assert_eq!(media[0].content_hash.as_ref().unwrap().len(), 64);
         assert!(media[0].exif.is_none());
+        assert!(media[0].volume_id.is_some());
+        assert!(media[0].relative_path.as_ref().is_some_and(|path| path.ends_with("a.jpg")));
+        assert_eq!(library.list_watches().unwrap().len(), 1);
+        assert_eq!(library.list_volumes().unwrap().len(), 1);
 
         let rated = library.set_rating(&media[0].file_path, Some(5)).unwrap();
         assert_eq!(rated.rating, Some(5));
@@ -350,6 +568,37 @@ mod tests {
         names.sort();
         assert!(names.iter().any(|path| path.ends_with("still.jpg")));
         assert!(names.iter().any(|path| path.ends_with("clip.mp4")));
+    }
+
+    #[test]
+    fn remembered_drive_can_go_offline_without_losing_the_row() {
+        let disk = tempfile::tempdir().unwrap();
+        let photo = disk.path().join("cam").join("a.jpg");
+        std::fs::create_dir_all(photo.parent().unwrap()).unwrap();
+        std::fs::write(&photo, b"jpeg-bytes").unwrap();
+        let database = tempfile::tempdir().unwrap();
+        let library = Library::open(database.path().join("library.sqlite")).unwrap();
+        index_directory(&library, disk.path()).unwrap();
+
+        let mut media = library.list_media().unwrap();
+        hydrate_origins(&library, &mut media);
+        assert!(media[0].original_online);
+        let id = media[0].id;
+        let fingerprint = library.list_volumes().unwrap()[0].fingerprint.clone();
+        library
+            .upsert_volume(&fingerprint, "Drive E", "/Volumes/missing-disk")
+            .unwrap();
+
+        let mut media = library.list_media().unwrap();
+        hydrate_origins(&library, &mut media);
+        assert_eq!(media[0].id, id);
+        assert!(!media[0].original_online);
+        assert!(
+            media[0]
+                .plug_hint
+                .as_ref()
+                .is_some_and(|hint| hint.contains("Drive E"))
+        );
     }
 
     #[test]

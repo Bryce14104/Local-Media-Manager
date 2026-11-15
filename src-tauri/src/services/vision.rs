@@ -1383,6 +1383,8 @@ mod tests {
                 media_kind: crate::models::MediaKind::Image,
                 exif_json: None,
                 captured_at: None,
+            volume_id: None,
+            relative_path: None,
             })
             .unwrap();
         recognize_library(&library, |_, _, _| {}).unwrap();
@@ -1449,6 +1451,8 @@ mod tests {
                     media_kind: crate::models::MediaKind::Image,
                     exif_json: None,
                     captured_at: None,
+            volume_id: None,
+            relative_path: None,
                 })
                 .unwrap();
         }

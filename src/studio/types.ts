@@ -66,6 +66,11 @@ export type StudioItem = {
   playUrl?: string | null;
   playFile?: string | null;
   inspectUrl?: string | null;
+  originalUrl?: string | null;
+  originalOnline: boolean;
+  plugHint: string | null;
+  volumeId: number | null;
+  volumeLabel: string | null;
   faces: FaceMark[];
   subjects: SubjectTag[];
   colorLabel: ColorLabel | null;
@@ -111,7 +116,10 @@ export type Filter =
   | { kind: "duplicates"; ids: string[] }
   | { kind: "recent" }
   | { kind: "keyword"; value: string }
-  | { kind: "album"; albumId: number; ids: string[]; label: string };
+  | { kind: "album"; albumId: number; ids: string[]; label: string }
+  | { kind: "volume"; volumeId: number; label: string }
+  | { kind: "folder"; path: string; label: string }
+  | { kind: "offline" };
 
 export type ActiveFilter = Filter & { id: string };
 

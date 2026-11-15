@@ -45,6 +45,11 @@ export async function itemsFromFiles(
       proxyUrl: meta.proxyUrl,
       playUrl: meta.playUrl,
       inspectUrl: meta.inspectUrl,
+      originalUrl: meta.inspectUrl,
+      originalOnline: true,
+      plugHint: null,
+      volumeId: null,
+      volumeLabel: null,
       sourcePath: null,
       faces: [],
       subjects: [],
@@ -96,7 +101,7 @@ async function readFileMeta(
   if (format === "jpg" && STILL.has(extensionOf(file.name))) {
     const inspectUrl = URL.createObjectURL(file);
     const previewUrl = await scaledUrl(file, 480, 0.72);
-    const proxyUrl = (await scaledUrl(file, 1920, 0.82)) ?? previewUrl;
+    const proxyUrl = (await scaledUrl(file, 1280, 0.82)) ?? previewUrl;
     return {
       capturedAt,
       camera,
@@ -113,7 +118,7 @@ async function readFileMeta(
   const blob = new Blob([copy.buffer], { type: "image/jpeg" });
   const inspectUrl = URL.createObjectURL(blob);
   const previewUrl = (await scaledUrl(blob, 480, 0.72)) ?? inspectUrl;
-  const proxyUrl = (await scaledUrl(blob, 1920, 0.82)) ?? previewUrl;
+  const proxyUrl = (await scaledUrl(blob, 1280, 0.82)) ?? previewUrl;
   return { capturedAt, camera, previewUrl, proxyUrl, playUrl: null, inspectUrl, gps: gps ?? readGps(embedded) };
 }
 
@@ -374,7 +379,7 @@ function posterFromVideo(url: string): Promise<string | null> {
         finish(null);
         return;
       }
-      const scale = Math.min(1, 1920 / Math.max(width, height));
+      const scale = Math.min(1, 1280 / Math.max(width, height));
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.round(width * scale));
       canvas.height = Math.max(1, Math.round(height * scale));

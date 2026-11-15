@@ -154,6 +154,13 @@ export function InspectorPanel({
                 </button>
               ) : null}
             </div>
+            {item.volumeLabel ? (
+              <p className="text-xs text-mute">
+                {item.originalOnline
+                  ? `${item.volumeLabel} is connected`
+                  : item.plugHint ?? `Plug in ${item.volumeLabel} for the original`}
+              </p>
+            ) : null}
             <div className="flex flex-wrap gap-1.5">
               <Tag>{formatLabel(item.format)}</Tag>
               <Tag>{item.camera}</Tag>

@@ -246,6 +246,12 @@ export function filterLabel(filter: ActiveFilter): string {
       return `#${filter.value}`;
     case "album":
       return filter.label;
+    case "volume":
+      return filter.label;
+    case "folder":
+      return filter.label;
+    case "offline":
+      return "Original offline";
   }
 }
 
@@ -448,6 +454,12 @@ function matchesOne(item: StudioItem, filter: Filter): boolean {
         || item.notes.toLowerCase().includes(filter.value.toLowerCase());
     case "album":
       return filter.ids.includes(item.id);
+    case "volume":
+      return item.volumeId === filter.volumeId;
+    case "folder":
+      return (item.sourcePath ?? item.folder).replace(/\\/g, "/").startsWith(filter.path.replace(/\\/g, "/"));
+    case "offline":
+      return !item.originalOnline;
   }
 }
 
@@ -489,6 +501,12 @@ function filterKey(filter: Filter): string {
       return `keyword:${filter.value.toLowerCase()}`;
     case "album":
       return `album:${filter.albumId}`;
+    case "volume":
+      return `volume:${filter.volumeId}`;
+    case "folder":
+      return `folder:${filter.path}`;
+    case "offline":
+      return "offline";
   }
 }
 
