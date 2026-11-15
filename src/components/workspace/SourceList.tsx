@@ -30,29 +30,26 @@ export function SourceList({
   const grouped = groupWatches(volumes, watches);
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-b border-line bg-studio md:h-full md:w-64 md:border-b-0 md:border-r">
-      <div className="px-3 pb-2 pt-3">
+    <aside className="flex max-h-40 w-full shrink-0 flex-col border-b border-line bg-studio md:h-full md:max-h-none md:w-44 md:border-b-0 md:border-r">
+      <div className="px-1.5 pb-1 pt-1.5">
         <button
           type="button"
           onClick={onClear}
           className={rowClass(!source)}
         >
-          <span className="grid h-7 w-7 place-items-center rounded-lg bg-raised text-teal">
+          <span className="grid h-5 w-5 place-items-center rounded-md bg-raised text-teal">
             <LibraryIcon />
           </span>
-          <span className="min-w-0 flex-1 text-left">
-            <span className="block truncate text-[13px] font-medium text-foam">All photos</span>
-            <span className="block text-[11px] text-mute">Everything in the catalog</span>
-          </span>
+          <span className="min-w-0 flex-1 truncate text-left text-[12px] font-medium text-foam">All photos</span>
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-5 overflow-auto px-3 pb-3">
+      <div className="min-h-0 flex-1 space-y-3 overflow-auto px-1.5 pb-2">
         <section>
           <Header title="Drives" />
           {volumes.length === 0 ? (
-            <p className="px-1 pt-1 text-[12px] leading-relaxed text-mute">
-              Add a folder from a disk. Shelf remembers the drive so you can unplug it and keep browsing the 720p copies.
+            <p className="px-1 pt-0.5 text-[11px] leading-snug text-mute">
+              Add a folder. Shelf remembers the disk.
             </p>
           ) : (
             <ul className="space-y-1">
@@ -74,24 +71,19 @@ export function SourceList({
                       }
                       className={rowClass(active)}
                     >
-                      <span className="relative grid h-7 w-7 place-items-center rounded-lg bg-raised">
+                      <span className="relative grid h-5 w-5 place-items-center rounded-md bg-raised">
                         <DriveIcon />
                         <span
-                          className={`absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full ${
+                          className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ${
                             volume.online ? "bg-teal" : "bg-mute"
                           }`}
                         />
                       </span>
-                      <span className="min-w-0 flex-1 text-left">
-                        <span className="block truncate text-[13px] text-foam">{volume.label}</span>
-                        <span className="block truncate text-[11px] text-mute">
-                          {volume.online ? "Connected" : "Unplugged"}
-                        </span>
-                      </span>
+                      <span className="min-w-0 flex-1 truncate text-left text-[12px] text-foam">{volume.label}</span>
                       <Count value={volume.mediaCount} />
                     </button>
                     {folders.length > 0 ? (
-                      <ul className="ml-4 border-l border-line pl-2 pt-0.5">
+                      <ul className="ml-3 border-l border-line pl-1.5">
                         {folders.map((watch) => {
                           const name = folderName(watch.path);
                           const folderActive = source?.kind === "folder" && source.path === watch.path;
@@ -108,9 +100,9 @@ export function SourceList({
                                     label: name,
                                   })
                                 }
-                                className={rowClass(folderActive, "py-1.5")}
+                                className={rowClass(folderActive, "py-1")}
                               >
-                                <span className="min-w-0 flex-1 truncate pl-1 text-left text-[12px]">{name}</span>
+                                <span className="min-w-0 flex-1 truncate pl-0.5 text-left text-[11px]">{name}</span>
                               </button>
                             </li>
                           );
@@ -142,10 +134,10 @@ export function SourceList({
                       }
                       className={rowClass(active)}
                     >
-                      <span className="grid h-7 w-7 place-items-center rounded-lg bg-raised text-mute">
+                      <span className="grid h-5 w-5 place-items-center rounded-md bg-raised text-mute">
                         <FolderIcon />
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-left text-[13px]">{name}</span>
+                      <span className="min-w-0 flex-1 truncate text-left text-[12px]">{name}</span>
                     </button>
                   </li>
                 );
@@ -157,7 +149,7 @@ export function SourceList({
         <section>
           <Header title="Albums" />
           {albums.length === 0 ? (
-            <p className="px-1 pt-1 text-[12px] leading-relaxed text-mute">Albums you make will show up here.</p>
+            <p className="px-1 pt-0.5 text-[11px] leading-snug text-mute">None yet.</p>
           ) : (
             <ul className="space-y-0.5">
               {albums.map((album) => {
@@ -165,10 +157,10 @@ export function SourceList({
                 return (
                   <li key={album.id}>
                     <button type="button" onClick={() => onOpenAlbum(album)} className={rowClass(active)}>
-                      <span className="grid h-7 w-7 place-items-center rounded-lg bg-raised text-mute">
+                      <span className="grid h-5 w-5 place-items-center rounded-md bg-raised text-mute">
                         <AlbumIcon />
                       </span>
-                      <span className="min-w-0 flex-1 truncate text-left text-[13px]">{album.name}</span>
+                      <span className="min-w-0 flex-1 truncate text-left text-[12px]">{album.name}</span>
                       <Count value={album.count} />
                     </button>
                   </li>
@@ -179,22 +171,22 @@ export function SourceList({
         </section>
       </div>
 
-      <div className="mt-auto flex gap-1 border-t border-line p-2">
+      <div className="mt-auto flex gap-0.5 border-t border-line p-1">
         <button
           type="button"
           onClick={onAddFolder}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[12px] text-foam hover:bg-raised"
+          className="flex flex-1 items-center justify-center gap-1 rounded-md px-1 py-1.5 text-[11px] text-foam hover:bg-raised"
         >
           <PlusIcon />
-          Folder
+          Add
         </button>
         <button
           type="button"
           onClick={onRescan}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-[12px] text-foam hover:bg-raised"
+          className="flex flex-1 items-center justify-center gap-1 rounded-md px-1 py-1.5 text-[11px] text-foam hover:bg-raised"
         >
           <ScanIcon />
-          Rescan
+          Scan
         </button>
       </div>
     </aside>
@@ -203,7 +195,7 @@ export function SourceList({
 
 function Header({ title }: { title: string }) {
   return (
-    <p className="px-1 pb-1.5 text-[10px] font-medium uppercase tracking-[0.18em] text-mute/80">{title}</p>
+    <p className="px-1 pb-1 text-[9px] font-medium uppercase tracking-[0.16em] text-mute/80">{title}</p>
   );
 }
 
@@ -212,7 +204,7 @@ function Count({ value }: { value: number }) {
 }
 
 function rowClass(active: boolean, extra = "") {
-  return `flex w-full items-center gap-2.5 rounded-xl px-1.5 py-1.5 text-mute transition-colors ${extra} ${
+  return `flex w-full items-center gap-1.5 rounded-lg px-1 py-1 text-mute transition-colors ${extra} ${
     active ? "bg-raised text-foam" : "hover:bg-raised/70 hover:text-foam"
   }`;
 }
