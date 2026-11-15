@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { desktopBridgeAvailable, writeBytes } from "../../lib/api";
 import {
-  analyzeFrame,
   applyDevelop,
-  autoDevelop,
+  autoGradeFromUrls,
   developSourceUrls,
+  gradeHint,
   isNeutralDevelop,
   loadDevelopImage,
   NEUTRAL_DEVELOP,
@@ -32,11 +32,17 @@ export function DevelopStudio({
   settings,
   onChange,
   onClose,
+  peers = [],
+  onPick,
+  onAutoEach,
 }: {
   item: StudioItem;
   settings: DevelopSettings;
   onChange: (settings: DevelopSettings) => void;
   onClose: () => void;
+  peers?: StudioItem[];
+  onPick?: (id: string) => void;
+  onAutoEach?: () => void;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -177,31 +183,9 @@ export function DevelopStudio({
   }
 
   function runAuto() {
-    const canvas = canvasRef.current;
-    const image = imageRef.current;
-    if (!image || !canvas) return;
-    const probe = document.createElement("canvas");
-    const cropRect = settings.crop ?? { x: 0, y: 0, width: 1, height: 1 };
-    const sw = Math.max(1, cropRect.width * image.naturalWidth);
-    const sh = Math.max(1, cropRect.height * image.naturalHeight);
-    const scale = Math.min(1, 720 / Math.max(sw, sh));
-    probe.width = Math.max(1, Math.round(sw * scale));
-    probe.height = Math.max(1, Math.round(sh * scale));
-    const ctx = probe.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return;
-    ctx.drawImage(
-      image,
-      cropRect.x * image.naturalWidth,
-      cropRect.y * image.naturalHeight,
-      sw,
-      sh,
-      0,
-      0,
-      probe.width,
-      probe.height,
-    );
-    const next = autoDevelop(analyzeFrame(ctx.getImageData(0, 0, probe.width, probe.height)), settings.crop, settings.straighten);
-    onChange(next);
+    void autoGradeFromUrls(sources, settings.crop, settings.straighten)
+      .then(onChange)
+      .catch(() => undefined);
   }
 
   async function exportCopy() {
@@ -238,14 +222,23 @@ export function DevelopStudio({
     <div className="fixed inset-0 z-[60] flex flex-col bg-[#0b0d10] text-foam">
       <header className="flex flex-wrap items-center gap-2 border-b border-white/10 px-3 py-2">
         <p className="mr-auto min-w-0">
-          <span className="block truncate text-sm">{item.fileName}</span>
-          <span className="text-[11px] text-mute">Develop · non-destructive · Auto reads this frame</span>
+          <span className="block truncate text-sm">
+            {peers.length > 1 ? `Batch · ${peers.length} files` : item.fileName}
+          </span>
+          <span className="text-[11px] text-mute">
+            {peers.length > 1
+              ? "Sliders copy this grade to every selected file. Crop stays per frame. RAW, DNG, and video use their previews."
+              : gradeHint(item)}
+          </span>
         </p>
         <ToolButton label="Crop" pressed={tool === "crop"} onClick={() => setTool("crop")} />
         <ToolButton label="Adjust" pressed={tool === "adjust"} onClick={() => setTool("adjust")} />
         <span className="hidden h-5 w-px bg-white/10 sm:block" />
         <ToolButton label="Auto" onClick={runAuto} accent />
-        <ToolButton label="Reset" onClick={() => onChange({ ...NEUTRAL_DEVELOP })} disabled={isNeutralDevelop(settings)} />
+        {peers.length > 1 && onAutoEach ? (
+          <ToolButton label="Auto all" onClick={onAutoEach} />
+        ) : null}
+        <ToolButton label="Reset" onClick={() => onChange({ ...NEUTRAL_DEVELOP, crop: settings.crop, straighten: settings.straighten })} disabled={isNeutralDevelop(settings)} />
         <ToolButton label="Before" pressed={compare === "before"} onClick={() => setCompare("before")} />
         <ToolButton label="Split" pressed={compare === "split"} onClick={() => setCompare("split")} />
         <ToolButton label="After" pressed={compare === "after"} onClick={() => setCompare("after")} />
@@ -258,6 +251,24 @@ export function DevelopStudio({
           Done
         </button>
       </header>
+
+      {peers.length > 1 ? (
+        <div className="flex gap-1 overflow-x-auto border-b border-white/10 px-3 py-2">
+          {peers.map((peer) => (
+            <button
+              key={peer.id}
+              type="button"
+              title={peer.fileName}
+              onClick={() => onPick?.(peer.id)}
+              className={`h-12 w-12 shrink-0 overflow-hidden rounded-md ${
+                peer.id === item.id ? "ring-2 ring-teal" : "opacity-70 hover:opacity-100"
+              }`}
+            >
+              {peer.previewUrl ? <img src={peer.previewUrl} alt="" className="h-full w-full object-cover" /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
         <div ref={stageRef} className="relative grid min-h-0 min-w-0 flex-1 place-items-center overflow-hidden bg-[#08090c]">

@@ -73,13 +73,13 @@ export function InspectorPanel({
             <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-studio">
               <ProgressiveMedia item={item} fit="contain" playback="hold" />
             </div>
-            {onEdit && item.format !== "video" ? (
+            {onEdit ? (
               <button
                 type="button"
                 onClick={onEdit}
                 className="w-full rounded-full bg-teal px-3 py-2 text-sm font-medium text-teal-ink"
               >
-                Develop photo
+                {item.format === "video" ? "Grade clip" : "Develop"}
               </button>
             ) : null}
             <Stars rating={item.rating} onChange={onRate} />

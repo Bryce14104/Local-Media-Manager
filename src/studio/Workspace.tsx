@@ -50,7 +50,13 @@ import { itemsFromFiles } from "./previews";
 import { clampGridZoom, readGridZoom, writeGridZoom } from "./gridZoom";
 import { applyInsights } from "./insights";
 import { applySelection, type PointerMods } from "./selection";
-import { isNeutralDevelop, type DevelopSettings } from "./develop";
+import {
+  applyGrade,
+  autoGradeFromUrls,
+  developSourceUrls,
+  isNeutralDevelop,
+  type DevelopSettings,
+} from "./develop";
 import { readSlideshowSettings, writeSlideshowSettings, type SlideshowSettings } from "./slideshow";
 import type { MapZoom } from "./mapRegions";
 import { applySearchMode, filterLabel, matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
@@ -91,6 +97,7 @@ export function Workspace() {
   const [sort, setSort] = useState<SortKey>("captured");
   const [slideshow, setSlideshow] = useState(readSlideshowSettings);
   const [developOpen, setDevelopOpen] = useState(false);
+  const [batchDevelop, setBatchDevelop] = useState(false);
   const [preset, setPreset] = useState<LayoutPreset>("browse");
   const [panelMode, setPanelMode] = useState<PanelMode>("hidden");
   const [panelCollapsed, setPanelCollapsed] = useState(false);
@@ -312,8 +319,9 @@ export function Workspace() {
       if (typing || modal || confirmDelete) return;
       if ((event.key === "e" || event.key === "E") && lightboxId && !developOpen) {
         const current = items.find((item) => item.id === lightboxId);
-        if (current && current.format !== "video") {
+        if (current) {
           event.preventDefault();
+          setBatchDevelop(false);
           setDevelopOpen(true);
           return;
         }
@@ -662,6 +670,7 @@ export function Workspace() {
     if (!id) return;
     setWantOriginal(false);
     setDevelopOpen(false);
+    setBatchDevelop(false);
     lightboxIdRef.current = null;
     setLightboxId(null);
     requestAnimationFrame(() => {
@@ -746,12 +755,70 @@ export function Workspace() {
     });
   }
 
-  function saveDevelop(id: string, next: DevelopSettings) {
-    setItems((current) => current.map((item) => (item.id === id ? { ...item, develop: next } : item)));
+  function persistDevelop(id: string, next: DevelopSettings) {
     const path = items.find((item) => item.id === id)?.sourcePath;
     if (!path || !desktopBridgeAvailable()) return;
     const payload = isNeutralDevelop(next) ? null : JSON.stringify(next);
     void setDevelop(path, payload).catch(() => undefined);
+  }
+
+  function saveDevelop(id: string, next: DevelopSettings) {
+    if (batchDevelop && selectedIds.length > 1) {
+      const chosen = new Set(selectedIds);
+      setItems((current) =>
+        current.map((item) => {
+          if (!chosen.has(item.id)) return item;
+          if (item.id === id) return { ...item, develop: next };
+          return { ...item, develop: applyGrade(item.develop, next) };
+        }),
+      );
+      for (const item of items) {
+        if (!chosen.has(item.id)) continue;
+        persistDevelop(item.id, item.id === id ? next : applyGrade(item.develop, next));
+      }
+      return;
+    }
+    setItems((current) => current.map((item) => (item.id === id ? { ...item, develop: next } : item)));
+    persistDevelop(id, next);
+  }
+
+  function openBatchEdit() {
+    const first = items.find((item) => selectedIds.includes(item.id));
+    if (!first) return;
+    setBatchDevelop(selectedIds.length > 1);
+    setPrimaryId(first.id);
+    lightboxIdRef.current = first.id;
+    setLightboxId(first.id);
+    setDevelopOpen(true);
+  }
+
+  async function autoGradeSelection() {
+    const chosen = items.filter((item) => selectedIds.includes(item.id));
+    if (chosen.length === 0) return;
+    setTelemetry((current) => ({
+      ...current,
+      scanLabel: `Auto grading ${chosen.length} file${chosen.length === 1 ? "" : "s"}`,
+    }));
+    const updates = new Map<string, DevelopSettings>();
+    for (const item of chosen) {
+      try {
+        const next = await autoGradeFromUrls(developSourceUrls(item), item.develop.crop, item.develop.straighten);
+        updates.set(item.id, next);
+      } catch {
+        // Skip files without a readable preview.
+      }
+    }
+    setItems((current) =>
+      current.map((item) => {
+        const next = updates.get(item.id);
+        return next ? { ...item, develop: next } : item;
+      }),
+    );
+    for (const [id, next] of updates) persistDevelop(id, next);
+    setTelemetry((current) => ({
+      ...current,
+      scanLabel: `Auto graded ${updates.size} of ${chosen.length}`,
+    }));
   }
 
   function changeSlideshow(next: SlideshowSettings) {
@@ -1205,9 +1272,10 @@ export function Workspace() {
               })
             }
             onEdit={
-              primary && primary.format !== "video"
+              primary
                 ? () => {
                     viewItem(primary.id);
+                    setBatchDevelop(false);
                     setDevelopOpen(true);
                   }
                 : undefined
@@ -1239,9 +1307,10 @@ export function Workspace() {
             })
           }
           onEdit={
-            primary && primary.format !== "video"
+            primary
               ? () => {
                   viewItem(primary.id);
+                  setBatchDevelop(false);
                   setDevelopOpen(true);
                 }
               : undefined
@@ -1257,6 +1326,8 @@ export function Workspace() {
           onRate={(rating) => rateSelected(rating)}
           onRotate={() => selectedIds.forEach((id) => rotateItem(id))}
           onExport={() => void exportCopies()}
+          onBatchEdit={openBatchEdit}
+          onAutoGrade={() => void autoGradeSelection()}
           onRemove={() => void removeSelected()}
           onDelete={() => setConfirmDelete(true)}
           onClear={() => setSelectedIds([])}
@@ -1365,15 +1436,28 @@ export function Workspace() {
           poolIds={lightboxPool.map((frame) => frame.id)}
           slideshow={slideshow}
           onSlideshow={changeSlideshow}
-          onEdit={lightboxItem.format === "video" ? undefined : () => setDevelopOpen(true)}
+          onEdit={() => {
+            setBatchDevelop(false);
+            setDevelopOpen(true);
+          }}
         />
       ) : null}
-      {developOpen && lightboxItem && lightboxItem.format !== "video" ? (
+      {developOpen && lightboxItem ? (
         <DevelopStudio
           item={lightboxItem}
           settings={lightboxItem.develop}
+          peers={batchDevelop ? items.filter((item) => selectedIds.includes(item.id)) : []}
+          onPick={(id) => {
+            lightboxIdRef.current = id;
+            setLightboxId(id);
+            setPrimaryId(id);
+          }}
           onChange={(next) => saveDevelop(lightboxItem.id, next)}
-          onClose={() => setDevelopOpen(false)}
+          onAutoEach={() => void autoGradeSelection()}
+          onClose={() => {
+            setDevelopOpen(false);
+            setBatchDevelop(false);
+          }}
         />
       ) : null}
     </div>

@@ -280,7 +280,7 @@ export function Lightbox({
             immersive ? "ml-auto" : ""
           }`}
         >
-          {onEdit && item.format !== "video" && !immersive ? (
+          {onEdit && !immersive ? (
             <BarLabel onClick={onEdit} accent>
               Edit
             </BarLabel>

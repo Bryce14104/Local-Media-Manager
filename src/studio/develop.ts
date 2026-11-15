@@ -112,6 +112,72 @@ export function parseDevelop(raw: string | null | undefined): DevelopSettings {
   }
 }
 
+const GRADE_KEYS = [
+  "exposure",
+  "contrast",
+  "highlights",
+  "shadows",
+  "whites",
+  "blacks",
+  "temperature",
+  "tint",
+  "vibrance",
+  "saturation",
+  "clarity",
+  "dehaze",
+  "sharpen",
+  "vignette",
+] as const;
+
+/** Copy color grade onto another file without replacing that file's crop. */
+export function applyGrade(target: DevelopSettings, grade: DevelopSettings): DevelopSettings {
+  const next = { ...target };
+  for (const key of GRADE_KEYS) {
+    next[key] = grade[key];
+  }
+  return next;
+}
+
+export function gradeHint(item: { format: string; fileName: string }): string {
+  const name = item.fileName.toLowerCase();
+  if (item.format === "video" || /\.(braw|r3d|ari|mxf)$/.test(name)) {
+    return "Grading the 3 fps proxy. The camera file stays on disk.";
+  }
+  if (item.format === "raw" || /\.(dng|cr2|cr3|nef|arw|orf|rw2|raf|pef|srw)$/.test(name)) {
+    return "Grading the JPEG preview. The RAW/DNG stays on disk.";
+  }
+  return "Non-destructive. Auto reads this frame.";
+}
+
+export async function autoGradeFromUrls(
+  urls: string[],
+  crop: CropRect | null,
+  straighten: number,
+): Promise<DevelopSettings> {
+  const image = await loadDevelopImage(urls);
+  const cropRect = crop ?? { x: 0, y: 0, width: 1, height: 1 };
+  const sw = Math.max(1, cropRect.width * image.naturalWidth);
+  const sh = Math.max(1, cropRect.height * image.naturalHeight);
+  const scale = Math.min(1, 720 / Math.max(sw, sh));
+  const probe = document.createElement("canvas");
+  probe.width = Math.max(1, Math.round(sw * scale));
+  probe.height = Math.max(1, Math.round(sh * scale));
+  const ctx = probe.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return autoDevelop({ mean: 0.45, std: 0.16, pLow: 0.05, pHigh: 0.95, meanR: 0.45, meanG: 0.45, meanB: 0.45, chroma: 0.12 }, crop, straighten);
+  ctx.drawImage(
+    image,
+    cropRect.x * image.naturalWidth,
+    cropRect.y * image.naturalHeight,
+    sw,
+    sh,
+    0,
+    0,
+    probe.width,
+    probe.height,
+  );
+  return autoDevelop(analyzeFrame(ctx.getImageData(0, 0, probe.width, probe.height)), crop, straighten);
+}
+
 export function isNeutralDevelop(settings: DevelopSettings): boolean {
   if (settings.crop && (settings.crop.width < 0.999 || settings.crop.height < 0.999)) return false;
   return (

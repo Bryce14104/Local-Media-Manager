@@ -7,6 +7,8 @@ type SelectionBarProps = {
   onRate: (rating: number | null) => void;
   onRotate: () => void;
   onExport: () => void;
+  onBatchEdit: () => void;
+  onAutoGrade: () => void;
   onRemove: () => void;
   onDelete: () => void;
   onClear: () => void;
@@ -19,6 +21,8 @@ export function SelectionBar({
   onRate,
   onRotate,
   onExport,
+  onBatchEdit,
+  onAutoGrade,
   onRemove,
   onDelete,
   onClear,
@@ -33,6 +37,8 @@ export function SelectionBar({
         <BarButton label="★5" onClick={() => onRate(5)} />
         <BarButton label="Unrate" onClick={() => onRate(null)} />
         <BarButton label="Rotate" onClick={onRotate} />
+        <BarButton label="Batch edit" onClick={onBatchEdit} />
+        <BarButton label="Auto grade" onClick={onAutoGrade} />
         <BarButton label="Export copies" onClick={onExport} />
         <BarButton label="Remove from app" onClick={onRemove} />
         <BarButton label="Delete from disk" onClick={onDelete} disabled={!canDelete} />
