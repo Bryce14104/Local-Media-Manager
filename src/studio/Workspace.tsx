@@ -778,15 +778,7 @@ export function Workspace() {
 
   function applySource(filter: ActiveFilter) {
     setFilters((current) => [
-      ...current.filter(
-        (item) =>
-          item.kind !== "volume" &&
-          item.kind !== "folder" &&
-          item.kind !== "album" &&
-          item.kind !== "offline" &&
-          !(item.kind === "flag" && item.id === "picks") &&
-          !(item.kind === "type" && item.id === "videos"),
-      ),
+      ...current.filter((item) => item.kind !== "volume" && item.kind !== "folder" && item.kind !== "album"),
       filter,
     ]);
   }
@@ -1126,15 +1118,7 @@ export function Workspace() {
             onFilter={applySource}
             onClear={() =>
               setFilters((current) =>
-                current.filter(
-                  (item) =>
-                    item.kind !== "volume" &&
-                    item.kind !== "folder" &&
-                    item.kind !== "album" &&
-                    item.kind !== "offline" &&
-                    item.id !== "picks" &&
-                    item.id !== "videos",
-                ),
+                current.filter((item) => item.kind !== "volume" && item.kind !== "folder" && item.kind !== "album"),
               )
             }
             onRescan={() => {
