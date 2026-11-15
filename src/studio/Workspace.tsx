@@ -1161,6 +1161,7 @@ export function Workspace() {
             volumes={volumes}
             watches={watches}
             albums={albums}
+            items={items}
             filters={filters}
             onFilter={applySource}
             onClear={() =>
@@ -1186,6 +1187,7 @@ export function Workspace() {
             }}
             onAddFolder={() => void browseFolders()}
             onOpenAlbum={(album) => void openAlbum(album)}
+            onOpen={viewItem}
           />
         ) : null}
         {preset === "compare" ? (
