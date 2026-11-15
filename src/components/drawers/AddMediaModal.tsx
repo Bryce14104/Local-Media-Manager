@@ -133,7 +133,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`w-full rounded-2xl border border-line bg-card p-5 ${wide ? "max-w-xl" : "max-w-md"}`}
+        className={`w-full rounded-2xl border border-line bg-card p-5 ${wide ? "max-w-2xl" : "max-w-md"}`}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <h2 className="text-lg font-medium">{title}</h2>
