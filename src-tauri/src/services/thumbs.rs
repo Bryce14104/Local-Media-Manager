@@ -18,6 +18,8 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
+use super::pool::{catalog_threads, map_unordered, video_proxy_threads};
+
 const MAX_EDGE: u32 = 480;
 const PROXY_EDGE: u32 = 1280;
 const MAX_SOURCE: u64 = 80 * 1024 * 1024;
@@ -80,53 +82,99 @@ where
             preview_incomplete(record.thumbnail_path.as_deref(), record.media_kind)
         })
         .collect();
-    let total = pending.len();
+    let jobs: Vec<PreviewJob> = pending
+        .into_iter()
+        .filter_map(|record| {
+            let hash = record.content_hash.clone()?;
+            Some(PreviewJob {
+                record,
+                destination: directory.join(format!("{hash}.jpg")),
+            })
+        })
+        .collect();
+    let total = jobs.len();
+    let workers = catalog_threads();
+    eprintln!(
+        "shelf index: writing {total} previews on {workers} workers ({} logical cores)",
+        std::thread::available_parallelism()
+            .map(|count| count.get())
+            .unwrap_or(1)
+    );
     progress(0, total);
 
     let mut ready = Vec::new();
-    for (index, record) in pending.into_iter().enumerate() {
-        let Some(hash) = record.content_hash.as_deref() else {
-            progress(index + 1, total);
+    let mut done = 0;
+    for item in map_unordered(jobs, workers, |job| build_still_preview(job)) {
+        done += 1;
+        progress(done, total);
+        let Some(item) = item else {
             continue;
         };
-        let destination = directory.join(format!("{hash}.jpg"));
-        eprintln!("shelf index: writing preview {}", record.file_path);
-        if let Err(error) = write_thumbnail(Path::new(&record.file_path), &destination) {
-            eprintln!("shelf index: preview failed for {}: {error}", record.file_path);
-        }
-        if !valid_jpeg(&destination) {
-            progress(index + 1, total);
-            continue;
-        }
         if library
-            .set_thumbnail(&record.file_path, &destination.to_string_lossy())
+            .set_thumbnail(&item.file_path, &item.thumbnail_path)
             .is_err()
         {
-            progress(index + 1, total);
             continue;
         }
-        let (proxy, mut play) = sidecar_ready(&destination);
-        let mut item = ThumbnailReady {
-            id: record.id,
-            file_path: record.file_path,
-            thumbnail_path: destination.to_string_lossy().into_owned(),
-            proxy_path: proxy,
-            play_path: play.clone(),
-            media_kind: record.media_kind,
-        };
         emit(&item);
-        if record.media_kind == MediaKind::Video && play.is_none() {
-            if let Err(error) = write_playable(Path::new(&item.file_path), &play_path(&destination)) {
-                eprintln!("shelf index: playback proxy failed for {}: {error}", item.file_path);
-            }
-            play = existing_file(&play_path(&destination));
-            item.play_path = play;
-            emit(&item);
-        }
         ready.push(item);
-        progress(index + 1, total);
+    }
+
+    let videos: Vec<ThumbnailReady> = ready
+        .iter()
+        .filter(|item| item.media_kind == MediaKind::Video && item.play_path.is_none())
+        .cloned()
+        .collect();
+    if !videos.is_empty() {
+        let proxy_workers = video_proxy_threads();
+        eprintln!(
+            "shelf index: writing {} video proxies on {proxy_workers} workers",
+            videos.len()
+        );
+        for item in map_unordered(videos, proxy_workers, |item| finish_video_proxy(item)) {
+            if item.play_path.is_some() {
+                emit(&item);
+            }
+            if let Some(existing) = ready.iter_mut().find(|row| row.id == item.id) {
+                *existing = item;
+            }
+        }
     }
     ready
+}
+
+struct PreviewJob {
+    record: MediaRecord,
+    destination: PathBuf,
+}
+
+fn build_still_preview(job: PreviewJob) -> Option<ThumbnailReady> {
+    let PreviewJob { record, destination } = job;
+    if let Err(error) = write_thumbnail(Path::new(&record.file_path), &destination) {
+        eprintln!("shelf index: preview failed for {}: {error}", record.file_path);
+        return None;
+    }
+    if !valid_jpeg(&destination) {
+        return None;
+    }
+    let (proxy, play) = sidecar_ready(&destination);
+    Some(ThumbnailReady {
+        id: record.id,
+        file_path: record.file_path,
+        thumbnail_path: destination.to_string_lossy().into_owned(),
+        proxy_path: proxy,
+        play_path: play,
+        media_kind: record.media_kind,
+    })
+}
+
+fn finish_video_proxy(mut item: ThumbnailReady) -> ThumbnailReady {
+    let dest = play_path(Path::new(&item.thumbnail_path));
+    if let Err(error) = write_playable(Path::new(&item.file_path), &dest) {
+        eprintln!("shelf index: playback proxy failed for {}: {error}", item.file_path);
+    }
+    item.play_path = existing_file(&dest);
+    item
 }
 
 pub fn attach_sidecars(record: &mut MediaRecord) {
@@ -198,7 +246,15 @@ fn save_fitted(image: &DynamicImage, edge: u32, destination: &Path) -> Result<()
     if image.width() <= edge && image.height() <= edge {
         return save_jpeg(image, destination);
     }
-    save_jpeg(&image.resize(edge, edge, FilterType::Triangle), destination)
+    let long = image.width().max(image.height());
+    let fitted = if long > edge.saturating_mul(3) {
+        image
+            .resize(edge.saturating_mul(2), edge.saturating_mul(2), FilterType::Nearest)
+            .resize(edge, edge, FilterType::Triangle)
+    } else {
+        image.resize(edge, edge, FilterType::Triangle)
+    };
+    save_jpeg(&fitted, destination)
 }
 
 fn save_jpeg(image: &DynamicImage, destination: &Path) -> Result<(), ThumbError> {
@@ -215,10 +271,17 @@ fn save_jpeg(image: &DynamicImage, destination: &Path) -> Result<(), ThumbError>
 }
 
 fn valid_jpeg(path: &Path) -> bool {
-    let Ok(bytes) = std::fs::read(path) else {
+    let Ok(meta) = std::fs::metadata(path) else {
         return false;
     };
-    bytes.len() > 100 && bytes.starts_with(&[0xff, 0xd8])
+    if meta.len() <= 100 {
+        return false;
+    }
+    let mut header = [0_u8; 2];
+    let Ok(mut file) = File::open(path) else {
+        return false;
+    };
+    file.read_exact(&mut header).is_ok() && header == [0xff, 0xd8]
 }
 
 pub fn decode_preview(source: &Path) -> Result<DynamicImage, ThumbError> {
@@ -233,8 +296,12 @@ pub fn decode_preview(source: &Path) -> Result<DynamicImage, ThumbError> {
     if matches!(kind.as_str(), "jpg" | "jpeg" | "png" | "gif" | "bmp") {
         return decode_still(source);
     }
-    let embedded = extract_largest_jpeg(source).ok_or(ThumbError::Empty)?;
-    image::load_from_memory(&embedded).map_err(|err| ThumbError::Decode(err.to_string()))
+    if let Some(embedded) = extract_largest_jpeg(source)
+        && let Ok(image) = image::load_from_memory(&embedded)
+    {
+        return Ok(image);
+    }
+    grab_video_frame(source)
 }
 
 fn decode_still(source: &Path) -> Result<DynamicImage, ThumbError> {
@@ -277,6 +344,10 @@ fn ffmpeg_bin() -> Option<PathBuf> {
         None
     })
     .clone()
+}
+
+fn ffmpeg_cpu_threads() -> usize {
+    catalog_threads().div_ceil(video_proxy_threads()).max(1)
 }
 
 fn ffmpeg_runs(bin: &Path) -> bool {
@@ -324,16 +395,28 @@ fn grab_at(bin: &Path, source: &Path, seek: &str, out: &Path) -> bool {
 pub fn write_playable(source: &Path, destination: &Path) -> Result<(), ThumbError> {
     let bin = ffmpeg_bin().ok_or_else(|| ThumbError::Decode("ffmpeg is not installed".into()))?;
     let tmp = destination.with_extension("part.mp4");
-    let ok = transcode(&bin, source, &tmp, true) || transcode(&bin, source, &tmp, false);
-    if ok && mp4_file(&tmp) {
-        std::fs::rename(&tmp, destination).map_err(|err| ThumbError::Io(err.to_string()))?;
-        return Ok(());
+    let mut encoders = Vec::new();
+    if cfg!(target_os = "macos") {
+        encoders.push(VideoEncoder::VideoToolbox);
     }
-    let _ = std::fs::remove_file(&tmp);
+    encoders.push(VideoEncoder::X264);
+    for encoder in encoders {
+        if transcode(&bin, source, &tmp, encoder) && mp4_file(&tmp) {
+            std::fs::rename(&tmp, destination).map_err(|err| ThumbError::Io(err.to_string()))?;
+            return Ok(());
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
     Err(ThumbError::Decode("could not write a playable mp4".into()))
 }
 
-fn transcode(bin: &Path, source: &Path, destination: &Path, audio: bool) -> bool {
+#[derive(Clone, Copy)]
+enum VideoEncoder {
+    VideoToolbox,
+    X264,
+}
+
+fn transcode(bin: &Path, source: &Path, destination: &Path, encoder: VideoEncoder) -> bool {
     let mut command = Command::new(bin);
     command
         .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
@@ -344,19 +427,28 @@ fn transcode(bin: &Path, source: &Path, destination: &Path, audio: bool) -> bool
             "-vf",
             "fps=3,scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2",
             "-an",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "28",
-            "-pix_fmt",
-            "yuv420p",
-            "-movflags",
-            "+faststart",
+            "-threads",
+            &ffmpeg_cpu_threads().to_string(),
         ]);
-    let _ = audio;
+    match encoder {
+        VideoEncoder::VideoToolbox => {
+            command.args(["-c:v", "h264_videotoolbox", "-b:v", "2500k", "-allow_sw", "1"]);
+        }
+        VideoEncoder::X264 => {
+            command.args([
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-crf",
+                "28",
+                "-pix_fmt",
+                "yuv420p",
+            ]);
+        }
+    }
     command
+        .args(["-movflags", "+faststart"])
         .arg(destination)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -524,5 +616,39 @@ mod tests {
         let destination = dir.path().join("thumbs").join("frame.jpg");
         write_thumbnail(&source, &destination).unwrap();
         assert!(std::fs::read(&destination).unwrap().starts_with(&[0xff, 0xd8]));
+    }
+
+    #[test]
+    fn missing_previews_are_written_in_parallel() {
+        let photos = tempfile::tempdir().unwrap();
+        let database = tempfile::tempdir().unwrap();
+        let library = crate::db::Library::open(database.path().join("library.sqlite")).unwrap();
+        for index in 0..8 {
+            let path = photos.path().join(format!("frame-{index}.jpg"));
+            let picture = image::RgbImage::from_pixel(
+                48,
+                32,
+                image::Rgb([20 + index as u8 * 10, 80, 140]),
+            );
+            picture.save_with_format(&path, ImageFormat::Jpeg).unwrap();
+            library
+                .upsert_media(crate::db::NewMedia {
+                    file_path: path.to_str().unwrap(),
+                    content_hash: &format!("hash-{index}"),
+                    file_size: 12,
+                    created_at: None,
+                    modified_at: 10,
+                    media_kind: MediaKind::Image,
+                    exif_json: None,
+                    captured_at: None,
+                    volume_id: None,
+                    relative_path: None,
+                })
+                .unwrap();
+        }
+        let ready = generate_missing_thumbnails_with(&library, |_, _| {}, |_| {});
+        assert_eq!(ready.len(), 8);
+        assert!(ready.iter().all(|item| Path::new(&item.thumbnail_path).is_file()));
+        assert!(ready.iter().all(|item| item.proxy_path.is_some()));
     }
 }

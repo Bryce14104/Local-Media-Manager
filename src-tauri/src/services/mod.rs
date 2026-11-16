@@ -3,6 +3,7 @@
 mod capture;
 mod clip;
 mod exif;
+mod pool;
 mod scanner;
 mod thumbs;
 mod vocab;
@@ -40,7 +41,6 @@ pub enum ServiceError {
 
 enum IndexOutcome {
     Indexed { note: Option<String> },
-    Unchanged,
 }
 
 /// Index folders and individual media files.
@@ -188,30 +188,73 @@ where
     let mut unchanged = 0;
     let mut failed = 0;
     let mut errors = Vec::new();
-    for (index, file) in files.iter().enumerate() {
-        match index_one(library, file) {
-            Ok(IndexOutcome::Indexed { note }) => {
-                indexed += 1;
-                eprintln!("shelf index: cataloged {}", file.path_string());
-                if let Some(note) = note {
-                    push_note(&mut errors, note);
-                }
+    let mut done = 0;
+    let mut to_hash = Vec::new();
+
+    for file in files {
+        match plan_index(library, file) {
+            Ok(IndexPlan::Unchanged) => {
+                unchanged += 1;
+                done += 1;
+                progress(done, total);
             }
-            Ok(IndexOutcome::Unchanged) => unchanged += 1,
+            Ok(IndexPlan::Hash(job)) => to_hash.push(job),
             Err(err) => {
                 failed += 1;
                 push_note(&mut errors, err.to_string());
+                done += 1;
+                progress(done, total);
             }
         }
-        progress(index + 1, total);
+    }
+
+    if !to_hash.is_empty() {
+        let workers = pool::catalog_threads();
+        eprintln!(
+            "shelf index: hashing {} files on {workers} workers",
+            to_hash.len()
+        );
+        for result in pool::map_unordered(to_hash, workers, hash_index_job) {
+            match store_hashed(library, result) {
+                Ok(IndexOutcome::Indexed { note }) => {
+                    indexed += 1;
+                    if let Some(note) = note {
+                        push_note(&mut errors, note);
+                    }
+                }
+                Err(err) => {
+                    failed += 1;
+                    push_note(&mut errors, err.to_string());
+                }
+            }
+            done += 1;
+            progress(done, total);
+        }
     }
     (indexed, unchanged, failed, errors)
 }
 
-fn index_one(
-    library: &Library,
-    file: &crate::models::ScannedFile,
-) -> Result<IndexOutcome, ServiceError> {
+enum IndexPlan {
+    Unchanged,
+    Hash(HashJob),
+}
+
+struct HashJob {
+    path: String,
+    file_size: u64,
+    created_at: Option<i64>,
+    modified_at: i64,
+    media_kind: crate::models::MediaKind,
+    volume_id: i64,
+    relative: String,
+}
+
+struct HashResult {
+    job: HashJob,
+    payload: Result<(String, Option<i64>, Option<String>, Option<String>), String>,
+}
+
+fn plan_index(library: &Library, file: &crate::models::ScannedFile) -> Result<IndexPlan, ServiceError> {
     let path = file.path_string();
     let volume = volumes::detect(&file.path);
     let volume_id = library.upsert_volume(&volume.fingerprint, &volume.label, &volume.mount)?;
@@ -250,42 +293,70 @@ fn index_one(
             {
                 library.set_exif_json(&path, &json)?;
             }
-            return Ok(IndexOutcome::Unchanged);
+            return Ok(IndexPlan::Unchanged);
         }
     }
 
-    let hash = hash_file(&file.path)?;
-    let captured_at = capture_unix(&file.path);
-    let (exif_json, note) = match read_exif(&file.path) {
-        Ok(snapshot) => {
-            let mut snapshot = snapshot.filter(|item| !item.is_empty());
-            if let Some(unix) = captured_at {
-                let entry = snapshot.get_or_insert_with(ExifSnapshot::default);
-                entry.captured_at = Some(unix_to_iso(unix));
-            }
-            let json = match snapshot {
-                Some(snapshot) => Some(serde_json::to_string(&snapshot)?),
-                None => None,
-            };
-            (json, None)
-        }
-        Err(err) => (None, Some(format!("{path}: {err}"))),
-    };
-    let Ok(file_size) = i64::try_from(file.file_size) else {
-        return Err(ServiceError::FileTooLarge(path));
-    };
-
-    library.upsert_media(NewMedia {
-        file_path: &path,
-        content_hash: &hash,
-        file_size,
+    Ok(IndexPlan::Hash(HashJob {
+        path,
+        file_size: file.file_size,
         created_at: file.created_at,
         modified_at: file.modified_at,
         media_kind: file.media_kind,
+        volume_id,
+        relative,
+    }))
+}
+
+fn hash_index_job(job: HashJob) -> HashResult {
+    let path = Path::new(&job.path);
+    let payload = (|| {
+        let hash = hash_file(path)?;
+        let captured_at = capture_unix(path);
+        let (exif_json, note) = match read_exif(path) {
+            Ok(snapshot) => {
+                let mut snapshot = snapshot.filter(|item| !item.is_empty());
+                if let Some(unix) = captured_at {
+                    let entry = snapshot.get_or_insert_with(ExifSnapshot::default);
+                    entry.captured_at = Some(unix_to_iso(unix));
+                }
+                let json = match snapshot {
+                    Some(snapshot) => Some(serde_json::to_string(&snapshot)?),
+                    None => None,
+                };
+                (json, None)
+            }
+            Err(err) => (None, Some(format!("{}: {err}", job.path))),
+        };
+        Ok::<_, ServiceError>((hash, captured_at, exif_json, note))
+    })()
+    .map_err(|err| err.to_string());
+    HashResult { job, payload }
+}
+
+fn store_hashed(library: &Library, result: HashResult) -> Result<IndexOutcome, ServiceError> {
+    let HashResult { job, payload } = result;
+    let (hash, captured_at, exif_json, note) = payload.map_err(|err| {
+        ServiceError::Scan(ScanError::Io {
+            path: job.path.clone(),
+            source: std::io::Error::other(err),
+        })
+    })?;
+    let Ok(file_size) = i64::try_from(job.file_size) else {
+        return Err(ServiceError::FileTooLarge(job.path));
+    };
+
+    library.upsert_media(NewMedia {
+        file_path: &job.path,
+        content_hash: &hash,
+        file_size,
+        created_at: job.created_at,
+        modified_at: job.modified_at,
+        media_kind: job.media_kind,
         exif_json: exif_json.as_deref(),
         captured_at,
-        volume_id: Some(volume_id),
-        relative_path: Some(&relative),
+        volume_id: Some(job.volume_id),
+        relative_path: Some(&job.relative),
     })?;
 
     Ok(IndexOutcome::Indexed { note })

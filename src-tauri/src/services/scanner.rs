@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use walkdir::WalkDir;
 
-const HASH_BUFFER: usize = 64 * 1024;
+const HASH_BUFFER: usize = 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum ScanError {
@@ -102,7 +102,7 @@ pub fn describe_file(path: &Path) -> Result<ScannedFile, ScanError> {
 pub fn hash_file(path: &Path) -> Result<String, ScanError> {
     let mut file = File::open(path).map_err(|source| io_error(path, source))?;
     let mut hasher = Sha256::new();
-    let mut buffer = [0_u8; HASH_BUFFER];
+    let mut buffer = vec![0_u8; HASH_BUFFER];
 
     loop {
         let read = file
