@@ -209,25 +209,26 @@ where
     }
 
     if !to_hash.is_empty() {
-        let workers = pool::catalog_threads();
+        let workers = pool::io_threads();
         eprintln!(
-            "shelf index: hashing {} files on {workers} workers",
-            to_hash.len()
+            "shelf index: hashing {} files on {workers} workers ({} logical cores reported)",
+            to_hash.len(),
+            pool::hardware_threads()
         );
+        let mut batch = Vec::new();
         for result in pool::map_unordered(to_hash, workers, hash_index_job) {
-            match store_hashed(library, result) {
-                Ok(IndexOutcome::Indexed { note }) => {
-                    indexed += 1;
-                    if let Some(note) = note {
-                        push_note(&mut errors, note);
-                    }
-                }
-                Err(err) => {
-                    failed += 1;
-                    push_note(&mut errors, err.to_string());
-                }
+            batch.push(result);
+            if batch.len() >= 64 {
+                let count = batch.len();
+                apply_hash_batch(library, &mut batch, &mut indexed, &mut failed, &mut errors);
+                done += count;
+                progress(done, total);
             }
-            done += 1;
+        }
+        if !batch.is_empty() {
+            let count = batch.len();
+            apply_hash_batch(library, &mut batch, &mut indexed, &mut failed, &mut errors);
+            done += count;
             progress(done, total);
         }
     }
@@ -334,7 +335,49 @@ fn hash_index_job(job: HashJob) -> HashResult {
     HashResult { job, payload }
 }
 
-fn store_hashed(library: &Library, result: HashResult) -> Result<IndexOutcome, ServiceError> {
+fn apply_hash_batch(
+    library: &Library,
+    batch: &mut Vec<HashResult>,
+    indexed: &mut usize,
+    failed: &mut usize,
+    errors: &mut Vec<String>,
+) {
+    let rows = std::mem::take(batch);
+    let outcome = library.with_transaction(|conn| {
+        let mut notes: Vec<Result<IndexOutcome, String>> = Vec::with_capacity(rows.len());
+        for result in rows {
+            notes.push(store_hashed_sql(conn, result).map_err(|err| err.to_string()));
+        }
+        Ok(notes)
+    });
+    match outcome {
+        Ok(notes) => {
+            for note in notes {
+                match note {
+                    Ok(IndexOutcome::Indexed { note }) => {
+                        *indexed += 1;
+                        if let Some(note) = note {
+                            push_note(errors, note);
+                        }
+                    }
+                    Err(err) => {
+                        *failed += 1;
+                        push_note(errors, err);
+                    }
+                }
+            }
+        }
+        Err(err) => {
+            *failed += 1;
+            push_note(errors, err.to_string());
+        }
+    }
+}
+
+fn store_hashed_sql(
+    conn: &rusqlite::Connection,
+    result: HashResult,
+) -> Result<IndexOutcome, ServiceError> {
     let HashResult { job, payload } = result;
     let (hash, captured_at, exif_json, note) = payload.map_err(|err| {
         ServiceError::Scan(ScanError::Io {
@@ -346,18 +389,21 @@ fn store_hashed(library: &Library, result: HashResult) -> Result<IndexOutcome, S
         return Err(ServiceError::FileTooLarge(job.path));
     };
 
-    library.upsert_media(NewMedia {
-        file_path: &job.path,
-        content_hash: &hash,
-        file_size,
-        created_at: job.created_at,
-        modified_at: job.modified_at,
-        media_kind: job.media_kind,
-        exif_json: exif_json.as_deref(),
-        captured_at,
-        volume_id: Some(job.volume_id),
-        relative_path: Some(&job.relative),
-    })?;
+    crate::db::Library::upsert_media_on(
+        conn,
+        NewMedia {
+            file_path: &job.path,
+            content_hash: &hash,
+            file_size,
+            created_at: job.created_at,
+            modified_at: job.modified_at,
+            media_kind: job.media_kind,
+            exif_json: exif_json.as_deref(),
+            captured_at,
+            volume_id: Some(job.volume_id),
+            relative_path: Some(&job.relative),
+        },
+    )?;
 
     Ok(IndexOutcome::Indexed { note })
 }

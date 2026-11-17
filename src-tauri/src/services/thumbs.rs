@@ -10,9 +10,10 @@ use crate::db::Library;
 use crate::models::{MediaKind, MediaRecord, ThumbnailReady};
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
-use image::{DynamicImage, ExtendedColorType};
+use image::{DynamicImage, ExtendedColorType, RgbImage};
+use jpeg_decoder::{Decoder, PixelFormat};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -305,6 +306,9 @@ pub fn decode_preview(source: &Path) -> Result<DynamicImage, ThumbError> {
 }
 
 fn decode_still(source: &Path) -> Result<DynamicImage, ThumbError> {
+    if let Ok(image) = decode_jpeg_preview(source) {
+        return Ok(image);
+    }
     if let Ok(image) = image::open(source) {
         return Ok(image);
     }
@@ -312,6 +316,45 @@ fn decode_still(source: &Path) -> Result<DynamicImage, ThumbError> {
         ThumbError::Decode(format!("could not decode {}", source.display()))
     })?;
     image::load_from_memory(&embedded).map_err(|err| ThumbError::Decode(err.to_string()))
+}
+
+fn decode_jpeg_preview(source: &Path) -> Result<DynamicImage, ThumbError> {
+    let file = File::open(source).map_err(|err| ThumbError::Io(err.to_string()))?;
+    let mut decoder = Decoder::new(BufReader::with_capacity(256 * 1024, file));
+    decoder
+        .read_info()
+        .map_err(|err| ThumbError::Decode(err.to_string()))?;
+    if let Some(info) = decoder.info() {
+        let long = info.width.max(info.height);
+        let scale = if long >= 8000 {
+            8
+        } else if long >= 4000 {
+            4
+        } else if long >= 2400 {
+            2
+        } else {
+            1
+        };
+        if scale > 1 {
+            decoder
+                .scale(1, scale)
+                .map_err(|err| ThumbError::Decode(err.to_string()))?;
+        }
+    }
+    let pixels = decoder
+        .decode()
+        .map_err(|err| ThumbError::Decode(err.to_string()))?;
+    let info = decoder
+        .info()
+        .ok_or_else(|| ThumbError::Decode("jpeg had no size".into()))?;
+    let image = match info.pixel_format {
+        PixelFormat::RGB24 => RgbImage::from_raw(info.width as u32, info.height as u32, pixels)
+            .map(DynamicImage::ImageRgb8),
+        PixelFormat::L8 => image::GrayImage::from_raw(info.width as u32, info.height as u32, pixels)
+            .map(DynamicImage::ImageLuma8),
+        PixelFormat::CMYK32 | PixelFormat::L16 => None,
+    };
+    image.ok_or_else(|| ThumbError::Decode("could not pack jpeg pixels".into()))
 }
 
 fn is_video(kind: &str) -> bool {

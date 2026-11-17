@@ -3,15 +3,22 @@
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
-/// About 75% of logical cores, leaving a slice for the window.
-pub fn catalog_threads() -> usize {
-    let cores = std::thread::available_parallelism()
+/// Logical cores, with a floor so a mis-reported 1-core Mac still gets a pool.
+pub fn hardware_threads() -> usize {
+    std::thread::available_parallelism()
         .map(|count| count.get())
-        .unwrap_or(4)
-        .max(1);
-    let target = (cores * 3).div_ceil(4);
-    let leave_ui = cores.saturating_sub(1).max(1);
-    target.clamp(1, leave_ui).max(1)
+        .unwrap_or(8)
+        .max(1)
+}
+
+/// Use every logical core. If the OS reports 1–2, still start a laptop-sized pool.
+pub fn catalog_threads() -> usize {
+    hardware_threads().max(6)
+}
+
+/// Hashing is mostly disk wait; more workers keep the SSD busy.
+pub fn io_threads() -> usize {
+    catalog_threads().saturating_mul(2).clamp(8, 24)
 }
 
 pub fn video_proxy_threads() -> usize {
@@ -32,17 +39,21 @@ where
     let threads = threads.clamp(1, items.len());
     let jobs = Arc::new(Mutex::new(items.into_iter()));
     let work = Arc::new(work);
-    for _ in 0..threads {
+    eprintln!("shelf index: started {threads} catalog workers");
+    for index in 0..threads {
         let tx = tx.clone();
         let jobs = jobs.clone();
         let work = work.clone();
-        std::thread::spawn(move || loop {
-            let job = jobs.lock().unwrap_or_else(|err| err.into_inner()).next();
-            let Some(job) = job else {
-                break;
-            };
-            let _ = tx.send(work(job));
-        });
+        let _ = std::thread::Builder::new()
+            .name(format!("shelf-catalog-{index}"))
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || loop {
+                let job = jobs.lock().unwrap_or_else(|err| err.into_inner()).next();
+                let Some(job) = job else {
+                    break;
+                };
+                let _ = tx.send(work(job));
+            });
     }
     rx
 }
@@ -60,15 +71,8 @@ mod tests {
     }
 
     #[test]
-    fn catalog_threads_use_most_cores() {
-        let cores = std::thread::available_parallelism()
-            .map(|count| count.get())
-            .unwrap_or(1);
-        let workers = catalog_threads();
-        assert!(workers >= 1);
-        assert!(workers <= cores);
-        if cores >= 2 {
-            assert!(workers * 2 >= cores);
-        }
+    fn catalog_threads_never_run_as_one_lane() {
+        assert!(catalog_threads() >= 6);
+        assert!(io_threads() >= catalog_threads());
     }
 }

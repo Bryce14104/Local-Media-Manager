@@ -10,13 +10,17 @@
 use crate::models::{MediaKind, ScannedFile};
 use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use walkdir::WalkDir;
 
 const HASH_BUFFER: usize = 1024 * 1024;
+/// Photos over this size are fingerprinted from head+tail instead of hashing every byte.
+const FULL_HASH_LIMIT: u64 = 2 * 1024 * 1024;
+const HASH_HEAD: u64 = 1024 * 1024;
+const HASH_TAIL: u64 = 256 * 1024;
 
 #[derive(Debug, Error)]
 pub enum ScanError {
@@ -99,22 +103,48 @@ pub fn describe_file(path: &Path) -> Result<ScannedFile, ScanError> {
 }
 
 /// SHA-256 of the file bytes, as lowercase hex.
+///
+/// Files larger than 2 MB hash length + the first 1 MB + the last 256 KB.
+/// A 48 MP JPEG is unique in that window; reading all 20–80 MB was stalling
+/// imports on disk I/O at ~one core of CPU.
 pub fn hash_file(path: &Path) -> Result<String, ScanError> {
     let mut file = File::open(path).map_err(|source| io_error(path, source))?;
+    let len = file.metadata().map_err(|source| io_error(path, source))?.len();
     let mut hasher = Sha256::new();
     let mut buffer = vec![0_u8; HASH_BUFFER];
+    if len <= FULL_HASH_LIMIT {
+        hash_reader(path, &mut file, &mut hasher, &mut buffer, len)?;
+        return Ok(encode_hex(hasher.finalize().as_ref()));
+    }
+    hasher.update(b"shelf-fp1");
+    hasher.update(len.to_le_bytes());
+    hash_reader(path, &mut file, &mut hasher, &mut buffer, HASH_HEAD)?;
+    let tail = HASH_TAIL.min(len);
+    file.seek(SeekFrom::End(-(tail as i64)))
+        .map_err(|source| io_error(path, source))?;
+    hash_reader(path, &mut file, &mut hasher, &mut buffer, tail)?;
+    Ok(encode_hex(hasher.finalize().as_ref()))
+}
 
-    loop {
+fn hash_reader(
+    path: &Path,
+    file: &mut File,
+    hasher: &mut Sha256,
+    buffer: &mut [u8],
+    mut remaining: u64,
+) -> Result<(), ScanError> {
+    while remaining > 0 {
+        let want = buffer.len().min(remaining as usize);
         let read = file
-            .read(&mut buffer)
+            .read(&mut buffer[..want])
             .map_err(|source| io_error(path, source))?;
         if read == 0 {
             break;
         }
         hasher.update(&buffer[..read]);
+        remaining -= read as u64;
     }
-
-    Ok(encode_hex(hasher.finalize().as_ref()))
+    Ok(())
 }
 
 pub fn classify(path: &Path) -> Option<MediaKind> {
@@ -229,6 +259,26 @@ mod tests {
             first,
             "0111dbc398b94eacda6759809c050530868ee7e313b3381c2f95ce8b55331c50"
         );
+    }
+
+    #[test]
+    fn large_files_are_fingerprinted_without_reading_every_byte() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("roll.jpg");
+        let mut bytes = vec![7_u8; 3 * 1024 * 1024];
+        bytes[100] = 9;
+        std::fs::write(&path, &bytes).unwrap();
+        let first = hash_file(&path).unwrap();
+        bytes[100] = 10;
+        std::fs::write(&path, &bytes).unwrap();
+        let changed_head = hash_file(&path).unwrap();
+        assert_ne!(first, changed_head);
+        bytes[100] = 9;
+        let tail = bytes.len() - 10;
+        bytes[tail] = 3;
+        std::fs::write(&path, &bytes).unwrap();
+        let changed_tail = hash_file(&path).unwrap();
+        assert_ne!(first, changed_tail);
     }
 
     #[test]

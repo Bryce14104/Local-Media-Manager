@@ -84,6 +84,9 @@ impl Library {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.pragma_update(None::<&str>, "foreign_keys", "ON")?;
         conn.pragma_update(None::<&str>, "journal_mode", "WAL")?;
+        conn.pragma_update(None::<&str>, "synchronous", "NORMAL")?;
+        conn.pragma_update(None::<&str>, "temp_store", "MEMORY")?;
+        conn.pragma_update(None::<&str>, "cache_size", "-20000")?;
         conn.execute_batch(SCHEMA_SQL)?;
         migrate(&conn)?;
 
@@ -138,8 +141,28 @@ impl Library {
         Ok(record)
     }
 
+    pub fn with_transaction<T, F>(&self, op: F) -> Result<T, DbError>
+    where
+        F: FnOnce(&Connection) -> Result<T, DbError>,
+    {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        let value = op(&tx)?;
+        tx.commit()?;
+        Ok(value)
+    }
+
     pub fn upsert_media(&self, media: NewMedia<'_>) -> Result<(), DbError> {
         let conn = self.lock()?;
+        upsert_media_sql(&conn, media)
+    }
+
+    pub(crate) fn upsert_media_on(conn: &Connection, media: NewMedia<'_>) -> Result<(), DbError> {
+        upsert_media_sql(conn, media)
+    }
+}
+
+fn upsert_media_sql(conn: &Connection, media: NewMedia<'_>) -> Result<(), DbError> {
         conn.execute(
             "INSERT INTO media_files (
                 file_path, content_hash, file_size, created_at, modified_at,
@@ -175,8 +198,9 @@ impl Library {
             ],
         )?;
         Ok(())
-    }
+}
 
+impl Library {
     pub fn upsert_volume(&self, fingerprint: &str, label: &str, mount: &str) -> Result<i64, DbError> {
         let conn = self.lock()?;
         conn.execute(
