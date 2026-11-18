@@ -1,7 +1,7 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { ProgressiveMedia } from "../workspace/ProgressiveMedia";
 import { formatLatitude, formatLongitude } from "../../studio/geo";
-import { formatLabel, isoFill, shutterFill } from "../../studio/query";
+import { cullHintLabel, formatLabel, isoFill, shutterFill } from "../../studio/query";
 import type { PanelMode, StudioItem } from "../../studio/types";
 import { formatBytes, formatTimestamp } from "../../lib/format";
 import { Stars } from "../workspace/Stars";
@@ -92,7 +92,7 @@ export function InspectorPanel({
                 />
               ))}
             </div>
-            {item.cullHint ? <p className="text-xs text-teal">Needs a look · {item.cullHint}</p> : null}
+            {item.cullHint ? <p className="text-xs text-teal">{cullHintLabel(item.cullHint)}</p> : null}
             {onEdit ? (
               <button
                 type="button"

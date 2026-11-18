@@ -28,13 +28,9 @@ pub fn score_library(library: &Library) -> usize {
         let mut hint: Option<&str> = None;
         if let Some(path) = record.thumbnail_path.as_deref()
             && Path::new(path).is_file()
-            && let Some(stats) = luma_stats(Path::new(path))
+            && let Some(stats) = frame_stats(Path::new(path))
         {
-            if stats.mean < 18.0 {
-                hint = Some("dark");
-            } else if stats.laplacian < 12.0 {
-                hint = Some("blur");
-            }
+            hint = classify(&stats);
         }
         if hint.is_none()
             && let Some(embed) = by_id.remove(&record.id)
@@ -57,40 +53,81 @@ pub fn score_library(library: &Library) -> usize {
     scored
 }
 
-struct LumaStats {
+struct FrameStats {
     mean: f32,
     laplacian: f32,
+    peak_laplacian: f32,
+    blue_bias: f32,
 }
 
-fn luma_stats(path: &Path) -> Option<LumaStats> {
+fn classify(stats: &FrameStats) -> Option<&'static str> {
+    if stats.mean < 18.0 {
+        return Some("dark");
+    }
+    if looks_like_water_or_sky(stats) {
+        return None;
+    }
+    if stats.laplacian < 7.0 && stats.peak_laplacian < 22.0 {
+        Some("blur")
+    } else {
+        None
+    }
+}
+
+fn looks_like_water_or_sky(stats: &FrameStats) -> bool {
+    stats.blue_bias > 10.0 && stats.mean > 35.0
+}
+
+pub fn score_jpeg_file(path: &Path) -> Option<&'static str> {
+    classify(&frame_stats(path)?)
+}
+
+fn frame_stats(path: &Path) -> Option<FrameStats> {
     let file = File::open(path).ok()?;
     let mut decoder = Decoder::new(BufReader::new(file));
     let pixels = decoder.decode().ok()?;
     let info = decoder.info()?;
-    let gray = to_gray(&pixels, info.pixel_format, info.width as usize, info.height as usize)?;
-    Some(score_gray(&gray, info.width as usize, info.height as usize))
+    let width = info.width as usize;
+    let height = info.height as usize;
+    let (gray, blue_bias) = to_gray(&pixels, info.pixel_format, width, height)?;
+    let mut stats = score_gray(&gray, width, height);
+    stats.blue_bias = blue_bias;
+    Some(stats)
 }
 
-fn to_gray(pixels: &[u8], format: PixelFormat, width: usize, height: usize) -> Option<Vec<u8>> {
+fn to_gray(pixels: &[u8], format: PixelFormat, width: usize, height: usize) -> Option<(Vec<u8>, f32)> {
     match format {
-        PixelFormat::L8 => Some(pixels.to_vec()),
+        PixelFormat::L8 => Some((pixels.to_vec(), 0.0)),
         PixelFormat::RGB24 => {
             let mut gray = Vec::with_capacity(width * height);
+            let mut sum_r = 0u64;
+            let mut sum_b = 0u64;
+            let mut count = 0u64;
             for chunk in pixels.chunks_exact(3) {
+                sum_r += chunk[0] as u64;
+                sum_b += chunk[2] as u64;
+                count += 1;
                 gray.push(((chunk[0] as u16 * 30 + chunk[1] as u16 * 59 + chunk[2] as u16 * 11) / 100) as u8);
             }
-            Some(gray)
+            let blue_bias = if count == 0 {
+                0.0
+            } else {
+                sum_b as f32 / count as f32 - sum_r as f32 / count as f32
+            };
+            Some((gray, blue_bias))
         }
         PixelFormat::CMYK32 => None,
         _ => None,
     }
 }
 
-fn score_gray(gray: &[u8], width: usize, height: usize) -> LumaStats {
+fn score_gray(gray: &[u8], width: usize, height: usize) -> FrameStats {
     if gray.is_empty() || width < 3 || height < 3 {
-        return LumaStats {
+        return FrameStats {
             mean: 0.0,
             laplacian: 0.0,
+            peak_laplacian: 0.0,
+            blue_bias: 0.0,
         };
     }
     let mut sum = 0u64;
@@ -100,6 +137,11 @@ fn score_gray(gray: &[u8], width: usize, height: usize) -> LumaStats {
     let mean = sum as f32 / gray.len() as f32;
     let mut lap = 0.0f32;
     let mut count = 0u32;
+    let tile = 32.max(width / 8).max(1);
+    let tiles_x = (width + tile - 1) / tile;
+    let tiles_y = (height + tile - 1) / tile;
+    let mut tile_sum = vec![0.0f32; tiles_x * tiles_y];
+    let mut tile_n = vec![0u32; tiles_x * tiles_y];
     for y in 1..height - 1 {
         for x in 1..width - 1 {
             let i = y * width + x;
@@ -109,13 +151,28 @@ fn score_gray(gray: &[u8], width: usize, height: usize) -> LumaStats {
                 + gray[i - width] as i32
                 + gray[i + width] as i32
                 - 4 * center;
-            lap += (value as f32) * (value as f32);
+            let sq = (value as f32) * (value as f32);
+            lap += sq;
             count += 1;
+            let tx = (x / tile).min(tiles_x - 1);
+            let ty = (y / tile).min(tiles_y - 1);
+            let t = ty * tiles_x + tx;
+            tile_sum[t] += sq;
+            tile_n[t] += 1;
         }
     }
-    LumaStats {
+    let mut peak = 0.0f32;
+    for (sum_sq, n) in tile_sum.iter().zip(tile_n) {
+        if n == 0 {
+            continue;
+        }
+        peak = peak.max((sum_sq / n as f32).sqrt());
+    }
+    FrameStats {
         mean,
-        laplacian: if count == 0 { 0.0 } else { lap / count as f32 }.sqrt(),
+        laplacian: if count == 0 { 0.0 } else { (lap / count as f32).sqrt() },
+        peak_laplacian: peak,
+        blue_bias: 0.0,
     }
 }
 
@@ -138,29 +195,53 @@ fn cosine(left: &[f32], right: &[f32]) -> f32 {
     }
 }
 
-pub fn score_jpeg_file(path: &Path) -> Option<&'static str> {
-    let stats = luma_stats(path)?;
-    if stats.mean < 18.0 {
-        Some("dark")
-    } else if stats.laplacian < 12.0 {
-        Some("blur")
-    } else {
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::{DynamicImage, ImageBuffer, Rgb};
 
+    fn save_rgb(path: &std::path::Path, pixel: [u8; 3], w: u32, h: u32) {
+        let image = ImageBuffer::from_pixel(w, h, Rgb(pixel));
+        DynamicImage::ImageRgb8(image).save(path).unwrap();
+    }
+
     #[test]
     fn black_jpeg_is_dark() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("black.jpg");
-        let image = ImageBuffer::from_pixel(64, 48, Rgb([0u8, 0, 0]));
-        let dyn_img = DynamicImage::ImageRgb8(image);
-        dyn_img.save(&path).unwrap();
+        save_rgb(&path, [0, 0, 0], 64, 48);
         assert_eq!(score_jpeg_file(&path), Some("dark"));
+    }
+
+    #[test]
+    fn smooth_water_is_not_blur() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("water.jpg");
+        save_rgb(&path, [28, 96, 168], 96, 64);
+        assert_eq!(score_jpeg_file(&path), None);
+    }
+
+    #[test]
+    fn checkerboard_is_not_blur() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("edges.jpg");
+        let mut image = ImageBuffer::from_pixel(64, 48, Rgb([20u8, 20, 20]));
+        for y in 0..48 {
+            for x in 0..64 {
+                if (x / 4 + y / 4) % 2 == 0 {
+                    image.put_pixel(x, y, Rgb([220, 210, 200]));
+                }
+            }
+        }
+        DynamicImage::ImageRgb8(image).save(&path).unwrap();
+        assert_eq!(score_jpeg_file(&path), None);
+    }
+
+    #[test]
+    fn mushy_gray_is_blur() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mush.jpg");
+        save_rgb(&path, [90, 90, 88], 64, 48);
+        assert_eq!(score_jpeg_file(&path), Some("blur"));
     }
 }

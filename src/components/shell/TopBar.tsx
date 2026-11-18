@@ -136,9 +136,6 @@ export function TopBar({
               onKeyDown={onInputKey}
               className="min-w-0 flex-1 rounded-full border border-line bg-card px-4 py-2 text-sm outline-none placeholder:text-mute focus:border-teal"
             />
-            <span className="hidden shrink-0 rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-mute lg:inline">
-              Ctrl K
-            </span>
             <SmartSearchSwitch checked={aiSearch} onChange={onAiSearch} />
           </div>
           {open && suggestions.length > 0 ? (
@@ -254,21 +251,11 @@ function SmartSearchSwitch({
       data-ai-search={checked ? "on" : "off"}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => onChange(!checked)}
-      className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-1.5 text-[11px] leading-none ${
-        checked ? "border-teal/50 bg-teal/15 text-teal" : "border-line bg-studio text-mute hover:text-foam"
+      className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-[11px] font-medium leading-none ${
+        checked ? "border-teal bg-teal/15 text-teal" : "border-line text-mute hover:text-foam"
       }`}
     >
-      <span aria-hidden className={`relative h-3.5 w-7 shrink-0 rounded-full ${checked ? "bg-teal" : "bg-line"}`}>
-        <span
-          className={`absolute top-0.5 h-2.5 w-2.5 rounded-full bg-studio shadow transition-transform ${
-            checked ? "translate-x-3.5" : "translate-x-0.5"
-          }`}
-        />
-      </span>
-      <span className="pr-0.5 font-medium tracking-wide">
-        <span className="hidden sm:inline">Smart Search</span>
-        <span className="sm:hidden">Smart</span>
-      </span>
+      Smart Search
     </button>
   );
 }

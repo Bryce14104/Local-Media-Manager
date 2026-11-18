@@ -35,21 +35,23 @@ export function FilterRail({
       {onCollapseBursts ? (
         <button
           type="button"
+          title="Show one frame from each burst instead of every shot"
           aria-pressed={collapseBursts}
           onClick={() => onCollapseBursts(!collapseBursts)}
           className={`rounded-full px-2.5 py-1 text-[11px] ${collapseBursts ? "bg-teal text-teal-ink" : "text-mute hover:text-foam"}`}
         >
-          Collapse bursts
+          One per burst
         </button>
       ) : null}
       {onNeedsLook ? (
         <button
           type="button"
+          title="Only frames that look soft, too dark, or almost the same as the last shot. Nothing is deleted."
           aria-pressed={needsLook}
           onClick={() => onNeedsLook(!needsLook)}
           className={`rounded-full px-2.5 py-1 text-[11px] ${needsLook ? "bg-teal text-teal-ink" : "text-mute hover:text-foam"}`}
         >
-          Needs a look
+          Review soft / dark / similar
         </button>
       ) : null}
     </div>

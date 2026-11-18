@@ -27,7 +27,7 @@ const ACTIONS: { action: StudioAction; label: string; hint: string; keywords: st
   { action: "toggle-inspector", label: "Toggle info panel", hint: "Dock, float, or hide", keywords: "toggle inspector info panel exif" },
   { action: "clear-filters", label: "Clear filters", hint: "Show the full roll", keywords: "clear filters reset" },
   { action: "preferences", label: "Preferences", hint: "Library auto-scan, relink, slideshow, or map tiles", keywords: "preferences settings library drives auto scan plug relink slideshow playback map tiles download cache zoom area keyboard" },
-  { action: "help", label: "Help", hint: "How ingest, cull, search, and develop work", keywords: "help guide how to keyboard" },
+  { action: "help", label: "Help", hint: "Short steps for search, cull, and files", keywords: "help guide how to keyboard burst review" },
   { action: "download", label: "Download originals", hint: "Copy full-resolution files onto this computer", keywords: "download copy originals full resolution archive" },
   { action: "slideshow", label: "Slideshow", hint: "Play the current view", keywords: "slideshow play auto" },
   { action: "rotate", label: "Rotate 90°", hint: "Turn the selected frame", keywords: "rotate turn orientation" },
@@ -292,7 +292,7 @@ export function filterLabel(filter: ActiveFilter): string {
     case "offline":
       return "Original offline";
     case "cull":
-      return "Needs a look";
+      return "Review soft / dark / similar";
   }
 }
 
@@ -302,6 +302,14 @@ export function formatMonth(value: string): string {
   const date = new Date(Number(year), Number(month) - 1, 1);
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(date);
+}
+
+export function cullHintLabel(hint: string | null | undefined): string | null {
+  if (!hint) return null;
+  if (hint === "blur") return "Preview looks soft — check water and sky at 1:1";
+  if (hint === "dark") return "Very dark";
+  if (hint === "dupe") return "Similar to the last shot";
+  return hint;
 }
 
 export function formatLabel(format: MediaFormat): string {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from "react";
 import { formatTimestamp } from "../../lib/format";
+import { cullHintLabel } from "../../studio/query";
 import type { SlideshowSettings } from "../../studio/slideshow";
 import type { StudioItem } from "../../studio/types";
 import { ProgressiveMedia } from "./ProgressiveMedia";
@@ -527,7 +528,7 @@ export function Lightbox({
         ) : null}
         {item.cullHint ? (
           <p className="mb-1 text-center text-[11px] uppercase tracking-[0.14em] text-amber-200">
-            Needs a look · {item.cullHint}
+            {cullHintLabel(item.cullHint)}
           </p>
         ) : null}
         {item.format === "video" ? (
