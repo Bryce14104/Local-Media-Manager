@@ -28,7 +28,12 @@ export function ProgressiveMedia({
 }: ProgressiveMediaProps) {
   const stillSrc = item.proxyUrl ?? item.previewUrl ?? null;
   const wantsVideo = item.format === "video";
-  const fullSrc = quality === "full" && item.format !== "video" ? (item.inspectUrl ?? null) : null;
+  const fullSrc =
+    quality === "full" && item.format !== "video"
+      ? item.originalOnline
+        ? (item.originalUrl ?? item.inspectUrl ?? null)
+        : (item.inspectUrl ?? null)
+      : null;
   const [layer, setLayer] = useState<Layer | null>(() => (stillSrc ? { id: item.id, still: stillSrc } : null));
   const [blobSrc, setBlobSrc] = useState<string | null>(null);
   const [fullReady, setFullReady] = useState<string | null>(null);

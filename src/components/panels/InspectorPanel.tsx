@@ -81,6 +81,10 @@ export function InspectorPanel({
               >
                 {item.format === "video" ? "Grade clip" : "Develop"}
               </button>
+            ) : !item.originalOnline ? (
+              <p className="rounded-xl bg-raised px-3 py-2 text-xs text-mute">
+                {item.plugHint ?? "Plug the drive back in to develop this photo."}
+              </p>
             ) : null}
             <Stars rating={item.rating} onChange={onRate} />
             <div className="flex flex-wrap gap-1.5">

@@ -41,6 +41,14 @@ fn path_from_request(request: &Request<Vec<u8>>) -> Option<PathBuf> {
 }
 
 fn serve(path: &Path, request: &Request<Vec<u8>>) -> std::io::Result<Response<Vec<u8>>> {
+    if let Some(jpeg) = camera_preview_jpeg(path) {
+        return Ok(cors(Response::builder().status(StatusCode::OK))
+            .header(header::CONTENT_TYPE, "image/jpeg")
+            .header(header::ACCEPT_RANGES, "none")
+            .header(header::CONTENT_LENGTH, jpeg.len().to_string())
+            .body(jpeg)
+            .unwrap_or_else(|_| empty(StatusCode::OK)));
+    }
     let mut file = File::open(path)?;
     let len = file.metadata()?.len();
     let mime = mime_of(path);
@@ -86,6 +94,21 @@ fn parse_range(header: &str) -> Option<(u64, Option<u64>)> {
     let start = start.parse().ok()?;
     let end = if end.is_empty() { None } else { Some(end.parse().ok()?) };
     Some((start, end))
+}
+
+fn camera_preview_jpeg(path: &Path) -> Option<Vec<u8>> {
+    let kind = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if matches!(
+        kind.as_str(),
+        "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" | "mp4" | "mov" | "m4v" | "mkv" | "avi" | "webm"
+    ) {
+        return None;
+    }
+    crate::services::extract_largest_jpeg(path)
 }
 
 fn mime_of(path: &Path) -> &'static str {
@@ -155,5 +178,22 @@ mod tests {
     fn decodes_a_linux_path() {
         let decoded = percent_decode("%2Fhome%2Fbryce%2Fclip.mp4");
         assert_eq!(decoded, "/home/bryce/clip.mp4");
+    }
+
+    #[test]
+    fn camera_raw_serves_the_embedded_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let jpeg_path = dir.path().join("inner.jpg");
+        let mut picture = image::RgbImage::from_pixel(320, 240, image::Rgb([40, 80, 120]));
+        picture.save_with_format(&jpeg_path, image::ImageFormat::Jpeg).unwrap();
+        let jpeg = std::fs::read(&jpeg_path).unwrap();
+        let mut raw = b"DNG\0".to_vec();
+        raw.extend(std::iter::repeat(0).take(2048));
+        raw.extend_from_slice(&jpeg);
+        let source = dir.path().join("frame.dng");
+        std::fs::write(&source, raw).unwrap();
+        let preview = camera_preview_jpeg(&source).expect("embedded jpeg");
+        assert!(preview.starts_with(&[0xff, 0xd8]));
+        assert!(camera_preview_jpeg(&jpeg_path).is_none());
     }
 }

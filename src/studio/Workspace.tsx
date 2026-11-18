@@ -378,8 +378,10 @@ export function Workspace() {
         const current = items.find((item) => item.id === lightboxId);
         if (current) {
           event.preventDefault();
-          setBatchDevelop(false);
-          setDevelopOpen(true);
+          requireOriginal(current, () => {
+            setBatchDevelop(false);
+            setDevelopOpen(true);
+          });
           return;
         }
       }
@@ -813,7 +815,9 @@ export function Workspace() {
   }
 
   function persistDevelop(id: string, next: DevelopSettings) {
-    const path = items.find((item) => item.id === id)?.sourcePath;
+    const item = items.find((item) => item.id === id);
+    if (!item?.originalOnline) return;
+    const path = item.sourcePath;
     if (!path || !desktopBridgeAvailable()) return;
     const payload = isNeutralDevelop(next) ? null : JSON.stringify(next);
     void setDevelop(path, payload).catch(() => undefined);
@@ -821,7 +825,9 @@ export function Workspace() {
 
   function saveDevelop(id: string, next: DevelopSettings) {
     if (batchDevelop && selectedIds.length > 1) {
-      const chosen = new Set(selectedIds);
+      const chosen = new Set(
+        selectedIds.filter((id) => items.find((item) => item.id === id)?.originalOnline),
+      );
       setItems((current) =>
         current.map((item) => {
           if (!chosen.has(item.id)) return item;
@@ -840,9 +846,13 @@ export function Workspace() {
   }
 
   function openBatchEdit() {
-    const first = items.find((item) => selectedIds.includes(item.id));
-    if (!first) return;
-    setBatchDevelop(selectedIds.length > 1);
+    const first = items.find((item) => selectedIds.includes(item.id) && item.originalOnline);
+    if (!first) {
+      const offline = items.find((item) => selectedIds.includes(item.id));
+      requireOriginal(offline ?? null, () => undefined);
+      return;
+    }
+    setBatchDevelop(selectedIds.filter((id) => items.find((item) => item.id === id)?.originalOnline).length > 1);
     setPrimaryId(first.id);
     lightboxIdRef.current = first.id;
     setLightboxId(first.id);
@@ -850,8 +860,12 @@ export function Workspace() {
   }
 
   async function autoGradeSelection() {
-    const chosen = items.filter((item) => selectedIds.includes(item.id));
-    if (chosen.length === 0) return;
+    const chosen = items.filter((item) => selectedIds.includes(item.id) && item.originalOnline);
+    if (chosen.length === 0) {
+      const offline = items.find((item) => selectedIds.includes(item.id));
+      requireOriginal(offline ?? null, () => undefined);
+      return;
+    }
     setTelemetry((current) => ({
       ...current,
       scanLabel: `Auto grading ${chosen.length} file${chosen.length === 1 ? "" : "s"}`,
@@ -906,7 +920,9 @@ export function Workspace() {
       action();
       return;
     }
-    setPlugHint(item.plugHint ?? `Plug in ${item.volumeLabel ?? "the remembered drive"} to see full resolution`);
+    setPlugHint(
+      item.plugHint ?? `Plug in ${item.volumeLabel ?? "the remembered drive"} to edit or open the original`,
+    );
   }
 
   function applySource(filter: ActiveFilter) {
@@ -1311,7 +1327,7 @@ export function Workspace() {
               })
             }
             onEdit={
-              primary
+              primary?.originalOnline
                 ? () => {
                     viewItem(primary.id);
                     setBatchDevelop(false);
@@ -1346,7 +1362,7 @@ export function Workspace() {
             })
           }
           onEdit={
-            primary
+            primary?.originalOnline
               ? () => {
                   viewItem(primary.id);
                   setBatchDevelop(false);
@@ -1363,6 +1379,7 @@ export function Workspace() {
           canDelete={desktopBridgeAvailable() && items.some((item) => selectedIds.includes(item.id) && item.sourcePath)}
           onRotate={() => selectedIds.forEach((id) => rotateItem(id))}
           onExport={() => void exportCopies()}
+          canEdit={items.some((item) => selectedIds.includes(item.id) && item.originalOnline)}
           onBatchEdit={openBatchEdit}
           onAutoGrade={() => void autoGradeSelection()}
           onRemove={() => void removeSelected()}
@@ -1448,7 +1465,7 @@ export function Workspace() {
         <Lightbox
           item={
             wantOriginal && lightboxItem.originalOnline && lightboxItem.originalUrl
-              ? { ...lightboxItem, inspectUrl: lightboxItem.originalUrl }
+              ? { ...lightboxItem, inspectUrl: lightboxItem.originalUrl, originalUrl: lightboxItem.originalUrl }
               : lightboxItem
           }
           before={lightboxIndex > 0 ? (lightboxPool[lightboxIndex - 1] ?? null) : null}
@@ -1478,13 +1495,17 @@ export function Workspace() {
           poolIds={lightboxPool.map((frame) => frame.id)}
           slideshow={slideshow}
           onSlideshow={changeSlideshow}
-          onEdit={() => {
-            setBatchDevelop(false);
-            setDevelopOpen(true);
-          }}
+          onEdit={
+            lightboxItem.originalOnline
+              ? () => {
+                  setBatchDevelop(false);
+                  setDevelopOpen(true);
+                }
+              : undefined
+          }
         />
       ) : null}
-      {developOpen && lightboxItem ? (
+      {developOpen && lightboxItem?.originalOnline ? (
         <DevelopStudio
           item={lightboxItem}
           settings={lightboxItem.develop}

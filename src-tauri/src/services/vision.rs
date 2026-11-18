@@ -134,9 +134,6 @@ where
     };
     if pending.is_empty() {
         eprintln!("shelf index: no frames waiting for visual tags");
-        if let Err(error) = library.rebuild_concepts() {
-            eprintln!("shelf index: could not write clusters and captions: {error}");
-        }
         return Ok(());
     }
     eprintln!("shelf index: {} frames waiting for a CLIP embedding", pending.len());

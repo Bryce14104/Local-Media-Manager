@@ -93,7 +93,11 @@ where
             })
         })
         .collect();
-    let total = jobs.len();
+    let video_jobs = jobs
+        .iter()
+        .filter(|job| job.record.media_kind == MediaKind::Video)
+        .count();
+    let total = jobs.len() + video_jobs;
     let workers = catalog_threads();
     eprintln!(
         "shelf index: writing {total} previews on {workers} workers ({} logical cores)",
@@ -133,6 +137,8 @@ where
             videos.len()
         );
         for item in map_unordered(videos, proxy_workers, |item| finish_video_proxy(item)) {
+            done += 1;
+            progress(done, total);
             if item.play_path.is_some() {
                 emit(&item);
             }
@@ -218,7 +224,7 @@ pub fn write_thumbnail(source: &Path, destination: &Path) -> Result<(), ThumbErr
     let need_thumb = !valid_jpeg(destination);
     let need_proxy = !valid_jpeg(&proxy_path(destination));
     if need_thumb || need_proxy {
-        let image = decode_preview(source)?;
+        let image = trim_preview(decode_preview(source)?);
         if need_proxy {
             save_fitted(&image, PROXY_EDGE, &proxy_path(destination))?;
         }
@@ -354,7 +360,69 @@ fn decode_jpeg_preview(source: &Path) -> Result<DynamicImage, ThumbError> {
             .map(DynamicImage::ImageLuma8),
         PixelFormat::CMYK32 | PixelFormat::L16 => None,
     };
-    image.ok_or_else(|| ThumbError::Decode("could not pack jpeg pixels".into()))
+    let image = image.ok_or_else(|| ThumbError::Decode("could not pack jpeg pixels".into()))?;
+    Ok(trim_preview(image))
+}
+
+fn trim_preview(image: DynamicImage) -> DynamicImage {
+    let rgb = image.to_rgb8();
+    let pad = right_padding_columns(&rgb);
+    if pad == 0 {
+        return DynamicImage::ImageRgb8(rgb);
+    }
+    let width = rgb.width().saturating_sub(pad).max(1);
+    DynamicImage::ImageRgb8(image::imageops::crop_imm(&rgb, 0, 0, width, rgb.height()).to_image())
+}
+
+fn right_padding_columns(image: &RgbImage) -> u32 {
+    let width = image.width();
+    let height = image.height();
+    if width < 24 || height < 8 {
+        return 0;
+    }
+    let max_pad = 16.min(width.saturating_sub(8));
+    let mut pad = 0;
+    for delta in 1..=max_pad {
+        let x = width - delta;
+        if !column_looks_like_jpeg_padding(image, x) {
+            break;
+        }
+        pad = delta;
+    }
+    if pad < 2 {
+        0
+    } else {
+        pad
+    }
+}
+
+fn column_looks_like_jpeg_padding(image: &RgbImage, x: u32) -> bool {
+    let height = image.height();
+    let step = (height / 32).max(1);
+    let mut samples = 0.0;
+    let mut chroma = 0.0;
+    let mut spread_min: f32 = 255.0;
+    let mut spread_max: f32 = 0.0;
+    let mut green_push = 0.0;
+    for y in (0..height).step_by(step as usize) {
+        let pixel = image.get_pixel(x, y);
+        let red = pixel[0] as f32;
+        let green = pixel[1] as f32;
+        let blue = pixel[2] as f32;
+        let luma = (red + green + blue) / 3.0;
+        chroma += (red - green).abs() + (green - blue).abs() + (blue - red).abs();
+        green_push += green - red.max(blue);
+        spread_min = spread_min.min(luma);
+        spread_max = spread_max.max(luma);
+        samples += 1.0;
+    }
+    if samples < 1.0 {
+        return false;
+    }
+    chroma /= samples;
+    green_push /= samples;
+    let spread = spread_max - spread_min;
+    (chroma > 90.0 && spread < 48.0) || green_push > 36.0
 }
 
 fn is_video(kind: &str) -> bool {
@@ -693,5 +761,18 @@ mod tests {
         assert_eq!(ready.len(), 8);
         assert!(ready.iter().all(|item| Path::new(&item.thumbnail_path).is_file()));
         assert!(ready.iter().all(|item| item.proxy_path.is_some()));
+    }
+
+    #[test]
+    fn neon_strip_on_the_right_is_cropped() {
+        let mut frame = RgbImage::from_pixel(40, 24, image::Rgb([120, 122, 118]));
+        for y in 0..24 {
+            for x in 32..40 {
+                frame.put_pixel(x, y, image::Rgb([0, 255, 40]));
+            }
+        }
+        let trimmed = trim_preview(DynamicImage::ImageRgb8(frame)).to_rgb8();
+        assert_eq!(trimmed.width(), 32, "width after crop {}", trimmed.width());
+        assert_eq!(trimmed.get_pixel(31, 10), &image::Rgb([120, 122, 118]));
     }
 }

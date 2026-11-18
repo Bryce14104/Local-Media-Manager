@@ -10,7 +10,7 @@ mod vocab;
 mod vision;
 pub mod volumes;
 
-pub use thumbs::{attach_sidecars, generate_missing_thumbnails_with};
+pub use thumbs::{attach_sidecars, extract_largest_jpeg, generate_missing_thumbnails_with};
 pub use vision::{recognize_library, search_embeddings, warm_vision};
 
 use crate::db::{DbError, Library, NewMedia};

@@ -166,6 +166,7 @@ pub fn spawn_catalog_jobs(library: Library, app: AppHandle) {
             },
         );
         eprintln!("shelf index: wrote {} previews", ready.len());
+        emit_progress(&app, "vision", 0, 1, "Tagging photos");
         if let Err(error) = services::recognize_library(&library, |done, total, label| {
             emit_progress(&app, "vision", done, total, label);
         }) {

@@ -1,6 +1,7 @@
 type SelectionBarProps = {
   count: number;
   canDelete: boolean;
+  canEdit: boolean;
   onRotate: () => void;
   onExport: () => void;
   onBatchEdit: () => void;
@@ -13,6 +14,7 @@ type SelectionBarProps = {
 export function SelectionBar({
   count,
   canDelete,
+  canEdit,
   onRotate,
   onExport,
   onBatchEdit,
@@ -28,8 +30,19 @@ export function SelectionBar({
           <span className="font-medium text-foam">{count}</span> selected
         </p>
         <Rule />
-        <Action label="Edit" hint="Grade all selected" onClick={onBatchEdit} accent />
-        <Action label="Auto grade" hint="Read each preview" onClick={onAutoGrade} />
+        <Action
+          label="Edit"
+          hint={canEdit ? "Grade all selected" : "Plug the drive in to edit these photos"}
+          onClick={onBatchEdit}
+          accent
+          disabled={!canEdit}
+        />
+        <Action
+          label="Auto grade"
+          hint={canEdit ? "Read each preview" : "Plug the drive in to edit these photos"}
+          onClick={onAutoGrade}
+          disabled={!canEdit}
+        />
         <Action label="Export" hint="Copy files out" onClick={onExport} />
         <Action label="Rotate" hint="Turn 90°" onClick={onRotate} />
         <Rule />
