@@ -292,7 +292,7 @@ export function filterLabel(filter: ActiveFilter): string {
     case "offline":
       return "Original offline";
     case "cull":
-      return "Review soft / dark / similar";
+      return "Review";
   }
 }
 
@@ -306,10 +306,7 @@ export function formatMonth(value: string): string {
 
 export function cullHintLabel(hint: string | null | undefined): string | null {
   if (!hint) return null;
-  if (hint === "blur") return "Preview looks soft — check water and sky at 1:1";
-  if (hint === "dark") return "Very dark";
-  if (hint === "dupe") return "Similar to the last shot";
-  return hint;
+  return "Review";
 }
 
 export function formatLabel(format: MediaFormat): string {

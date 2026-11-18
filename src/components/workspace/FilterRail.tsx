@@ -46,12 +46,12 @@ export function FilterRail({
       {onNeedsLook ? (
         <button
           type="button"
-          title="Only frames that look soft, too dark, or almost the same as the last shot. Nothing is deleted."
+          title="Photos the preview is not sure about. Nothing is deleted."
           aria-pressed={needsLook}
           onClick={() => onNeedsLook(!needsLook)}
           className={`rounded-full px-2.5 py-1 text-[11px] ${needsLook ? "bg-teal text-teal-ink" : "text-mute hover:text-foam"}`}
         >
-          Review soft / dark / similar
+          Review
         </button>
       ) : null}
     </div>

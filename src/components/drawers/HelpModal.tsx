@@ -26,7 +26,7 @@ const TOPICS = [
     title: "Buttons on the grid",
     steps: [
       "One per burst: a burst is many frames a second apart. On, the grid shows one tile per burst instead of every shot.",
-      "Review soft / dark / similar: only frames the preview thinks are mushy, too dark, or almost the last shot. Water and sky are often smooth, so check at 1:1 before you reject.",
+      "Review: photos the preview is not sure about. It does not delete anything.",
       "These are filters. They do not delete anything.",
     ],
   },

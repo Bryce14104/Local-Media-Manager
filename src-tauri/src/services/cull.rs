@@ -57,17 +57,20 @@ struct FrameStats {
     mean: f32,
     laplacian: f32,
     peak_laplacian: f32,
+    edge_frac: f32,
     blue_bias: f32,
 }
 
 fn classify(stats: &FrameStats) -> Option<&'static str> {
-    if stats.mean < 18.0 {
+    if stats.mean < 12.0 {
         return Some("dark");
     }
     if looks_like_water_or_sky(stats) {
         return None;
     }
-    if stats.laplacian < 7.0 && stats.peak_laplacian < 22.0 {
+    // Shallow DOF, leaves, and 480px JPEGs have low *mean* Laplacian.
+    // Only flag mush with no real edges in any tile.
+    if stats.peak_laplacian < 9.0 && stats.laplacian < 3.2 && stats.edge_frac < 0.004 {
         Some("blur")
     } else {
         None
@@ -127,6 +130,7 @@ fn score_gray(gray: &[u8], width: usize, height: usize) -> FrameStats {
             mean: 0.0,
             laplacian: 0.0,
             peak_laplacian: 0.0,
+            edge_frac: 0.0,
             blue_bias: 0.0,
         };
     }
@@ -137,7 +141,8 @@ fn score_gray(gray: &[u8], width: usize, height: usize) -> FrameStats {
     let mean = sum as f32 / gray.len() as f32;
     let mut lap = 0.0f32;
     let mut count = 0u32;
-    let tile = 32.max(width / 8).max(1);
+    let mut edges = 0u32;
+    let tile = 16;
     let tiles_x = (width + tile - 1) / tile;
     let tiles_y = (height + tile - 1) / tile;
     let mut tile_sum = vec![0.0f32; tiles_x * tiles_y];
@@ -154,6 +159,9 @@ fn score_gray(gray: &[u8], width: usize, height: usize) -> FrameStats {
             let sq = (value as f32) * (value as f32);
             lap += sq;
             count += 1;
+            if value.unsigned_abs() > 28 {
+                edges += 1;
+            }
             let tx = (x / tile).min(tiles_x - 1);
             let ty = (y / tile).min(tiles_y - 1);
             let t = ty * tiles_x + tx;
@@ -172,6 +180,7 @@ fn score_gray(gray: &[u8], width: usize, height: usize) -> FrameStats {
         mean,
         laplacian: if count == 0 { 0.0 } else { (lap / count as f32).sqrt() },
         peak_laplacian: peak,
+        edge_frac: if count == 0 { 0.0 } else { edges as f32 / count as f32 },
         blue_bias: 0.0,
     }
 }
@@ -243,5 +252,22 @@ mod tests {
         let path = dir.path().join("mush.jpg");
         save_rgb(&path, [90, 90, 88], 64, 48);
         assert_eq!(score_jpeg_file(&path), Some("blur"));
+    }
+
+    #[test]
+    fn sharp_branch_on_smooth_sky_is_not_blur() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("leaves.jpg");
+        let mut image = ImageBuffer::from_pixel(320, 240, Rgb([196u8, 154, 110]));
+        for y in 30..210 {
+            let x = 70 + y / 2;
+            for dx in 0..6u32 {
+                if x + dx < 320 {
+                    image.put_pixel(x + dx, y, Rgb([42, 34, 24]));
+                }
+            }
+        }
+        DynamicImage::ImageRgb8(image).save(&path).unwrap();
+        assert_eq!(score_jpeg_file(&path), None);
     }
 }
