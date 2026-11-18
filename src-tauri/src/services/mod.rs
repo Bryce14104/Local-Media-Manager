@@ -15,9 +15,9 @@ pub mod volumes;
 
 pub use catalog_control::{begin_job, canceled, paused, request_cancel, set_paused};
 pub use library_ops::{
-    clone_virtual, eject_volume, export_subclip, export_travel_library, fill_video_meta, library_health,
-    preview_import, relink_folder, write_xmp, working_preview, ImportPreview, LibraryHealth, RelinkReport,
-    TravelReport, XmpReport,
+    clone_virtual, download_originals, eject_volume, export_subclip, export_travel_library, fill_video_meta,
+    library_health, preview_import, relink_folder, write_xmp, working_preview, DownloadReport, ImportPreview,
+    LibraryHealth, RelinkReport, TravelReport, XmpReport,
 };
 pub use thumbs::{
     attach_sidecars, extract_largest_jpeg, ffmpeg_available, generate_missing_thumbnails_with,

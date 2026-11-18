@@ -32,6 +32,7 @@ type LightboxProps = {
   onPerson?: (personId: string, name: string) => void;
   onMarkIn?: (ms: number) => void;
   onMarkOut?: (ms: number) => void;
+  onDownload?: () => void;
 };
 
 export function Lightbox({
@@ -61,6 +62,7 @@ export function Lightbox({
   onPerson,
   onMarkIn,
   onMarkOut,
+  onDownload,
 }: LightboxProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -437,6 +439,7 @@ export function Lightbox({
           {immersive ? null : onOriginal ? (
             <BarLabel onClick={onOriginal}>{item.originalOnline ? "Original" : "Full res"}</BarLabel>
           ) : null}
+          {immersive ? null : onDownload && item.originalOnline ? <BarLabel onClick={onDownload}>Download</BarLabel> : null}
           {!clip ? (
             <BarAction label={immersive ? "Exit fullscreen" : "Full screen"} onClick={() => void toggleFullscreen()}>
               {immersive ? <ExitFullIcon /> : <FullIcon />}

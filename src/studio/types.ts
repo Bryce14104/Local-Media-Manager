@@ -35,6 +35,8 @@ export type StudioAction =
   | "toggle-inspector"
   | "clear-filters"
   | "preferences"
+  | "help"
+  | "download"
   | "slideshow"
   | "rotate";
 

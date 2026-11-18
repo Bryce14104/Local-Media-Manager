@@ -14,6 +14,7 @@ import {
   similarTo,
   cloneVirtual,
   copyOriginals,
+  downloadOriginals,
   previewImport,
   relinkFolder,
   libraryHealth,
@@ -52,6 +53,7 @@ import {
 } from "../lib/api";
 import type { AlbumRecord, ConceptIndex, ImportPreview, MediaKind, MediaRecord, VolumeRecord, WatchedRoot } from "../lib/types";
 import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
+import { HelpModal } from "../components/drawers/HelpModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
 import { PlugDriveModal } from "../components/drawers/PlugDriveModal";
 import { PreferencesModal } from "../components/drawers/PreferencesModal";
@@ -138,7 +140,7 @@ export function Workspace() {
   const [panelPosition, setPanelPosition] = useState({ x: 64, y: 72 });
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primaryId, setPrimaryId] = useState<string | null>(null);
-  const [modal, setModal] = useState<"add" | "export" | "preferences" | null>(null);
+  const [modal, setModal] = useState<"add" | "export" | "preferences" | "help" | null>(null);
   const [selectMode, setSelectMode] = useState(false);
   const [lightboxId, setLightboxId] = useState<string | null>(null);
   const lightboxIdRef = useRef<string | null>(null);
@@ -240,21 +242,32 @@ export function Workspace() {
     if (!desktopBridgeAvailable()) return;
     let stop: (() => void) | undefined;
     let cancel = false;
+    const pending: ThumbnailReady[] = [];
+    let frame = 0;
     void listen<ThumbnailReady>("thumbnail-ready", (event) => {
-      const ready = event.payload;
-      setItems((current) =>
-        current.map((item) =>
-          item.id === `library-${ready.id}`
-            ? withPreview(item, ready.thumbnailPath, ready.proxyPath, ready.playPath, ready.filePath)
-            : item,
-        ),
-      );
+      pending.push(event.payload);
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        const batch = pending.splice(0, pending.length);
+        frame = 0;
+        if (batch.length === 0) return;
+        const byId = new Map(batch.map((ready) => [`library-${ready.id}`, ready]));
+        setItems((current) =>
+          current.map((item) => {
+            const ready = byId.get(item.id);
+            return ready
+              ? withPreview(item, ready.thumbnailPath, ready.proxyPath, ready.playPath, ready.filePath)
+              : item;
+          }),
+        );
+      });
     }).then((unlisten) => {
       if (cancel) unlisten();
       else stop = unlisten;
     });
     return () => {
       cancel = true;
+      if (frame) cancelAnimationFrame(frame);
       stop?.();
     };
   }, []);
@@ -645,6 +658,12 @@ export function Workspace() {
       case "preferences":
         openPreferences();
         break;
+      case "help":
+        setModal("help");
+        break;
+      case "download":
+        void downloadToComputer();
+        break;
       case "toggle-inspector":
         setPanelMode((current) => (current === "hidden" ? "docked" : "hidden"));
         break;
@@ -708,12 +727,12 @@ export function Workspace() {
       setFilters((current) =>
         upsertFilter(
           current.filter((filter) => filter.kind !== "subject" && filter.kind !== "text" && filter.kind !== "person"),
-          { kind: "visual", ids: [], label: `AI “${trimmed}”` },
+          { kind: "visual", ids: [], label: `Smart “${trimmed}”` },
         ),
       );
       setTelemetry((current) => ({
         ...current,
-        scanLabel: "AI search scores ONNX embeddings in the desktop app.",
+        scanLabel: "Smart Search scores ONNX embeddings in the desktop app.",
       }));
       void logSearch(true, trimmed, "no ort session in this browser preview");
       return;
@@ -738,7 +757,7 @@ export function Workspace() {
       const visual = {
         kind: "visual" as const,
         ids: hits.map((hit) => `library-${hit.mediaId}`),
-        label: `AI “${trimmed}”`,
+        label: `Smart “${trimmed}”`,
       };
       const extra = parsed.filter((filter) => filter.kind === "subject" || filter.kind === "person" || filter.kind === "region");
       setFilters((current) => {
@@ -763,7 +782,7 @@ export function Workspace() {
       setFilters((current) =>
         upsertFilter(
           current.filter((filter) => filter.kind !== "subject" && filter.kind !== "text" && filter.kind !== "person"),
-          { kind: "visual", ids: [], label: `AI “${trimmed}”` },
+          { kind: "visual", ids: [], label: `Smart “${trimmed}”` },
         ),
       );
       setTelemetry((current) => ({
@@ -1045,6 +1064,33 @@ export function Workspace() {
       ids: ids.map((id) => `library-${id}`),
       label: album.name,
     });
+  }
+
+  async function downloadToComputer() {
+    const chosen = items.filter((item) =>
+      (selectedIds.length > 0 ? selectedIds.includes(item.id) : Boolean(primary && item.id === primary.id)) &&
+      item.sourcePath &&
+      item.originalOnline,
+    );
+    const paths = chosen.map((item) => item.sourcePath as string);
+    if (!desktopBridgeAvailable() || paths.length === 0) {
+      setToast(chosen.length === 0 ? "Select online originals to download onto this computer" : "Desktop library required");
+      return;
+    }
+    try {
+      const destination = await pickDirectory("Save full-resolution files on this computer");
+      if (!destination) return;
+      const report = await downloadOriginals(paths, destination);
+      await reloadLibrary();
+      setToast(
+        report.copied
+          ? `Downloaded ${report.copied} full-resolution ${report.copied === 1 ? "file" : "files"} to ${destination}`
+          : "Those originals were offline",
+      );
+      if (report.missing[0]) setPlugHint(report.missing[0] ?? null);
+    } catch (error) {
+      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+    }
   }
 
   async function exportCopies() {
@@ -1523,6 +1569,8 @@ export function Workspace() {
         onPreset={applyPreset}
         onAdd={openAdd}
         onPreferences={openPreferences}
+        onHelp={() => setModal("help")}
+        onDownload={() => void downloadToComputer()}
         inputRef={inputRef}
       />
 
@@ -1738,6 +1786,7 @@ export function Workspace() {
           canDelete={desktopBridgeAvailable() && items.some((item) => selectedIds.includes(item.id) && item.sourcePath)}
           onRotate={() => selectedIds.forEach((id) => rotateItem(id))}
           onExport={() => void exportCopies()}
+          onDownload={() => void downloadToComputer()}
           canEdit={items.some((item) => selectedIds.includes(item.id) && item.originalOnline)}
           onBatchEdit={openBatchEdit}
           onAutoGrade={() => void autoGradeSelection()}
@@ -1815,6 +1864,7 @@ export function Workspace() {
           onEject={importPreview?.volumeMount ? () => void ejectPreviewVolume() : undefined}
         />
       ) : null}
+      {modal === "help" ? <HelpModal onClose={() => setModal(null)} /> : null}
       {modal === "preferences" ? (
         <PreferencesModal
           onClose={() => setModal(null)}
@@ -1926,6 +1976,7 @@ export function Workspace() {
           onPerson={(personId, name) => setFilters((current) => upsertFilter(current, { kind: "person", personId, name }))}
           onMarkIn={(ms) => void saveMarks(lightboxItem, ms, lightboxItem.markOutMs ?? null)}
           onMarkOut={(ms) => void saveMarks(lightboxItem, lightboxItem.markInMs ?? null, ms)}
+          onDownload={lightboxItem.originalOnline ? () => void downloadToComputer() : undefined}
         />
       ) : null}
       {developOpen && lightboxItem?.originalOnline ? (

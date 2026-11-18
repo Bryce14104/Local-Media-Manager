@@ -44,7 +44,7 @@ pub fn log_search(ai: bool, query: String, summary: String) {
         "off, file names and paths"
     };
     eprintln!(
-        "shelf search: AI search {mode} | query {:?} | {}",
+        "shelf search: Smart Search {mode} | query {:?} | {}",
         query.trim(),
         if summary.trim().is_empty() { "no filter" } else { summary.trim() }
     );
@@ -373,6 +373,15 @@ pub fn album_media_ids(album_id: i64, state: State<'_, Library>) -> Result<Vec<i
 #[tauri::command]
 pub fn reveal_path(path: String) -> Result<(), String> {
     tauri_plugin_opener::reveal_item_in_dir(Path::new(&path)).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn download_originals(
+    paths: Vec<String>,
+    destination: String,
+    state: State<'_, Library>,
+) -> Result<services::DownloadReport, String> {
+    services::download_originals(&state, &paths, Path::new(&destination)).map_err(|err| err.to_string())
 }
 
 #[tauri::command]

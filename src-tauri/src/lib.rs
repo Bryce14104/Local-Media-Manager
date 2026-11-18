@@ -88,6 +88,7 @@ pub fn run() {
             commands::album_media_ids,
             commands::reveal_path,
             commands::copy_originals,
+            commands::download_originals,
             commands::export_media,
             commands::set_develop,
             commands::preview_import,

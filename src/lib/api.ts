@@ -119,7 +119,7 @@ export async function searchEmbeddings(query: string): Promise<EmbeddingHit[]> {
 }
 
 export async function logSearch(ai: boolean, query: string, summary: string): Promise<void> {
-  const line = `AI search ${ai ? "on, visual tags" : "off, file names and paths"} | query ${JSON.stringify(query.trim())} | ${summary || "no filter"}`;
+  const line = `Smart Search ${ai ? "on, visual tags" : "off, file names and paths"} | query ${JSON.stringify(query.trim())} | ${summary || "no filter"}`;
   if (!desktopBridgeAvailable()) {
     console.info(`shelf search: ${line}`);
     return;
@@ -233,6 +233,14 @@ export async function writeBytes(path: string, bytes: number[]): Promise<void> {
 export async function copyOriginals(paths: string[], destination: string): Promise<number> {
   assertBridge();
   return invoke<number>("copy_originals", { paths, destination });
+}
+
+export async function downloadOriginals(
+  paths: string[],
+  destination: string,
+): Promise<{ copied: number; missing: string[] }> {
+  assertBridge();
+  return invoke("download_originals", { paths, destination });
 }
 
 export async function exportMedia(paths: string[], destination: string): Promise<ExportReport> {

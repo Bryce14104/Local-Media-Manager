@@ -5,8 +5,26 @@ export type CropRect = {
   height: number;
 };
 
+export type MaskKind = "sky" | "subject" | "brush";
+
+export type BrushDot = { x: number; y: number; r: number; erase: boolean };
+
+export type DevelopMask = {
+  kind: MaskKind;
+  invert: boolean;
+  feather: number;
+  exposure: number;
+  highlights: number;
+  shadows: number;
+  temperature: number;
+  saturation: number;
+  strokes: BrushDot[];
+};
+
 export type DevelopSettings = {
   crop: CropRect | null;
+  profile: string | null;
+  masks: DevelopMask[];
   straighten: number;
   exposure: number;
   contrast: number;
@@ -35,8 +53,31 @@ export type FrameStats = {
   chroma: number;
 };
 
+export const EMPTY_MASK: DevelopMask = {
+  kind: "sky",
+  invert: false,
+  feather: 28,
+  exposure: 0,
+  highlights: 0,
+  shadows: 0,
+  temperature: 0,
+  saturation: 0,
+  strokes: [],
+};
+
+export const DEVELOP_PROFILES: { id: string; label: string; settings: Partial<DevelopSettings> }[] = [
+  { id: "neutral", label: "Neutral", settings: {} },
+  { id: "camera-color", label: "Camera Color", settings: { contrast: 8, vibrance: 12, saturation: 4, sharpen: 10 } },
+  { id: "landscape", label: "Landscape", settings: { contrast: 16, vibrance: 22, dehaze: 12, clarity: 14, shadows: 8 } },
+  { id: "portrait", label: "Portrait", settings: { exposure: 0.15, shadows: 12, highlights: -8, temperature: 6, vibrance: 8, sharpen: 6 } },
+  { id: "vivid", label: "Vivid", settings: { contrast: 18, vibrance: 28, saturation: 10, clarity: 10 } },
+  { id: "bw", label: "B&W", settings: { saturation: -100, contrast: 14, clarity: 10 } },
+];
+
 export const NEUTRAL_DEVELOP: DevelopSettings = {
   crop: null,
+  profile: null,
+  masks: [],
   straighten: 0,
   exposure: 0,
   contrast: 0,
@@ -106,6 +147,8 @@ export function parseDevelop(raw: string | null | undefined): DevelopSettings {
       ...NEUTRAL_DEVELOP,
       ...parsed,
       crop: sanitizeCrop(parsed.crop ?? null),
+      profile: parsed.profile ?? null,
+      masks: Array.isArray(parsed.masks) ? parsed.masks.map(sanitizeMask) : [],
     };
   } catch {
     return { ...NEUTRAL_DEVELOP };
@@ -178,8 +221,33 @@ export async function autoGradeFromUrls(
   return autoDevelop(analyzeFrame(ctx.getImageData(0, 0, probe.width, probe.height)), crop, straighten);
 }
 
+export function sanitizeMask(mask: Partial<DevelopMask> | DevelopMask): DevelopMask {
+  return {
+    ...EMPTY_MASK,
+    ...mask,
+    kind: mask.kind === "subject" || mask.kind === "brush" ? mask.kind : "sky",
+    strokes: Array.isArray(mask.strokes) ? mask.strokes : [],
+  };
+}
+
+export function applyProfile(settings: DevelopSettings, profileId: string): DevelopSettings {
+  const profile = DEVELOP_PROFILES.find((entry) => entry.id === profileId);
+  if (!profile) return { ...settings, profile: profileId };
+  return {
+    ...NEUTRAL_DEVELOP,
+    ...profile.settings,
+    crop: settings.crop,
+    straighten: settings.straighten,
+    masks: settings.masks,
+    profile: profileId,
+  };
+}
+
 export function isNeutralDevelop(settings: DevelopSettings): boolean {
   if (settings.crop && (settings.crop.width < 0.999 || settings.crop.height < 0.999)) return false;
+  if (settings.masks.some((mask) => mask.exposure || mask.highlights || mask.shadows || mask.temperature || mask.saturation || mask.strokes.length)) {
+    return false;
+  }
   return (
     settings.straighten === 0 &&
     settings.exposure === 0 &&
@@ -278,6 +346,8 @@ export function autoDevelop(stats: FrameStats, crop: CropRect | null, straighten
   const dehaze = stats.mean > 0.58 && stats.std < 0.16 ? 10 : 0;
   return {
     crop,
+    profile: null,
+    masks: [],
     straighten,
     exposure: round(exposure),
     contrast: round(contrast),
@@ -383,7 +453,65 @@ export function applyDevelop(data: ImageData, settings: DevelopSettings): ImageD
     px[i + 2] = clamp(b, 0, 1) * 255;
   }
   if (settings.sharpen > 0) sharpen(px, width, height, settings.sharpen / 140);
+  for (const mask of settings.masks) {
+    applyMaskedGrade(px, width, height, mask);
+  }
   return data;
+}
+
+function applyMaskedGrade(px: Uint8ClampedArray, width: number, height: number, mask: DevelopMask) {
+  const local: DevelopSettings = {
+    ...NEUTRAL_DEVELOP,
+    exposure: mask.exposure,
+    highlights: mask.highlights,
+    shadows: mask.shadows,
+    temperature: mask.temperature,
+    saturation: mask.saturation,
+  };
+  if (isNeutralDevelop({ ...local, masks: [] })) return;
+  const copy = new ImageData(new Uint8ClampedArray(px), width, height);
+  applyDevelop(copy, { ...local, masks: [] });
+  const graded = copy.data;
+  const feather = mask.feather / 100;
+  for (let i = 0; i < px.length; i += 4) {
+    const p = i / 4;
+    const x = p % width;
+    const y = (p / width) | 0;
+    let weight = maskWeight(mask, x / width, y / height, px, i);
+    if (mask.invert) weight = 1 - weight;
+    if (feather > 0) weight = smoothstep(0, 1, 0.5 + (weight - 0.5) / Math.max(0.12, 1 - feather));
+    if (weight <= 0.01) continue;
+    px[i] = px[i] + (graded[i] - px[i]) * weight;
+    px[i + 1] = px[i + 1] + (graded[i + 1] - px[i + 1]) * weight;
+    px[i + 2] = px[i + 2] + (graded[i + 2] - px[i + 2]) * weight;
+  }
+}
+
+function maskWeight(mask: DevelopMask, nx: number, ny: number, px: Uint8ClampedArray, i: number): number {
+  if (mask.kind === "brush") {
+    let hit = 0;
+    for (const stroke of mask.strokes) {
+      const dx = nx - stroke.x;
+      const dy = ny - stroke.y;
+      if (dx * dx + dy * dy <= stroke.r * stroke.r) hit = stroke.erase ? 0 : 1;
+    }
+    return hit;
+  }
+  const r = px[i] / 255;
+  const g = px[i + 1] / 255;
+  const b = px[i + 2] / 255;
+  const y = luma(r, g, b);
+  if (mask.kind === "sky") {
+    const sky = ny < 0.48 && b > r + 0.02 && b > g * 0.92 && y > 0.28 ? 1 : ny < 0.22 ? 0.35 : 0;
+    return sky;
+  }
+  const subject = ny > 0.28 && ny < 0.88 && nx > 0.18 && nx < 0.82 && y > 0.12 && y < 0.92 ? 1 : 0;
+  return subject;
+}
+
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const t = clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
 }
 
 export function stageStyle(rotation: number, settings: DevelopSettings | undefined) {
@@ -398,6 +526,9 @@ export function stageStyle(rotation: number, settings: DevelopSettings | undefin
 }
 
 export function developPreviewStyle(settings: DevelopSettings): { filter: string; clipPath?: string; transform?: string } {
+  if (isNeutralDevelop(settings) && !settings.straighten) {
+    return { filter: "none" };
+  }
   const brightness = 2 ** (settings.exposure * 0.65);
   const contrast = 1 + settings.contrast / 140 + settings.clarity / 220;
   const saturate = 1 + settings.saturation / 120 + settings.vibrance / 180;

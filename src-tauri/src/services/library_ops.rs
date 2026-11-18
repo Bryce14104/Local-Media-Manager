@@ -405,6 +405,50 @@ pub fn export_subclip(
     Ok(dest.display().to_string())
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadReport {
+    pub copied: usize,
+    pub missing: Vec<String>,
+}
+
+/// Copy full-resolution files onto this computer and point the catalog at the copies.
+pub fn download_originals(
+    library: &Library,
+    paths: &[String],
+    dest: &Path,
+) -> Result<DownloadReport, super::ServiceError> {
+    std::fs::create_dir_all(dest)?;
+    let mut copied = 0;
+    let mut missing = Vec::new();
+    for path in paths {
+        let disk = PathBuf::from(catalog_path(path));
+        if !disk.is_file() {
+            missing.push(path.clone());
+            continue;
+        }
+        let name = disk.file_name().unwrap_or_default();
+        let mut target = dest.join(name);
+        if target.exists() && target != disk {
+            let stem = disk.file_stem().and_then(|s| s.to_str()).unwrap_or("frame");
+            let ext = disk.extension().and_then(|s| s.to_str()).unwrap_or("");
+            target = dest.join(format!("{stem}-local.{ext}"));
+        }
+        if target != disk {
+            std::fs::copy(&disk, &target)?;
+        }
+        let volume = volumes::detect(&target);
+        let volume_id = library.upsert_volume(&volume.fingerprint, &volume.label, &volume.mount)?;
+        let relative = volumes::relative_to(&target, &volume.mount);
+        if let Some(record) = library.find_by_path(path)? {
+            library.set_file_path(record.id, &target.display().to_string())?;
+            library.set_volume(record.id, volume_id, &relative)?;
+        }
+        copied += 1;
+    }
+    Ok(DownloadReport { copied, missing })
+}
+
 pub fn fill_video_meta(library: &Library, path: &str) -> Result<MediaRecord, super::ServiceError> {
     let record = library
         .find_by_path(path)?
@@ -538,5 +582,34 @@ mod tests {
         assert_eq!(packed.list_media().unwrap().len(), 1);
         assert!(packed.find_by_path("/photos/keep.jpg").unwrap().is_some());
         assert!(packed.find_by_path("/photos/drop.jpg").unwrap().is_none());
+    }
+
+    #[test]
+    fn download_moves_the_catalog_path_onto_this_computer() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = crate::db::Library::open(dir.path().join("library.sqlite")).unwrap();
+        let source = dir.path().join("card");
+        std::fs::create_dir(&source).unwrap();
+        let file = source.join("keep.dng");
+        std::fs::write(&file, b"raw-bytes").unwrap();
+        library
+            .upsert_media(crate::db::NewMedia {
+                file_path: file.to_str().unwrap(),
+                content_hash: "cc",
+                file_size: 9,
+                created_at: None,
+                modified_at: 1,
+                media_kind: MediaKind::Raw,
+                exif_json: None,
+                captured_at: None,
+                volume_id: None,
+                relative_path: None,
+            })
+            .unwrap();
+        let dest = dir.path().join("archive");
+        let report = download_originals(&library, &[file.to_string_lossy().into_owned()], &dest).unwrap();
+        assert_eq!(report.copied, 1);
+        assert!(dest.join("keep.dng").is_file());
+        assert!(library.find_by_path(dest.join("keep.dng").to_str().unwrap()).unwrap().is_some());
     }
 }

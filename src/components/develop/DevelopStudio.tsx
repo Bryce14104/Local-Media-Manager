@@ -3,20 +3,24 @@ import { desktopBridgeAvailable, workingPreview, writeBytes } from "../../lib/ap
 import { mediaSrc } from "../../lib/mediaSrc";
 import {
   applyDevelop,
+  applyProfile,
   autoGradeFromUrls,
+  DEVELOP_PROFILES,
   developSourceUrls,
+  EMPTY_MASK,
   gradeHint,
   isNeutralDevelop,
   loadDevelopImage,
   NEUTRAL_DEVELOP,
   sanitizeCrop,
   type CropRect,
+  type DevelopMask,
   type DevelopSettings,
 } from "../../studio/develop";
 import type { StudioItem } from "../../studio/types";
 import { CropOverlay } from "./CropOverlay";
 
-type Tool = "adjust" | "crop";
+type Tool = "adjust" | "crop" | "mask";
 type Compare = "after" | "before" | "split";
 
 const ASPECTS: { id: string; label: string; value: number | null }[] = [
@@ -244,12 +248,13 @@ export function DevelopStudio({
           </span>
           <span className="text-[11px] text-mute">
             {peers.length > 1
-              ? "Sliders copy this grade to every selected file. Crop stays per frame. RAW, DNG, and video use their previews."
-              : gradeHint(item)}
+              ? "Sliders copy this grade to every selected file. Crop stays per frame. The camera file is never overwritten."
+              : `${gradeHint(item)} Profiles and masks stay in the catalog.`}
           </span>
         </p>
         <ToolButton label="Crop" pressed={tool === "crop"} onClick={() => setTool("crop")} />
         <ToolButton label="Adjust" pressed={tool === "adjust"} onClick={() => setTool("adjust")} />
+        <ToolButton label="Mask" pressed={tool === "mask"} onClick={() => setTool("mask")} />
         <span className="hidden h-5 w-px bg-white/10 sm:block" />
         <ToolButton label="Auto" onClick={runAuto} accent />
         {peers.length > 1 && onAutoEach ? (
@@ -310,6 +315,12 @@ export function DevelopStudio({
                 onChange={(next) => patch({ crop: sanitizeCrop(next) })}
               />
             ) : null}
+            {tool === "mask" ? (
+              <MaskPainter
+                mask={settings.masks[0] ?? { ...EMPTY_MASK, kind: "brush" }}
+                onChange={(mask) => patch({ masks: [mask] })}
+              />
+            ) : null}
           </div>
         </div>
 
@@ -318,7 +329,9 @@ export function DevelopStudio({
             <Histogram bins={hist} />
             {exportLabel ? <p className="mt-2 text-[11px] text-teal">{exportLabel}</p> : null}
           </div>
-          {tool === "crop" ? (
+          {tool === "mask" ? (
+            <MaskPanel settings={settings} patch={patch} />
+          ) : tool === "crop" ? (
             <section className="space-y-3 px-4 pb-4">
               <p className="text-[11px] uppercase tracking-[0.16em] text-mute">Crop & straighten</p>
               <div className="flex flex-wrap gap-1">
@@ -346,7 +359,22 @@ export function DevelopStudio({
               <ToolButton label="Reset crop" onClick={() => patch({ crop: null, straighten: 0 })} />
             </section>
           ) : (
-            groups.map((group) => (
+            <>
+            <section className="border-t border-white/10 px-4 py-3">
+              <p className="mb-2 text-[11px] uppercase tracking-[0.16em] text-mute">Profiles</p>
+              <div className="flex flex-wrap gap-1">
+                {DEVELOP_PROFILES.map((profile) => (
+                  <ToolButton
+                    key={profile.id}
+                    label={profile.label}
+                    pressed={settings.profile === profile.id}
+                    onClick={() => onChange(applyProfile(settings, profile.id))}
+                  />
+                ))}
+              </div>
+              <p className="mt-2 text-[11px] text-mute">Looks apply to this catalog row only. The RAW/DNG stays untouched.</p>
+            </section>
+            {groups.map((group) => (
               <section key={group.title} className="border-t border-white/10 px-4 py-3">
                 <p className="mb-2 text-[11px] uppercase tracking-[0.16em] text-mute">{group.title}</p>
                 <div className="space-y-2.5">
@@ -355,7 +383,8 @@ export function DevelopStudio({
                   ))}
                 </div>
               </section>
-            ))
+            ))}
+            </>
           )}
         </aside>
       </div>
@@ -523,4 +552,74 @@ function cropToAspect(crop: CropRect, aspect: number): CropRect {
     y += (crop.height - height) / 2;
   }
   return sanitizeCrop({ x, y, width, height }) ?? crop;
+}
+
+function MaskPanel({
+  settings,
+  patch,
+}: {
+  settings: DevelopSettings;
+  patch: (partial: Partial<DevelopSettings>) => void;
+}) {
+  const mask: DevelopMask = settings.masks[0] ?? { ...EMPTY_MASK };
+  function update(partial: Partial<DevelopMask>) {
+    patch({ masks: [{ ...mask, ...partial }] });
+  }
+  return (
+    <section className="space-y-3 px-4 pb-4">
+      <p className="text-[11px] uppercase tracking-[0.16em] text-mute">Select & mask</p>
+      <p className="text-[11px] text-mute">Sky and subject are estimated on this preview. Brush paints the grade. The original file is unchanged.</p>
+      <div className="flex flex-wrap gap-1">
+        {(["sky", "subject", "brush"] as const).map((kind) => (
+          <ToolButton key={kind} label={kind === "sky" ? "Sky" : kind === "subject" ? "Subject" : "Brush"} pressed={mask.kind === kind} onClick={() => update({ kind, strokes: kind === "brush" ? mask.strokes : [] })} />
+        ))}
+        <ToolButton label="Invert" pressed={mask.invert} onClick={() => update({ invert: !mask.invert })} />
+        <ToolButton label="Clear" onClick={() => patch({ masks: [] })} />
+      </div>
+      <Slider label="Feather" value={mask.feather} min={0} max={100} step={1} onChange={(feather) => update({ feather })} />
+      <Slider label="Exposure" value={mask.exposure} min={-2} max={2} step={0.05} onChange={(exposure) => update({ exposure })} />
+      <Slider label="Highlights" value={mask.highlights} min={-100} max={100} step={1} onChange={(highlights) => update({ highlights })} />
+      <Slider label="Shadows" value={mask.shadows} min={-100} max={100} step={1} onChange={(shadows) => update({ shadows })} />
+      <Slider label="Temperature" value={mask.temperature} min={-50} max={50} step={1} onChange={(temperature) => update({ temperature })} />
+      <Slider label="Saturation" value={mask.saturation} min={-100} max={100} step={1} onChange={(saturation) => update({ saturation })} />
+    </section>
+  );
+}
+
+function MaskPainter({
+  mask,
+  onChange,
+}: {
+  mask: DevelopMask;
+  onChange: (mask: DevelopMask) => void;
+}) {
+  if (mask.kind !== "brush") return null;
+  return (
+    <div
+      className="absolute inset-0 z-10 cursor-crosshair"
+      onPointerDown={(event) => {
+        (event.currentTarget as HTMLDivElement).setPointerCapture(event.pointerId);
+        addStroke(event, mask, onChange);
+      }}
+      onPointerMove={(event) => {
+        if (event.buttons !== 1) return;
+        addStroke(event, mask, onChange);
+      }}
+    />
+  );
+}
+
+function addStroke(
+  event: { currentTarget: HTMLElement; clientX: number; clientY: number; altKey: boolean },
+  mask: DevelopMask,
+  onChange: (mask: DevelopMask) => void,
+) {
+  const box = event.currentTarget.getBoundingClientRect();
+  const x = (event.clientX - box.left) / box.width;
+  const y = (event.clientY - box.top) / box.height;
+  onChange({
+    ...mask,
+    kind: "brush",
+    strokes: [...mask.strokes, { x, y, r: 0.045, erase: event.altKey }].slice(-400),
+  });
 }

@@ -207,8 +207,8 @@ function Grid({
           : 0;
       const localStart = scrollTop - hostTop;
       const localEnd = localStart + viewH;
-      const startRow = Math.max(0, Math.floor(localStart / stride) - 4);
-      const endRow = Math.min(rows, Math.ceil(localEnd / stride) + 4);
+      const startRow = Math.max(0, Math.floor(localStart / stride) - 2);
+      const endRow = Math.min(rows, Math.ceil(localEnd / stride) + 2);
       const start = Math.min(items.length, startRow * cols);
       const end = Math.min(items.length, endRow * cols);
       setWindowed({
@@ -220,16 +220,25 @@ function Grid({
         cols,
       });
     };
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        measure();
+      });
+    };
     measure();
-    const observer = new ResizeObserver(measure);
+    const observer = new ResizeObserver(onScroll);
     observer.observe(host);
     if (scroller instanceof HTMLElement) {
-      scroller.addEventListener("scroll", measure, { passive: true });
+      scroller.addEventListener("scroll", onScroll, { passive: true });
       observer.observe(scroller);
     }
     return () => {
       observer.disconnect();
-      if (scroller instanceof HTMLElement) scroller.removeEventListener("scroll", measure);
+      if (frame) cancelAnimationFrame(frame);
+      if (scroller instanceof HTMLElement) scroller.removeEventListener("scroll", onScroll);
     };
   }, [dense, gapPx, items.length, minPx, roomy, zoom]);
 
@@ -262,36 +271,17 @@ function Grid({
 }
 
 function Timeline(props: Parameters<typeof Grid>[0]) {
-  const groups = new Map<string, StudioItem[]>();
-  for (const item of props.items) {
-    const key = shootDay(item);
-    const list = groups.get(key) ?? [];
-    list.push(item);
-    groups.set(key, list);
-  }
-  const days = [...groups.keys()].sort().reverse();
-  const months = new Map<string, string[]>();
-  for (const day of days) {
-    const month = day.slice(0, 7);
-    const list = months.get(month) ?? [];
-    list.push(day);
-    months.set(month, list);
-  }
+  const first = props.items[0];
+  const last = props.items[props.items.length - 1];
+  const heading = first
+    ? `${formatShootDay(shootDay(first))}${last && shootDay(last) !== shootDay(first) ? ` – ${formatShootDay(shootDay(last))}` : ""}`
+    : formatMonth("1970-01");
   return (
-    <div className="space-y-8">
-      {[...months.keys()].map((month) => (
-        <section key={month}>
-          <h2 className="mb-3 text-xs uppercase tracking-[0.16em] text-mute">{formatMonth(month)}</h2>
-          <div className="space-y-6">
-            {(months.get(month) ?? []).map((day) => (
-              <div key={day}>
-                <h3 className="mb-2 text-[11px] text-foam">{formatShootDay(day)}</h3>
-                <Grid {...props} items={groups.get(day) ?? []} />
-              </div>
-            ))}
-          </div>
-        </section>
-      ))}
+    <div>
+      <h2 className="sticky top-0 z-10 mb-3 bg-studio/90 py-2 text-xs uppercase tracking-[0.16em] text-mute backdrop-blur-sm">
+        {heading}
+      </h2>
+      <Grid {...props} />
     </div>
   );
 }

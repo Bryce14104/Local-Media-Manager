@@ -18,6 +18,8 @@ type TopBarProps = {
   onPreset: (preset: LayoutPreset) => void;
   onAdd: () => void;
   onPreferences: () => void;
+  onHelp?: () => void;
+  onDownload?: () => void;
   inputRef: RefObject<HTMLInputElement | null>;
 };
 
@@ -50,6 +52,8 @@ export function TopBar({
   onPreset,
   onAdd,
   onPreferences,
+  onHelp,
+  onDownload,
   inputRef,
 }: TopBarProps) {
   const [open, setOpen] = useState(false);
@@ -111,31 +115,31 @@ export function TopBar({
           <label className="sr-only" htmlFor="command-palette">
             Search and commands
           </label>
-          <input
-            id="command-palette"
-            ref={inputRef}
-            value={query}
-            role="combobox"
-            aria-expanded={open}
-            aria-controls="command-suggestions"
-            aria-activedescendant={open ? suggestions[highlight]?.id : undefined}
-            placeholder={aiSearch ? "Search objects, scenes, or a command" : "Search file names and paths"}
-            onChange={(event) => {
-              onQuery(event.target.value);
-              setOpen(true);
-            }}
-            onFocus={() => setOpen(true)}
-            onBlur={() => {
-              window.setTimeout(() => setOpen(false), 150);
-            }}
-            onKeyDown={onInputKey}
-            className="w-full rounded-full border border-line bg-card py-2 pl-4 pr-[5.6rem] text-sm outline-none placeholder:text-mute focus:border-teal min-[420px]:pr-[8rem] md:pr-[12rem]"
-          />
-          <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
-            <AiSearchSwitch checked={aiSearch} onChange={onAiSearch} />
-            <span className="pointer-events-none hidden rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-mute md:inline">
+          <div className="flex min-w-0 items-center gap-2">
+            <input
+              id="command-palette"
+              ref={inputRef}
+              value={query}
+              role="combobox"
+              aria-expanded={open}
+              aria-controls="command-suggestions"
+              aria-activedescendant={open ? suggestions[highlight]?.id : undefined}
+              placeholder={aiSearch ? "Search objects, scenes, or a command" : "Search file names and paths"}
+              onChange={(event) => {
+                onQuery(event.target.value);
+                setOpen(true);
+              }}
+              onFocus={() => setOpen(true)}
+              onBlur={() => {
+                window.setTimeout(() => setOpen(false), 150);
+              }}
+              onKeyDown={onInputKey}
+              className="min-w-0 flex-1 rounded-full border border-line bg-card px-4 py-2 text-sm outline-none placeholder:text-mute focus:border-teal"
+            />
+            <span className="hidden shrink-0 rounded border border-line px-1.5 py-0.5 font-mono text-[10px] text-mute lg:inline">
               Ctrl K
             </span>
+            <SmartSearchSwitch checked={aiSearch} onChange={onAiSearch} />
           </div>
           {open && suggestions.length > 0 ? (
             <ul
@@ -163,6 +167,8 @@ export function TopBar({
         </div>
 
         <div className="hidden items-center gap-1 lg:flex">
+          {onDownload ? <Action label="Download" onClick={onDownload} /> : null}
+          {onHelp ? <Action label="Help" onClick={onHelp} /> : null}
           <Action label="Add media" onClick={onAdd} />
         </div>
 
@@ -190,6 +196,8 @@ export function TopBar({
                   }}
                 />
               ))}
+              {onDownload ? <MenuRow label="Download originals" onClick={() => { onDownload(); setMenuOpen(false); }} /> : null}
+              {onHelp ? <MenuRow label="Help" onClick={() => { onHelp(); setMenuOpen(false); }} /> : null}
               <MenuRow label="Add media" onClick={() => { onAdd(); setMenuOpen(false); }} />
               <MenuRow
                 label="Preferences"
@@ -230,7 +238,7 @@ export function TopBar({
   );
 }
 
-function AiSearchSwitch({
+function SmartSearchSwitch({
   checked,
   onChange,
 }: {
@@ -242,11 +250,11 @@ function AiSearchSwitch({
       type="button"
       role="switch"
       aria-checked={checked}
-      aria-label="AI Search"
+      aria-label="Smart Search"
       data-ai-search={checked ? "on" : "off"}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => onChange(!checked)}
-      className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-1.5 py-1 text-[11px] leading-none ${
+      className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-1.5 text-[11px] leading-none ${
         checked ? "border-teal/50 bg-teal/15 text-teal" : "border-line bg-studio text-mute hover:text-foam"
       }`}
     >
@@ -258,8 +266,8 @@ function AiSearchSwitch({
         />
       </span>
       <span className="pr-0.5 font-medium tracking-wide">
-        <span className="hidden min-[420px]:inline">AI Search</span>
-        <span className="min-[420px]:hidden">AI</span>
+        <span className="hidden sm:inline">Smart Search</span>
+        <span className="sm:hidden">Smart</span>
       </span>
     </button>
   );
