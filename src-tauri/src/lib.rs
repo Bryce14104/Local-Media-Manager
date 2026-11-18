@@ -83,6 +83,12 @@ pub fn run() {
             commands::copy_originals,
             commands::export_media,
             commands::set_develop,
+            commands::preview_import,
+            commands::relink_folder,
+            commands::library_health,
+            commands::similar_to,
+            commands::clone_virtual,
+            commands::working_preview,
             commands::write_bytes,
         ])
         .run(tauri::generate_context!())

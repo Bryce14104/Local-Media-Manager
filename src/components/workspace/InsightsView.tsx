@@ -11,13 +11,28 @@ type Props = {
   onOpen: (id: string) => void;
   onShowFrames: (ids: string[], label: string) => void;
   onShowSubject: (value: string) => void;
+  onShowPerson?: (personId: string, name: string) => void;
+  onRenamePerson?: (personId: string, name: string) => void;
 };
 
 type Focus = { type: "burst"; id: string } | { type: "bucket"; id: string };
 
-export function InsightsView({ items, index, pending, onOpen, onShowFrames, onShowSubject }: Props) {
+export function InsightsView({ items, index, pending, onOpen, onShowFrames, onShowSubject, onShowPerson, onRenamePerson }: Props) {
   const [query, setQuery] = useState("");
   const [focus, setFocus] = useState<Focus | null>(null);
+  const people = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; items: StudioItem[] }>();
+    for (const item of items) {
+      for (const face of item.faces) {
+        const name = face.name?.trim() || "Unnamed person";
+        const current = map.get(face.personId) ?? { id: face.personId, name, items: [] };
+        if (!current.items.some((row) => row.id === item.id)) current.items.push(item);
+        current.name = face.name?.trim() || current.name;
+        map.set(face.personId, current);
+      }
+    }
+    return [...map.values()].sort((left, right) => right.items.length - left.items.length);
+  }, [items]);
   const presented = useMemo(() => (pending ? null : presentConcepts(items, index)), [items, index, pending]);
   const overview = useMemo(() => (pending ? null : libraryOverview(items)), [items, pending]);
 
@@ -58,6 +73,7 @@ export function InsightsView({ items, index, pending, onOpen, onShowFrames, onSh
 
   const active = resolveFocus(filtered, focus);
   const visibleCount =
+    people.length +
     filtered.bursts.length +
     filtered.cameras.length +
     filtered.scenes.length +
@@ -125,6 +141,35 @@ export function InsightsView({ items, index, pending, onOpen, onShowFrames, onSh
                 onOpen={onOpen}
                 onReveal={() => reveal(active)}
               />
+            ) : null}
+
+            {people.length > 0 ? (
+              <Section title="People" hint="Name a cluster. Search uses the name." count={people.length}>
+                <Row>
+                  {people.map((person) => (
+                    <GroupCard
+                      key={person.id}
+                      pressed={false}
+                      items={person.items}
+                      label={person.name}
+                      summary={`${person.items.length} photos`}
+                      onClick={() => onShowPerson?.(person.id, person.name)}
+                    />
+                  ))}
+                </Row>
+                {onRenamePerson && people[0] ? (
+                  <button
+                    type="button"
+                    className="mt-2 text-xs text-mute hover:text-foam"
+                    onClick={() => {
+                      const name = window.prompt("Name this person", people[0]?.name ?? "");
+                      if (name && people[0]) onRenamePerson(people[0].id, name);
+                    }}
+                  >
+                    Name the largest cluster
+                  </button>
+                ) : null}
+              </Section>
             ) : null}
 
             {filtered.bursts.length > 0 ? (

@@ -141,6 +141,91 @@ impl Library {
         Ok(record)
     }
 
+    pub fn find_by_hash(&self, hash: &str) -> Result<Option<MediaRecord>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(&format!(
+            "{MEDIA_SELECT} WHERE content_hash = ?1 AND file_path NOT LIKE '%::v%' LIMIT 1"
+        ))?;
+        Ok(stmt.query_row(params![hash], map_media).optional()?)
+    }
+
+    pub fn find_by_volume_relative(
+        &self,
+        fingerprint: &str,
+        relative: &str,
+    ) -> Result<Option<MediaRecord>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(&format!(
+            "{MEDIA_SELECT}
+             WHERE volume_id = (SELECT id FROM volumes WHERE fingerprint = ?1)
+               AND relative_path = ?2
+             LIMIT 1"
+        ))?;
+        Ok(stmt.query_row(params![fingerprint, relative], map_media).optional()?)
+    }
+
+    pub fn clone_virtual(&self, path: &str) -> Result<MediaRecord, DbError> {
+        let source = self
+            .find_by_path(path)?
+            .ok_or_else(|| DbError::NotFound(path.to_string()))?;
+        let stamp = unix_now();
+        let base = crate::models::catalog_path(path);
+        let virtual_path = format!("{base}::v{stamp}-{}", source.id);
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO media_files (
+                file_path, content_hash, file_size, created_at, modified_at, indexed_at,
+                rating, media_kind, exif_json, captured_at, thumbnail_path, flag, vision_at,
+                color_label, rotation, notes, keywords, develop_json, volume_id, relative_path
+             )
+             SELECT ?1, content_hash, file_size, created_at, modified_at, ?2,
+                rating, media_kind, exif_json, captured_at, thumbnail_path, flag, vision_at,
+                color_label, rotation, notes, keywords, develop_json, volume_id, relative_path
+             FROM media_files WHERE id = ?3",
+            params![virtual_path, stamp, source.id],
+        )?;
+        drop(conn);
+        self.find_by_path(&virtual_path)?
+            .ok_or_else(|| DbError::NotFound(virtual_path))
+    }
+
+    pub fn person_prototypes(&self) -> Result<Vec<(i64, Vec<f32>)>, DbError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT person_id, embedding FROM faces WHERE person_id IS NOT NULL",
+        )?;
+        let mut grouped: std::collections::HashMap<i64, (Vec<f32>, usize)> =
+            std::collections::HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            let person_id: i64 = row.get(0)?;
+            let blob: Vec<u8> = row.get(1)?;
+            Ok((person_id, blob_to_embedding(&blob)))
+        })?;
+        for row in rows {
+            let (person_id, embedding) = row?;
+            let entry = grouped.entry(person_id).or_insert_with(|| (vec![0.0; embedding.len()], 0));
+            if entry.0.len() != embedding.len() {
+                continue;
+            }
+            for (slot, value) in entry.0.iter_mut().zip(embedding) {
+                *slot += value;
+            }
+            entry.1 += 1;
+        }
+        Ok(grouped
+            .into_iter()
+            .filter_map(|(id, (mut sum, count))| {
+                if count == 0 {
+                    return None;
+                }
+                for value in &mut sum {
+                    *value /= count as f32;
+                }
+                Some((id, sum))
+            })
+            .collect())
+    }
+
     pub fn with_transaction<T, F>(&self, op: F) -> Result<T, DbError>
     where
         F: FnOnce(&Connection) -> Result<T, DbError>,

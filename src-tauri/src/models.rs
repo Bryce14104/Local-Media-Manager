@@ -14,6 +14,11 @@ pub enum MediaKind {
     Raw,
 }
 
+/// Virtual copies share a disk file; the catalog path is `original::v{stamp}`.
+pub fn catalog_path(path: &str) -> &str {
+    path.split_once("::v").map(|(base, _)| base).unwrap_or(path)
+}
+
 impl MediaKind {
     pub fn as_str(self) -> &'static str {
         match self {

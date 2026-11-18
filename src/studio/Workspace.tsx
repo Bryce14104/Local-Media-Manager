@@ -11,6 +11,11 @@ import {
   fetchLibrary,
   indexPaths,
   searchEmbeddings,
+  similarTo,
+  cloneVirtual,
+  previewImport,
+  relinkFolder,
+  libraryHealth,
   pickImportPaths,
   pickDirectory,
   removeFromLibrary,
@@ -24,12 +29,14 @@ import {
   setDevelop,
   albumMediaIds,
   exportMedia,
+  renamePerson,
+  writeBytes,
   listAlbums,
   listVolumes,
   listWatches,
   rescanWatched,
 } from "../lib/api";
-import type { AlbumRecord, ConceptIndex, MediaKind, MediaRecord, VolumeRecord, WatchedRoot } from "../lib/types";
+import type { AlbumRecord, ConceptIndex, ImportPreview, MediaKind, MediaRecord, VolumeRecord, WatchedRoot } from "../lib/types";
 import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
 import { PlugDriveModal } from "../components/drawers/PlugDriveModal";
@@ -57,7 +64,10 @@ import {
   isNeutralDevelop,
   type DevelopSettings,
 } from "./develop";
+import { burstStrip } from "./bursts";
+import { DEFAULT_EXPORT, blobToBytes, renderExportBlob } from "./exportFrame";
 import { AUTO_SCAN_POLL_MS, newlyPlugged, readAutoScanOnPlug, writeAutoScanOnPlug } from "./libraryPrefs";
+import { numericSuffix } from "./insights";
 import { readSlideshowSettings, writeSlideshowSettings, type SlideshowSettings } from "./slideshow";
 import type { MapZoom } from "./mapRegions";
 import { applySearchMode, filterLabel, matchesFilters, parseQuery, suggestions, upsertFilter } from "./query";
@@ -125,6 +135,18 @@ export function Workspace() {
   const [watches, setWatches] = useState<WatchedRoot[]>([]);
   const [albums, setAlbums] = useState<AlbumRecord[]>([]);
   const [plugHint, setPlugHint] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [pendingImportRoots, setPendingImportRoots] = useState<string[] | null>(null);
+  const [collapseBursts, setCollapseBursts] = useState(false);
+  const [comparePrevious, setComparePrevious] = useState(false);
+  const [healthLine, setHealthLine] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 4200);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
   const [wantOriginal, setWantOriginal] = useState(false);
   const [conceptIndex, setConceptIndex] = useState<ConceptIndex | null>(null);
   const [conceptsLive, setConceptsLive] = useState(() => desktopBridgeAvailable());
@@ -194,6 +216,23 @@ export function Workspace() {
             : item,
         ),
       );
+    }).then((unlisten) => {
+      if (cancel) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      cancel = true;
+      stop?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!desktopBridgeAvailable()) return;
+    let stop: (() => void) | undefined;
+    let cancel = false;
+    void listen<MediaRecord>("media-ready", (event) => {
+      const item = presentRecord(event.payload);
+      setItems((current) => mergeItems([item], current));
     }).then((unlisten) => {
       if (cancel) unlisten();
       else stop = unlisten;
@@ -299,11 +338,13 @@ export function Workspace() {
           setItems(media.map(presentRecord));
           await refreshSources();
           previous = await listVolumes().catch(() => next);
+          const line = report.indexed
+            ? `${volume.label} is back — ${report.indexed} new · ${report.unchanged} unchanged`
+            : `${volume.label} is back — no new files`;
+          setToast(line);
           setTelemetry((current) => ({
             ...current,
-            scanLabel: report.indexed
-              ? `${volume.label} · ${report.indexed} new · ${report.unchanged} unchanged`
-              : `${volume.label} · no new files`,
+            scanLabel: line,
           }));
         }
       } catch (error) {
@@ -388,12 +429,12 @@ export function Workspace() {
       if (developOpen) return;
       const focusId = lightboxId ?? primaryId;
       if (lightboxId) {
-        if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+        if (event.key === "ArrowRight" || event.key === "ArrowDown" || event.key === "j" || event.key === "J") {
           event.preventDefault();
           stepLightbox(1);
           return;
         }
-        if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+        if (event.key === "ArrowLeft" || event.key === "ArrowUp" || event.key === "k" || event.key === "K") {
           event.preventDefault();
           stepLightbox(-1);
           return;
@@ -645,20 +686,33 @@ export function Workspace() {
     );
     try {
       const hits = await searchEmbeddings(trimmed);
+      const reasons = new Map<string, string>(
+        hits.map((hit) => [`library-${hit.mediaId}`, `CLIP ${hit.score.toFixed(2)}`]),
+      );
+      setItems((current) =>
+        current.map((item) => ({
+          ...item,
+          matchReasons: reasons.has(item.id)
+            ? [reasons.get(item.id) ?? "", ...item.subjects.slice(0, 2).map((tag) => tag.label)]
+            : item.matchReasons,
+        })),
+      );
       const visual = {
         kind: "visual" as const,
         ids: hits.map((hit) => `library-${hit.mediaId}`),
         label: `AI “${trimmed}”`,
       };
+      const extra = parsed.filter((filter) => filter.kind === "subject" || filter.kind === "person" || filter.kind === "region");
       setFilters((current) => {
         const kept = current.filter(
           (filter) =>
             filter.kind !== "visual" &&
             filter.kind !== "subject" &&
             filter.kind !== "text" &&
-            filter.kind !== "person",
+            filter.kind !== "person" &&
+            filter.kind !== "region",
         );
-        return [...structured, visual].reduce(upsertFilter, kept);
+        return [...structured, ...extra, visual].reduce(upsertFilter, kept);
       });
       setTelemetry((current) => ({
         ...current,
@@ -912,6 +966,14 @@ export function Workspace() {
     setVolumes(nextVolumes);
     setWatches(nextWatches);
     setAlbums(nextAlbums);
+    const health = await libraryHealth().catch(() => null);
+    if (health) {
+      setHealthLine(
+        health.missing.length > 0
+          ? `${health.online} online · ${health.offline} offline · ${health.missing.length} missing on a connected drive`
+          : `${health.online} originals online · ${health.offline} offline`,
+      );
+    }
   }
 
   function requireOriginal(item: StudioItem | null, action: () => void) {
@@ -1058,6 +1120,21 @@ export function Workspace() {
     try {
       const paths = await pickImportPaths();
       if (!paths) return;
+      if (desktopBridgeAvailable() && paths[0]) {
+        try {
+          const preview = await previewImport(paths[0]);
+          setImportPreview(preview);
+          setPendingImportRoots(paths);
+          setImportMessage(
+            preview.newCount === 0
+              ? `${preview.volumeLabel}: everything here is already in the library`
+              : `${preview.volumeLabel}: ${preview.newCount} new · ${preview.knownCount} already indexed`,
+          );
+          if (preview.newCount === 0) return;
+        } catch {
+          // Fall through to a full index if the preview command is unavailable.
+        }
+      }
       await ingestPaths(paths);
     } catch (error) {
       setImportError(errorMessage(error));
@@ -1198,17 +1275,100 @@ export function Workspace() {
     setTelemetry((current) => ({ ...current, scanLabel: "Copied path" }));
   }
 
+  async function showSimilar(item: StudioItem) {
+    if (!item.sourcePath || !desktopBridgeAvailable()) return;
+    try {
+      const hits = await similarTo(item.sourcePath);
+      setFilters((current) =>
+        upsertFilter(
+          current.filter((filter) => filter.kind !== "visual"),
+          {
+            kind: "visual",
+            ids: hits.map((hit) => `library-${hit.mediaId}`),
+            label: `Similar to ${item.fileName}`,
+          },
+        ),
+      );
+      setItems((current) =>
+        current.map((row) => {
+          const hit = hits.find((entry) => `library-${entry.mediaId}` === row.id);
+          return hit ? { ...row, matchReasons: [`similar ${hit.score.toFixed(2)}`] } : row;
+        }),
+      );
+      chooseView("compact");
+    } catch (error) {
+      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+    }
+  }
+
+  async function makeVirtualCopy() {
+    const item = items.find((row) => selectedIds.includes(row.id) && row.sourcePath && row.originalOnline);
+    if (!item?.sourcePath) {
+      requireOriginal(items.find((row) => selectedIds.includes(row.id)) ?? null, () => undefined);
+      return;
+    }
+    try {
+      const record = await cloneVirtual(item.sourcePath);
+      setItems((current) => mergeItems([presentRecord(record)], current));
+      setToast("Virtual copy created");
+    } catch (error) {
+      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+    }
+  }
+
+  async function relinkFromFolder() {
+    try {
+      const root = await pickDirectory("Folder to relink");
+      if (!root) return;
+      const report = await relinkFolder(root);
+      const { media } = await fetchLibrary();
+      setItems(media.map(presentRecord));
+      setToast(`Relinked ${report.relinked} of ${report.scanned}`);
+      setModal(null);
+    } catch (error) {
+      setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+    }
+  }
+
   function exportSelection(format: string, destination: string) {
     const count = selectedIds.length > 0 ? selectedIds.length : visible.length;
     setModal(null);
+    const chosen = items.filter((item) =>
+      (selectedIds.length > 0 ? selectedIds.includes(item.id) : visible.some((row) => row.id === item.id)),
+    );
+    if (format !== "Original" && desktopBridgeAvailable()) {
+      void (async () => {
+        let wrote = 0;
+        for (const item of chosen) {
+          try {
+            const blob = await renderExportBlob(item, item.develop, {
+              ...DEFAULT_EXPORT,
+              format: format === "TIFF" ? "TIFF" : "JPEG",
+              watermark: "Shelf",
+            });
+            const name = item.fileName.replace(/\.[^.]+$/, "") + ".jpg";
+            await writeBytes(`${destination.replace(/\/$/, "")}/${name}`, await blobToBytes(blob));
+            wrote += 1;
+          } catch {
+            // Fall back to copy originals below.
+          }
+        }
+        setTelemetry((current) => ({
+          ...current,
+          exportLabel: wrote > 0 ? `Exported ${wrote} graded JPEG to ${destination}` : `Export queued · ${count} · ${format}`,
+        }));
+      })();
+      return;
+    }
     setTelemetry((current) => ({
       ...current,
       exportLabel: `Export queued · ${count} · ${format} · ${destination}`,
     }));
+    void exportCopies();
   }
 
   return (
-    <div className="relative flex h-dvh flex-col overflow-hidden bg-studio text-foam">
+    <div className="relative flex h-dvh flex-col overflow-hidden bg-studio text-foam [color-gamut:p3]">
       <TopBar
         query={query}
         onQuery={setQuery}
@@ -1229,7 +1389,7 @@ export function Workspace() {
       />
 
       {viewMode !== "insights" && preset !== "compare" ? (
-        <FilterRail sort={sort} onSort={setSort} />
+        <FilterRail sort={sort} onSort={setSort} collapseBursts={collapseBursts} onCollapseBursts={setCollapseBursts} />
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -1277,6 +1437,22 @@ export function Workspace() {
             onOpen={(id) => viewItem(id)}
             onShowFrames={showFrames}
             onShowSubject={showSubject}
+            onShowPerson={(personId, name) => {
+              setFilters((current) => upsertFilter(current, { kind: "person", personId, name }));
+              chooseView("compact");
+            }}
+            onRenamePerson={(personId, name) => {
+              const id = numericSuffix(personId, "person-");
+              if (id == null) return;
+              void renamePerson(id, name).then(() => {
+                setItems((current) =>
+                  current.map((item) => ({
+                    ...item,
+                    faces: item.faces.map((face) => (face.personId === personId ? { ...face, name } : face)),
+                  })),
+                );
+              });
+            }}
           />
         ) : (
           <MediaStage
@@ -1302,6 +1478,7 @@ export function Workspace() {
             selectingCache={selectingCache}
             onCacheBounds={finishCacheSelect}
             onCancelCache={cancelCacheSelect}
+            collapseBursts={collapseBursts}
           />
         )}
         {panelMode === "docked" ? (
@@ -1382,6 +1559,11 @@ export function Workspace() {
           canEdit={items.some((item) => selectedIds.includes(item.id) && item.originalOnline)}
           onBatchEdit={openBatchEdit}
           onAutoGrade={() => void autoGradeSelection()}
+          onSimilar={() => {
+            const item = items.find((row) => row.id === selectedIds[0]);
+            if (item) void showSimilar(item);
+          }}
+          onVirtual={() => void makeVirtualCopy()}
           onRemove={() => void removeSelected()}
           onDelete={() => setConfirmDelete(true)}
           onClear={() => {
@@ -1417,6 +1599,26 @@ export function Workspace() {
           onBrowse={() => void browseFolders()}
           onPaths={(paths) => void ingestPaths(paths)}
           onFiles={ingestFiles}
+          preview={
+            importPreview
+              ? {
+                  volumeLabel: importPreview.volumeLabel,
+                  newCount: importPreview.newCount,
+                  knownCount: importPreview.knownCount,
+                  names: importPreview.newFiles.map((file) => file.name),
+                }
+              : null
+          }
+          onIndexAnyway={
+            pendingImportRoots
+              ? () => {
+                  const roots = pendingImportRoots;
+                  setPendingImportRoots(null);
+                  setImportPreview(null);
+                  void ingestPaths(roots);
+                }
+              : undefined
+          }
         />
       ) : null}
       {modal === "preferences" ? (
@@ -1430,6 +1632,8 @@ export function Workspace() {
           onSlideshow={changeSlideshow}
           autoScanOnPlug={autoScanOnPlug}
           onAutoScanOnPlug={changeAutoScanOnPlug}
+          onRelink={() => void relinkFromFolder()}
+          healthLine={healthLine}
         />
       ) : null}
       {confirmDelete ? (
@@ -1454,6 +1658,11 @@ export function Workspace() {
         </Modal>
       ) : null}
       {plugHint ? <PlugDriveModal hint={plugHint} onClose={() => setPlugHint(null)} /> : null}
+      {toast ? (
+        <div className="pointer-events-none absolute bottom-20 left-1/2 z-40 -translate-x-1/2 rounded-full border border-line bg-card px-4 py-2 text-xs text-foam">
+          {toast}
+        </div>
+      ) : null}
       {modal === "export" ? (
         <BatchExportModal
           count={selectedIds.length}
@@ -1475,7 +1684,6 @@ export function Workspace() {
           onClose={closeLightbox}
           onPrev={() => stepLightbox(-1)}
           onNext={() => stepLightbox(1)}
-          strip={lightboxPool.slice(Math.max(0, lightboxIndex - 16), lightboxIndex + 17)}
           onJump={(id) => {
             setLightboxId(id);
             setPrimaryId(id);
@@ -1503,6 +1711,12 @@ export function Workspace() {
                 }
               : undefined
           }
+          onFlag={(flag) => void applyFlag(lightboxItem.id, flag)}
+          onRate={(rating) => rate(lightboxItem.id, rating)}
+          onSimilar={() => void showSimilar(lightboxItem)}
+          comparePrevious={comparePrevious}
+          onToggleCompare={() => setComparePrevious((current) => !current)}
+          strip={burstStrip(lightboxPool, lightboxItem)}
         />
       ) : null}
       {developOpen && lightboxItem?.originalOnline ? (

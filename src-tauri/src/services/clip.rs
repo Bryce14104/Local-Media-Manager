@@ -378,6 +378,17 @@ fn writable_models_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("models")
 }
 
+pub(crate) fn ensure_face_models(
+    det: &str,
+    det_url: &str,
+    rec: &str,
+    rec_url: &str,
+) -> Result<(), VisionError> {
+    ensure_file(det, det_url)?;
+    ensure_file(rec, rec_url)?;
+    Ok(())
+}
+
 fn ensure_file(file_name: &str, url: &str) -> Result<PathBuf, VisionError> {
     let dest = model_path(file_name);
     if dest.is_file() && dest.metadata().map(|meta| meta.len() > 1_000).unwrap_or(false) {

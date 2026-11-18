@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { desktopBridgeAvailable, writeBytes } from "../../lib/api";
+import { desktopBridgeAvailable, workingPreview, writeBytes } from "../../lib/api";
+import { mediaSrc } from "../../lib/mediaSrc";
 import {
   applyDevelop,
   autoGradeFromUrls,
@@ -53,9 +54,10 @@ export function DevelopStudio({
   const [busy, setBusy] = useState("Loading frame…");
   const [exportLabel, setExportLabel] = useState<string | null>(null);
   const [hist, setHist] = useState({ r: new Array(32).fill(0), g: new Array(32).fill(0), b: new Array(32).fill(0) });
+  const [workUrl, setWorkUrl] = useState<string | null>(null);
   const sources = useMemo(
-    () => developSourceUrls(item),
-    [item.id, item.inspectUrl, item.previewUrl, item.proxyUrl],
+    () => [...new Set([workUrl, ...developSourceUrls(item)].filter((url): url is string => Boolean(url)))],
+    [item.id, item.inspectUrl, item.previewUrl, item.proxyUrl, workUrl],
   );
   const fallbackSrc = sources[0] ?? null;
   const originalRatio = (item.width && item.height ? item.width / item.height : null) ?? null;
@@ -127,6 +129,21 @@ export function DevelopStudio({
       setBusy(error instanceof Error ? error.message : "Could not draw this frame.");
     }
   }, [compare, settings, tool]);
+
+  useEffect(() => {
+    if (!item.sourcePath || !desktopBridgeAvailable()) return;
+    let cancel = false;
+    void workingPreview(item.sourcePath)
+      .then((path) => {
+        if (cancel) return;
+        const url = mediaSrc(path);
+        if (url) setWorkUrl(url);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancel = true;
+    };
+  }, [item.sourcePath]);
 
   useEffect(() => {
     let cancel = false;

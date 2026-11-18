@@ -3,9 +3,11 @@ import type { SortKey } from "../../studio/types";
 type FilterRailProps = {
   sort: SortKey;
   onSort: (sort: SortKey) => void;
+  collapseBursts?: boolean;
+  onCollapseBursts?: (value: boolean) => void;
 };
 
-export function FilterRail({ sort, onSort }: FilterRailProps) {
+export function FilterRail({ sort, onSort, collapseBursts = false, onCollapseBursts }: FilterRailProps) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
       <label className="flex items-center gap-1.5 text-[11px] text-mute">
@@ -21,6 +23,16 @@ export function FilterRail({ sort, onSort }: FilterRailProps) {
           <option value="camera">Camera</option>
         </select>
       </label>
+      {onCollapseBursts ? (
+        <button
+          type="button"
+          aria-pressed={collapseBursts}
+          onClick={() => onCollapseBursts(!collapseBursts)}
+          className={`rounded-full px-2.5 py-1 text-[11px] ${collapseBursts ? "bg-teal text-teal-ink" : "text-mute hover:text-foam"}`}
+        >
+          Collapse bursts
+        </button>
+      ) : null}
     </div>
   );
 }

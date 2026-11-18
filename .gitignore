@@ -18,6 +18,8 @@ src-tauri/models/clip-text.onnx
 src-tauri/models/vocab.json
 src-tauri/models/merges.txt
 src-tauri/models/tokenizer_config.json
+src-tauri/models/face_detection_yunet_2023mar.onnx
+src-tauri/models/face_recognition_sface_2021dec.onnx
 
 # Local catalogs created while trying the app from the repo root
 *.sqlite

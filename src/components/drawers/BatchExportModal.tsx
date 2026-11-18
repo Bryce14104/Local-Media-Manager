@@ -15,8 +15,8 @@ export function BatchExportModal({ count, onClose, onExport }: BatchExportModalP
     <Modal title="Batch export" onClose={onClose}>
       <p className="text-sm text-mute">
         {count === 0
-          ? "Nothing is selected. Export will queue the frames currently in view."
-          : `${count} selected frame${count === 1 ? "" : "s"} will be queued.`}
+          ? "Nothing is selected. JPEG export grades the preview; Original copies the camera file."
+          : `${count} selected. JPEG writes a graded file with a Shelf watermark; Original copies the file on disk.`}
       </p>
       <form
         className="mt-4 space-y-3"

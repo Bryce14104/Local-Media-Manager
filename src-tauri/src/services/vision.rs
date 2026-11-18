@@ -6,12 +6,13 @@
 //! stay on this machine after the first download.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use image::imageops::FilterType;
 use image::{Rgb, RgbImage};
 use ndarray::Array4;
 use ort::session::Session;
+use ort::value::Tensor;
 use thiserror::Error;
 
 use crate::db::{DbError, Library, VisionTarget};
@@ -159,6 +160,15 @@ where
                 }
                 if let Err(error) = store_frame(library, target.id, &prepared.labels, &prepared.embedding) {
                     eprintln!("shelf index: could not store {}: {error}", target.file_path);
+                }
+                if let Some(image) = load_pixels(target) {
+                    match assign_faces(library, target.id, &image) {
+                        Ok(count) if count > 0 => {
+                            eprintln!("shelf index: {count} face(s) on {}", target.file_path);
+                        }
+                        Err(error) => eprintln!("shelf index: faces skipped on {}: {error}", target.file_path),
+                        _ => {}
+                    }
                 }
             }
             Err(error) => {
@@ -331,6 +341,39 @@ pub fn search_embeddings(library: &Library, query: &str) -> Result<Vec<AiSearchH
     Ok(hits)
 }
 
+pub fn similar_to(library: &Library, path: &str) -> Result<Vec<AiSearchHit>, VisionError> {
+    let media_id = library
+        .find_by_path(path)
+        .ok()
+        .flatten()
+        .map(|row| row.id);
+    let rows = library.visual_embeddings()?;
+    let Some((_, _, probe)) = rows.iter().find(|(id, file, _)| {
+        media_id.is_some_and(|want| *id == want) || file == path
+    }) else {
+        return Ok(Vec::new());
+    };
+    let mut hits = Vec::new();
+    for (id, file, embedding) in &rows {
+        if media_id.is_some_and(|want| *id == want) {
+            continue;
+        }
+        let score = super::clip::cosine(embedding, probe);
+        if score < 0.28 {
+            continue;
+        }
+        hits.push(AiSearchHit {
+            media_id: *id,
+            path: file.clone(),
+            score,
+            label: "similar".into(),
+        });
+    }
+    hits.sort_by(|left, right| right.score.partial_cmp(&left.score).unwrap_or(std::cmp::Ordering::Equal));
+    hits.truncate(48);
+    Ok(hits)
+}
+
 fn load_pixels(target: &VisionTarget) -> Option<RgbImage> {
     if let Some(thumb) = target.thumbnail_path.as_deref()
         && let Ok(image) = image::open(thumb)
@@ -365,6 +408,170 @@ impl Engine {
         super::clip::with_engine(threads, |_| Ok(()))?;
         Ok(Self)
     }
+}
+
+const YUNET: &str = "face_detection_yunet_2023mar.onnx";
+const SFACE: &str = "face_recognition_sface_2021dec.onnx";
+const YUNET_URL: &str =
+    "https://huggingface.co/opencv/face_detection_yunet/resolve/main/face_detection_yunet_2023mar.onnx";
+const SFACE_URL: &str =
+    "https://huggingface.co/opencv/face_recognition_sface/resolve/main/face_recognition_sface_2021dec.onnx";
+
+struct FaceSessions {
+    det: Session,
+    rec: Session,
+}
+
+fn face_sessions() -> Result<&'static Mutex<FaceSessions>, VisionError> {
+    static FACES: OnceLock<Mutex<FaceSessions>> = OnceLock::new();
+    if let Some(existing) = FACES.get() {
+        return Ok(existing);
+    }
+    super::clip::ensure_face_models(YUNET, YUNET_URL, SFACE, SFACE_URL)?;
+    let environment = environment()?;
+    let threads = worker_threads();
+    let det = session(environment, YUNET, threads)?;
+    let rec = session(environment, SFACE, threads.max(1))?;
+    let _ = FACES.set(Mutex::new(FaceSessions { det, rec }));
+    FACES.get().ok_or_else(|| VisionError::Decode("face engine".into()))
+}
+
+fn assign_faces(library: &Library, media_id: i64, image: &RgbImage) -> Result<usize, VisionError> {
+    if !might_contain_person(image) {
+        return Ok(0);
+    }
+    let Ok(lock) = face_sessions() else {
+        return Ok(0);
+    };
+    let mut guard = lock.lock().unwrap_or_else(|err| err.into_inner());
+    let faces = detect_faces(&mut guard.det, image)?;
+    if faces.is_empty() {
+        return Ok(0);
+    }
+    let mut known = library.person_prototypes().unwrap_or_default();
+    let mut stored = 0;
+    for face in faces {
+        let aligned = align_or_crop(image, &face);
+        let mut embedding = sface_embed(&mut guard.rec, &aligned)?;
+        l2_normalize(&mut embedding);
+        let person_id = match nearest(&embedding, &known) {
+            Some((id, score)) if score >= SAME_PERSON => id,
+            _ => {
+                let id = library.create_person(None).map_err(VisionError::Database)?;
+                known.push((id, embedding.clone()));
+                id
+            }
+        };
+        let width = image.width().max(1) as f32;
+        let height = image.height().max(1) as f32;
+        library
+            .insert_face(
+                media_id,
+                person_id,
+                (face.x / width).clamp(0.0, 1.0),
+                (face.y / height).clamp(0.0, 1.0),
+                (face.width / width).clamp(0.0, 1.0),
+                (face.height / height).clamp(0.0, 1.0),
+                face.score,
+                &embedding,
+            )
+            .map_err(VisionError::Database)?;
+        stored += 1;
+    }
+    Ok(stored)
+}
+
+fn detect_faces(det: &mut Session, image: &RgbImage) -> Result<Vec<DetectedFace>, VisionError> {
+    let scaled = image::imageops::resize(image, INPUT, INPUT, FilterType::Triangle);
+    let tensor = Tensor::from_array(nchw(&scaled, true, |value, _| value))?;
+    let input = tensor_name(det, true, &["input"]);
+    let outputs = det.run(ort::inputs![input.as_str() => tensor])?;
+    let mut cls = [&[] as &[f32]; 3];
+    let mut obj = [&[] as &[f32]; 3];
+    let mut bbox = [&[] as &[f32]; 3];
+    let mut kps = [&[] as &[f32]; 3];
+    let mut extracted = Vec::new();
+    for (name, value) in outputs.iter() {
+        let Ok((_shape, data)) = value.try_extract_tensor::<f32>() else {
+            continue;
+        };
+        extracted.push((name.to_string(), data.to_vec()));
+    }
+    for (name, data) in &extracted {
+        let slot = if name.contains("8") && !name.contains("16") && !name.contains("32") {
+            0
+        } else if name.contains("16") {
+            1
+        } else if name.contains("32") {
+            2
+        } else {
+            continue;
+        };
+        let lower = name.to_ascii_lowercase();
+        if lower.contains("cls") {
+            cls[slot] = data.as_slice();
+        } else if lower.contains("obj") {
+            obj[slot] = data.as_slice();
+        } else if lower.contains("bbox") {
+            bbox[slot] = data.as_slice();
+        } else if lower.contains("kps") || lower.contains("key") {
+            kps[slot] = data.as_slice();
+        }
+    }
+    if cls.iter().any(|row| row.is_empty()) {
+        return Ok(Vec::new());
+    }
+    let mut faces = decode_yunet(
+        &Heads {
+            cls,
+            obj,
+            bbox,
+            kps,
+        },
+        FACE_SCORE,
+        FACE_NMS,
+    );
+    let scale_x = image.width() as f32 / INPUT as f32;
+    let scale_y = image.height() as f32 / INPUT as f32;
+    for face in &mut faces {
+        face.x *= scale_x;
+        face.y *= scale_y;
+        face.width *= scale_x;
+        face.height *= scale_y;
+        for point in &mut face.landmarks {
+            point.0 *= scale_x;
+            point.1 *= scale_y;
+        }
+    }
+    Ok(faces)
+}
+
+fn sface_embed(rec: &mut Session, image: &RgbImage) -> Result<Vec<f32>, VisionError> {
+    let sized = if image.width() == 112 && image.height() == 112 {
+        image.clone()
+    } else {
+        image::imageops::resize(image, 112, 112, FilterType::Triangle)
+    };
+    let tensor = Tensor::from_array(nchw(&sized, true, |value, _| (value - 127.5) / 128.0))?;
+    let input = tensor_name(rec, true, &["data", "input"]);
+    let out = tensor_name(rec, false, &["fc1", "output"]);
+    let outputs = rec.run(ort::inputs![input.as_str() => tensor])?;
+    let (_shape, data) = outputs[out.as_str()].try_extract_tensor::<f32>()?;
+    Ok(data.to_vec())
+}
+
+fn tensor_name(session: &Session, input: bool, hints: &[&str]) -> String {
+    let names: Vec<String> = if input {
+        session.inputs().iter().map(|item| item.name().to_string()).collect()
+    } else {
+        session.outputs().iter().map(|item| item.name().to_string()).collect()
+    };
+    for hint in hints {
+        if let Some(name) = names.iter().find(|name| name.eq_ignore_ascii_case(hint) || name.contains(hint)) {
+            return name.clone();
+        }
+    }
+    names.into_iter().next().unwrap_or_else(|| "input".into())
 }
 
 struct Classified {

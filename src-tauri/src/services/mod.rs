@@ -3,6 +3,7 @@
 mod capture;
 mod clip;
 mod exif;
+mod library_ops;
 mod pool;
 mod scanner;
 mod thumbs;
@@ -10,8 +11,12 @@ mod vocab;
 mod vision;
 pub mod volumes;
 
+pub use library_ops::{
+    clone_virtual, library_health, preview_import, relink_folder, working_preview, ImportPreview,
+    LibraryHealth, RelinkReport,
+};
 pub use thumbs::{attach_sidecars, extract_largest_jpeg, generate_missing_thumbnails_with};
-pub use vision::{recognize_library, search_embeddings, warm_vision};
+pub use vision::{recognize_library, search_embeddings, similar_to, warm_vision};
 
 use crate::db::{DbError, Library, NewMedia};
 use crate::models::{ExportReport, MediaRecord, ScanReport, VolumeRecord};
@@ -37,10 +42,12 @@ pub enum ServiceError {
     FileTooLarge(String),
     #[error("choose a folder or some files")]
     Empty,
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
 }
 
 enum IndexOutcome {
-    Indexed { note: Option<String> },
+    Indexed { note: Option<String>, path: String },
 }
 
 /// Index folders and individual media files.
@@ -54,10 +61,23 @@ pub fn index_paths(library: &Library, paths: &[String]) -> Result<ScanReport, Se
 pub fn index_paths_with<F>(
     library: &Library,
     paths: &[String],
-    mut progress: F,
+    progress: F,
 ) -> Result<ScanReport, ServiceError>
 where
     F: FnMut(usize, usize),
+{
+    index_paths_notified(library, paths, progress, |_| {})
+}
+
+pub fn index_paths_notified<F, N>(
+    library: &Library,
+    paths: &[String],
+    mut progress: F,
+    mut notify: N,
+) -> Result<ScanReport, ServiceError>
+where
+    F: FnMut(usize, usize),
+    N: FnMut(&MediaRecord),
 {
     let started = Instant::now();
     let mut files = Vec::new();
@@ -109,7 +129,7 @@ where
     let discovered = files.len();
     eprintln!("shelf index: scanning {}", roots.join(", "));
     let (indexed, unchanged, loop_failed, loop_errors) =
-        index_files(library, &files, &mut progress);
+        index_files(library, &files, &mut progress, &mut notify);
     failed += loop_failed;
     eprintln!(
         "shelf index: scan finished, indexed {indexed}, unchanged {unchanged}, failed {failed}"
@@ -144,10 +164,23 @@ pub fn index_directory(library: &Library, root: &Path) -> Result<ScanReport, Ser
 pub fn index_directory_with<F>(
     library: &Library,
     root: &Path,
-    mut progress: F,
+    progress: F,
 ) -> Result<ScanReport, ServiceError>
 where
     F: FnMut(usize, usize),
+{
+    index_directory_notified(library, root, progress, |_| {})
+}
+
+pub fn index_directory_notified<F, N>(
+    library: &Library,
+    root: &Path,
+    mut progress: F,
+    mut notify: N,
+) -> Result<ScanReport, ServiceError>
+where
+    F: FnMut(usize, usize),
+    N: FnMut(&MediaRecord),
 {
     let started = Instant::now();
     remember_root(library, root);
@@ -155,7 +188,8 @@ where
     let batch = scan_directory(root)?;
     let discovered = batch.files.len();
     let mut errors = batch.errors;
-    let (indexed, unchanged, failed, loop_errors) = index_files(library, &batch.files, &mut progress);
+    let (indexed, unchanged, failed, loop_errors) =
+        index_files(library, &batch.files, &mut progress, &mut notify);
     for note in loop_errors {
         push_note(&mut errors, note);
     }
@@ -174,13 +208,15 @@ where
     })
 }
 
-fn index_files<F>(
+fn index_files<F, N>(
     library: &Library,
     files: &[crate::models::ScannedFile],
     progress: &mut F,
+    notify: &mut N,
 ) -> (usize, usize, usize, Vec<String>)
 where
     F: FnMut(usize, usize),
+    N: FnMut(&MediaRecord),
 {
     let total = files.len();
     progress(0, total);
@@ -220,14 +256,14 @@ where
             batch.push(result);
             if batch.len() >= 64 {
                 let count = batch.len();
-                apply_hash_batch(library, &mut batch, &mut indexed, &mut failed, &mut errors);
+                apply_hash_batch(library, &mut batch, &mut indexed, &mut failed, &mut errors, notify);
                 done += count;
                 progress(done, total);
             }
         }
         if !batch.is_empty() {
             let count = batch.len();
-            apply_hash_batch(library, &mut batch, &mut indexed, &mut failed, &mut errors);
+            apply_hash_batch(library, &mut batch, &mut indexed, &mut failed, &mut errors, notify);
             done += count;
             progress(done, total);
         }
@@ -335,13 +371,17 @@ fn hash_index_job(job: HashJob) -> HashResult {
     HashResult { job, payload }
 }
 
-fn apply_hash_batch(
+fn apply_hash_batch<N>(
     library: &Library,
     batch: &mut Vec<HashResult>,
     indexed: &mut usize,
     failed: &mut usize,
     errors: &mut Vec<String>,
-) {
+    notify: &mut N,
+)
+where
+    N: FnMut(&MediaRecord),
+{
     let rows = std::mem::take(batch);
     let outcome = library.with_transaction(|conn| {
         let mut notes: Vec<Result<IndexOutcome, String>> = Vec::with_capacity(rows.len());
@@ -354,10 +394,15 @@ fn apply_hash_batch(
         Ok(notes) => {
             for note in notes {
                 match note {
-                    Ok(IndexOutcome::Indexed { note }) => {
+                    Ok(IndexOutcome::Indexed { note, path }) => {
                         *indexed += 1;
                         if let Some(note) = note {
                             push_note(errors, note);
+                        }
+                        if let Ok(Some(mut record)) = library.find_by_path(&path) {
+                            hydrate_origins(library, std::slice::from_mut(&mut record));
+                            thumbs::attach_sidecars(&mut record);
+                            notify(&record);
                         }
                     }
                     Err(err) => {
@@ -405,7 +450,7 @@ fn store_hashed_sql(
         },
     )?;
 
-    Ok(IndexOutcome::Indexed { note })
+    Ok(IndexOutcome::Indexed { note, path: job.path })
 }
 
 fn remember_root(library: &Library, root: &Path) {
@@ -436,14 +481,15 @@ pub fn hydrate_origins(library: &Library, records: &mut [MediaRecord]) {
         record.volume_mount = Some(volume.last_mount.clone());
         let relative = record.relative_path.clone().unwrap_or_default();
         let remounted = volumes::join_mount(&volume.last_mount, &relative);
-        if remounted.is_file() && remounted.to_string_lossy() != record.file_path {
+        let disk_path = library_ops::catalog_path(&record.file_path);
+        if remounted.is_file() && remounted.to_string_lossy() != disk_path {
             let next = remounted.to_string_lossy().into_owned();
             let _ = library.set_file_path(record.id, &next);
             record.file_path = next;
         }
-        let on_volume = Path::new(&record.file_path).starts_with(&volume.last_mount);
-        record.original_online =
-            remounted.is_file() || (on_volume && Path::new(&record.file_path).is_file());
+        let live = Path::new(crate::models::catalog_path(&record.file_path));
+        let on_volume = live.starts_with(&volume.last_mount);
+        record.original_online = remounted.is_file() || (on_volume && live.is_file());
         record.plug_hint = Some(volumes::plug_hint(
             &volume.label,
             &volume.last_mount,

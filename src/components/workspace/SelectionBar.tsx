@@ -6,6 +6,8 @@ type SelectionBarProps = {
   onExport: () => void;
   onBatchEdit: () => void;
   onAutoGrade: () => void;
+  onSimilar?: () => void;
+  onVirtual?: () => void;
   onRemove: () => void;
   onDelete: () => void;
   onClear: () => void;
@@ -19,6 +21,8 @@ export function SelectionBar({
   onExport,
   onBatchEdit,
   onAutoGrade,
+  onSimilar,
+  onVirtual,
   onRemove,
   onDelete,
   onClear,
@@ -43,6 +47,8 @@ export function SelectionBar({
           onClick={onAutoGrade}
           disabled={!canEdit}
         />
+        {onSimilar ? <Action label="Similar" hint="More like this" onClick={onSimilar} /> : null}
+        {onVirtual ? <Action label="Virtual copy" hint="Grade a second version" onClick={onVirtual} /> : null}
         <Action label="Export" hint="Copy files out" onClick={onExport} />
         <Action label="Rotate" hint="Turn 90°" onClick={onRotate} />
         <Rule />

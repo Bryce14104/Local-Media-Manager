@@ -56,10 +56,15 @@ export function MediaCard({
               style={{ background: colorSwatch(item.colorLabel) }}
             />
           ) : null}
-          <div className="h-full w-full" style={stageStyle(item.rotation, item.develop)}>
+          <div className="h-full w-full [color-gamut:p3]" style={stageStyle(item.rotation, item.develop)}>
             <FrameStill id={item.id} fileName={item.fileName} src={item.previewUrl} />
           </div>
           {item.format === "video" ? <PlayMark /> : null}
+          {item.burstSize && item.burstSize > 1 ? (
+            <span className="pointer-events-none absolute left-1 top-1 z-10 rounded bg-black/60 px-1 text-[10px] text-white/85">
+              {item.burstSize}
+            </span>
+          ) : null}
           {item.originalOnline ? null : (
             <span className="pointer-events-none absolute bottom-1 right-1 z-10 rounded bg-black/55 px-1 text-[10px] text-white/75">
               720p

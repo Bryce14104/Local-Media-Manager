@@ -27,6 +27,8 @@ export function PreferencesModal({
   onSlideshow,
   autoScanOnPlug,
   onAutoScanOnPlug,
+  onRelink,
+  healthLine,
 }: {
   onClose: () => void;
   maxZoom: MapZoom;
@@ -37,6 +39,8 @@ export function PreferencesModal({
   onSlideshow: (settings: SlideshowSettings) => void;
   autoScanOnPlug: boolean;
   onAutoScanOnPlug: (enabled: boolean) => void;
+  onRelink?: () => void;
+  healthLine?: string | null;
 }) {
   const [group, setGroup] = useState<PrefGroup>("library");
   const library = useMapLibrary();
@@ -64,13 +68,30 @@ export function PreferencesModal({
 
       <div className="mt-4 max-h-[60vh] overflow-auto pr-1">
         {group === "library" ? (
+          <div className="space-y-3">
           <PrefCard title="Drives" hint="Previews stay in Shelf when a disk is unplugged. This only indexes new files on a drive you already added.">
             <PrefToggle
               label="Scan when a remembered drive is plugged in"
               checked={autoScanOnPlug}
               onChange={onAutoScanOnPlug}
             />
+            {healthLine ? <p className="mt-3 text-xs text-mute">{healthLine}</p> : null}
+            {onRelink ? (
+              <button
+                type="button"
+                onClick={onRelink}
+                className="mt-3 rounded-full border border-line px-3 py-1.5 text-xs text-foam hover:border-teal"
+              >
+                Relink files from a folder
+              </button>
+            ) : null}
           </PrefCard>
+          <PrefCard title="Keyboard" hint="Culling happens in fullscreen. Grid stays viewing-first.">
+            <p className="text-xs leading-relaxed text-mute">
+              J/K or arrows move · Enter opens · E develops · Z 1:1 · C two-up · P pick · X reject · 1–5 rate · F fullscreen
+            </p>
+          </PrefCard>
+          </div>
         ) : null}
 
         {group === "playback" ? (

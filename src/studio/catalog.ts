@@ -114,7 +114,7 @@ export function itemFromRecord(record: {
   originalOnline?: boolean;
   plugHint?: string | null;
 }): StudioItem {
-  const fileName = record.filePath.split(/[/\\]/).filter(Boolean).pop() ?? record.filePath;
+  const fileName = (record.filePath.split(/[/\\]/).filter(Boolean).pop() ?? record.filePath).replace(/::v.*$/, "");
   const folder = parentFolder(record.filePath);
   const exif = record.exif;
   const format = formatForKind(record.mediaKind);
@@ -159,6 +159,7 @@ export function itemFromRecord(record: {
     keywords: record.keywords ?? [],
     indexedAt: record.indexedAt ?? null,
     develop: parseDevelop(record.developJson),
+    virtualCopy: record.filePath.includes("::v"),
     originalOnline: record.originalOnline !== false,
     plugHint: record.plugHint ?? null,
     volumeId: record.volumeId ?? null,

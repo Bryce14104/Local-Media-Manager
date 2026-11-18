@@ -8,12 +8,25 @@ type AddMediaModalProps = {
   message: string | null;
   progress: number | null;
   error: string | null;
+  preview?: { volumeLabel: string; newCount: number; knownCount: number; names: string[] } | null;
   onBrowse: () => void;
   onPaths: (paths: string[]) => void;
   onFiles: (files: File[]) => void;
+  onIndexAnyway?: () => void;
 };
 
-export function AddMediaModal({ onClose, busy, message, progress, error, onBrowse, onPaths, onFiles }: AddMediaModalProps) {
+export function AddMediaModal({
+  onClose,
+  busy,
+  message,
+  progress,
+  error,
+  preview,
+  onBrowse,
+  onPaths,
+  onFiles,
+  onIndexAnyway,
+}: AddMediaModalProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const onPathsRef = useRef(onPaths);
   onPathsRef.current = onPaths;
@@ -51,8 +64,29 @@ export function AddMediaModal({ onClose, busy, message, progress, error, onBrows
   return (
     <Modal title="Add media" onClose={busy ? () => undefined : onClose}>
       <p className="text-sm text-mute">
-        Choose a folder of photos and videos, or drop files here. The originals stay where they are.
+        Choose a card or folder. Shelf shows what is new versus already indexed, then writes previews in the background.
       </p>
+      {preview ? (
+        <div className="mt-3 rounded-2xl border border-line px-3 py-2 text-sm">
+          <p>
+            {preview.volumeLabel}: <span className="text-teal">{preview.newCount} new</span>
+            {preview.knownCount ? ` · ${preview.knownCount} already in the library` : ""}
+          </p>
+          {preview.names.length > 0 ? (
+            <p className="mt-1 truncate text-xs text-mute">{preview.names.slice(0, 4).join(" · ")}</p>
+          ) : null}
+          {onIndexAnyway ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onIndexAnyway}
+              className="mt-2 rounded-full bg-teal px-3 py-1.5 text-xs font-medium text-teal-ink disabled:opacity-40"
+            >
+              Index {preview.newCount} new file{preview.newCount === 1 ? "" : "s"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <div
         className={`mt-4 rounded-2xl border border-dashed px-4 py-8 text-center ${
           over ? "border-teal bg-teal/10" : "border-line"

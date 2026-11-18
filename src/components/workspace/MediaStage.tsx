@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { collapseBursts as collapseBurstItems } from "../../studio/bursts";
 import { gridMetrics } from "../../studio/gridZoom";
 import { formatMonth } from "../../studio/query";
 import type { PointerMods } from "../../studio/selection";
@@ -30,6 +31,7 @@ type MediaStageProps = {
   selectingCache?: boolean;
   onCacheBounds?: (bounds: GeoBounds) => void;
   onCancelCache?: () => void;
+  collapseBursts?: boolean;
   className?: string;
 };
 
@@ -53,9 +55,11 @@ export function MediaStage({
   selectingCache = false,
   onCacheBounds,
   onCancelCache,
+  collapseBursts = false,
   className,
 }: MediaStageProps) {
   const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null);
+  const shown = collapseBursts && viewMode !== "map" ? collapseBurstItems(items) : items;
 
   function selectOnMap(id: string) {
     onView(id);
@@ -94,7 +98,7 @@ export function MediaStage({
     <section className={`flex min-h-0 min-w-0 flex-1 flex-col ${className ?? ""}`}>
       <header className="flex items-center gap-3 px-3 py-2">
         <p className="text-xs text-mute">
-          {items.length === total ? `${total} photos` : `${items.length} of ${total}`}
+          {shown.length === total ? `${total} photos` : `${shown.length} of ${total}${collapseBursts ? " · bursts" : ""}`}
         </p>
         <button
           type="button"
@@ -134,7 +138,7 @@ export function MediaStage({
           </div>
         ) : viewMode === "timeline" ? (
           <Timeline
-            items={items}
+            items={shown}
             zoom={gridZoom}
             selectedIds={selectedIds}
             primaryId={primaryId}
@@ -144,7 +148,7 @@ export function MediaStage({
           />
         ) : (
           <Grid
-            items={items}
+            items={shown}
             zoom={gridZoom}
             selectedIds={selectedIds}
             primaryId={primaryId}

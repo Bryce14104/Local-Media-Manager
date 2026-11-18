@@ -21,6 +21,11 @@ type LightboxProps = {
   onOriginal?: () => void;
   onCopyPath?: () => void;
   onEdit?: () => void;
+  onFlag?: (flag: "pick" | "reject" | "unflagged") => void;
+  onRate?: (rating: number | null) => void;
+  onSimilar?: () => void;
+  comparePrevious?: boolean;
+  onToggleCompare?: () => void;
   poolIds?: string[];
   slideshow: SlideshowSettings;
   onSlideshow: (settings: SlideshowSettings) => void;
@@ -42,6 +47,11 @@ export function Lightbox({
   onOriginal,
   onCopyPath,
   onEdit,
+  onFlag,
+  onRate,
+  onSimilar,
+  comparePrevious = false,
+  onToggleCompare,
   poolIds = [],
   slideshow: slideshowSettings,
   onSlideshow,
@@ -165,11 +175,19 @@ export function Lightbox({
         event.preventDefault();
         setZoom((current) => Math.max(1, current - 0.25));
       }
-      if (event.key === "0") setZoom(1);
+      if (event.key === "0" && !onRate) setZoom(1);
+      if (event.key === "z" || event.key === "Z") {
+        event.preventDefault();
+        setZoom((current) => (current > 1.05 ? 1 : 3));
+      }
+      if ((event.key === "c" || event.key === "C") && onToggleCompare) {
+        event.preventDefault();
+        onToggleCompare();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [onRate, onToggleCompare]);
 
   useEffect(() => {
     const node = rootRef.current;
@@ -250,12 +268,18 @@ export function Lightbox({
           dragX.current = null;
         }}
       >
-        <div className="h-full w-full" style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}>
+        <div
+          className={`h-full w-full ${comparePrevious && before ? "grid grid-cols-2" : ""}`}
+          style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
+        >
+          {comparePrevious && before ? (
+            <ProgressiveMedia item={before} fit="contain" playback="hold" quality="full" />
+          ) : null}
           <ProgressiveMedia
             item={item}
             fit="contain"
             playback="play"
-            quality={immersive ? "full" : "proxy"}
+            quality={immersive || zoom > 1.05 ? "full" : "proxy"}
             onSize={(nextWidth, nextHeight) => setNatural({ width: nextWidth, height: nextHeight })}
           />
         </div>
@@ -285,6 +309,7 @@ export function Lightbox({
               Edit
             </BarLabel>
           ) : null}
+          {onSimilar && !immersive ? <BarLabel onClick={onSimilar}>Similar</BarLabel> : null}
           <div className="relative" ref={settingsRef}>
             <div className="flex overflow-hidden rounded-full border border-white/10">
               <button
@@ -375,6 +400,38 @@ export function Lightbox({
           clip ? "pb-16 md:pb-20" : "pb-3"
         }`}
       >
+        {onFlag || onRate ? (
+          <div className="pointer-events-auto mb-2 flex justify-center gap-1">
+            {onFlag ? (
+              <>
+                <Hud onClick={() => onFlag("pick")} active={item.flag === "pick"}>
+                  Pick
+                </Hud>
+                <Hud onClick={() => onFlag("reject")} active={item.flag === "reject"}>
+                  Reject
+                </Hud>
+              </>
+            ) : null}
+            {onRate
+              ? [1, 2, 3, 4, 5].map((value) => (
+                  <Hud key={value} onClick={() => onRate(item.rating === value ? null : value)} active={item.rating === value}>
+                    {value}
+                  </Hud>
+                ))
+              : null}
+            {onToggleCompare && before ? (
+              <Hud onClick={onToggleCompare} active={comparePrevious}>
+                Two-up
+              </Hud>
+            ) : null}
+            <Hud onClick={() => setZoom((current) => (current > 1.05 ? 1 : 3))} active={zoom > 1.05}>
+              1:1
+            </Hud>
+          </div>
+        ) : null}
+        {item.matchReasons && item.matchReasons.length > 0 ? (
+          <p className="mb-1 text-center text-[11px] text-white/55">{item.matchReasons.join(" · ")}</p>
+        ) : null}
         <p className="pointer-events-none mb-2 hidden truncate px-1 font-mono text-[11px] text-white/50 md:block">
           {captured}
           {width && height ? ` · ${width} × ${height}` : ""}
@@ -443,6 +500,26 @@ function Filmstrip({
         </button>
       ))}
     </div>
+  );
+}
+
+function Hud({
+  children,
+  onClick,
+  active,
+}: {
+  children: ReactNode;
+  onClick: () => void;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-full px-2.5 py-1 text-[11px] ${active ? "bg-teal text-teal-ink" : "border border-white/15 bg-black/40 text-white/80"}`}
+    >
+      {children}
+    </button>
   );
 }
 

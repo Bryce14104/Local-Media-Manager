@@ -79,6 +79,10 @@ export type StudioItem = {
   keywords: string[];
   indexedAt: number | null;
   develop: DevelopSettings;
+  matchReasons?: string[];
+  burstSize?: number;
+  burstIds?: string[];
+  virtualCopy?: boolean;
 };
 
 export type FaceMark = {

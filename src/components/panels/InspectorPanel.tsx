@@ -86,6 +86,10 @@ export function InspectorPanel({
                 {item.plugHint ?? "Plug the drive back in to develop this photo."}
               </p>
             ) : null}
+            {item.matchReasons && item.matchReasons.length > 0 ? (
+              <p className="text-xs text-mute">{item.matchReasons.join(" · ")}</p>
+            ) : null}
+            {item.virtualCopy ? <p className="text-xs text-teal">Virtual copy</p> : null}
             <Stars rating={item.rating} onChange={onRate} />
             <div className="flex flex-wrap gap-1.5">
               {(["red", "yellow", "green", "blue", "purple"] as const).map((color) => (

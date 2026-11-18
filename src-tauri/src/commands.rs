@@ -117,9 +117,16 @@ pub async fn scan_directory(
     let report = async_runtime::spawn_blocking({
         let library = library.clone();
         move || {
-            services::index_directory_with(&library, Path::new(&root), |done, total| {
-                emit_progress(&progress_app, "index", done, total, "Indexing");
-            })
+            services::index_directory_notified(
+                &library,
+                Path::new(&root),
+                |done, total| {
+                    emit_progress(&progress_app, "index", done, total, "Indexing");
+                },
+                |record| {
+                    let _ = progress_app.emit("media-ready", record);
+                },
+            )
             .map_err(|err| err.to_string())
         }
     })
@@ -140,9 +147,16 @@ pub async fn index_paths(
     let report = async_runtime::spawn_blocking({
         let library = library.clone();
         move || {
-            services::index_paths_with(&library, &paths, |done, total| {
-                emit_progress(&progress_app, "index", done, total, "Indexing");
-            })
+            services::index_paths_notified(
+                &library,
+                &paths,
+                |done, total| {
+                    emit_progress(&progress_app, "index", done, total, "Indexing");
+                },
+                |record| {
+                    let _ = progress_app.emit("media-ready", record);
+                },
+            )
             .map_err(|err| err.to_string())
         }
     })
@@ -354,6 +368,39 @@ pub fn export_media(
 #[tauri::command]
 pub fn set_develop(path: String, develop: Option<String>, state: State<'_, Library>) -> Result<(), String> {
     state.set_develop(&path, develop.as_deref()).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn preview_import(root: String, state: State<'_, Library>) -> Result<services::ImportPreview, String> {
+    services::preview_import(&state, Path::new(&root)).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn relink_folder(root: String, state: State<'_, Library>) -> Result<services::RelinkReport, String> {
+    services::relink_folder(&state, Path::new(&root)).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn library_health(state: State<'_, Library>) -> Result<services::LibraryHealth, String> {
+    services::library_health(&state).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn similar_to(path: String, state: State<'_, Library>) -> Result<Vec<crate::models::AiSearchHit>, String> {
+    services::similar_to(&state, &path).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn clone_virtual(path: String, state: State<'_, Library>) -> Result<MediaRecord, String> {
+    let mut record = services::clone_virtual(&state, &path).map_err(|err| err.to_string())?;
+    services::hydrate_origins(&state, std::slice::from_mut(&mut record));
+    services::attach_sidecars(&mut record);
+    Ok(record)
+}
+
+#[tauri::command]
+pub fn working_preview(path: String, state: State<'_, Library>) -> Result<String, String> {
+    services::working_preview(&state, &path).map_err(|err| err.to_string())
 }
 
 #[tauri::command]

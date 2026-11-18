@@ -8,6 +8,9 @@ import type {
   LibrarySummary,
   MediaRecord,
   ScanReport,
+  ImportPreview,
+  RelinkReport,
+  LibraryHealth,
   VolumeRecord,
   WatchedRoot,
 } from "./types";
@@ -252,4 +255,34 @@ export async function rescanWatched(volumeFingerprint?: string): Promise<ScanRep
   return invoke<ScanReport>("rescan_watched", {
     volumeFingerprint: volumeFingerprint ?? null,
   });
+}
+
+export async function previewImport(root: string): Promise<ImportPreview> {
+  assertBridge();
+  return invoke<ImportPreview>("preview_import", { root });
+}
+
+export async function relinkFolder(root: string): Promise<RelinkReport> {
+  assertBridge();
+  return invoke<RelinkReport>("relink_folder", { root });
+}
+
+export async function libraryHealth(): Promise<LibraryHealth> {
+  assertBridge();
+  return invoke<LibraryHealth>("library_health");
+}
+
+export async function similarTo(path: string): Promise<EmbeddingHit[]> {
+  assertBridge();
+  return invoke<EmbeddingHit[]>("similar_to", { path });
+}
+
+export async function cloneVirtual(path: string): Promise<MediaRecord> {
+  assertBridge();
+  return invoke<MediaRecord>("clone_virtual", { path });
+}
+
+export async function workingPreview(path: string): Promise<string> {
+  assertBridge();
+  return invoke<string>("working_preview", { path });
 }

@@ -91,6 +91,27 @@ export type ScanReport = {
   durationMs: number;
 };
 
+export type ImportPreview = {
+  root: string;
+  volumeLabel: string;
+  volumeMount: string;
+  newCount: number;
+  knownCount: number;
+  newFiles: { path: string; name: string; size: number; kind: string }[];
+};
+
+export type RelinkReport = {
+  relinked: number;
+  scanned: number;
+};
+
+export type LibraryHealth = {
+  mediaCount: number;
+  online: number;
+  offline: number;
+  missing: { id: number; path: string; volumeLabel: string | null; hint: string }[];
+};
+
 export type ViewId = "library" | "scan" | "storage";
 
 export type PersonInsight = {
