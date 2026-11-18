@@ -61,7 +61,11 @@ CREATE TABLE IF NOT EXISTS media_files (
     keywords TEXT,
     develop_json TEXT,
     volume_id INTEGER REFERENCES volumes(id),
-    relative_path TEXT
+    relative_path TEXT,
+    cull_hint TEXT,
+    mark_in_ms INTEGER,
+    mark_out_ms INTEGER,
+    video_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS albums (

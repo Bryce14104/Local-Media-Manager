@@ -7,7 +7,7 @@ mod concepts;
 
 use crate::models::{
     AlbumRecord, ConceptIndex, ExifSnapshot, FaceRecord, InsightSnapshot, LabelRecord, MediaKind,
-    MediaRecord, PersonRecord, VolumeRecord, WatchedRoot,
+    MediaRecord, PersonRecord, VideoProbe, VolumeRecord, WatchedRoot,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
@@ -19,7 +19,8 @@ const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 const MEDIA_SELECT: &str = "SELECT id, file_path, content_hash, file_size, created_at, modified_at,
                     indexed_at, rating, media_kind, exif_json, captured_at, thumbnail_path, flag,
-                    color_label, rotation, notes, keywords, develop_json, volume_id, relative_path
+                    color_label, rotation, notes, keywords, develop_json, volume_id, relative_path,
+                    cull_hint, mark_in_ms, mark_out_ms, video_json
              FROM media_files";
 
 /// Values written for a newly hashed media file.
@@ -59,7 +60,7 @@ pub enum DbError {
 
 struct LibraryInner {
     conn: Mutex<Connection>,
-    path: PathBuf,
+    path: Mutex<PathBuf>,
 }
 
 /// Open SQLite file for one Shelf library.
@@ -93,13 +94,99 @@ impl Library {
         Ok(Self {
             inner: Arc::new(LibraryInner {
                 conn: Mutex::new(conn),
-                path: path.to_path_buf(),
+                path: Mutex::new(path.to_path_buf()),
             }),
         })
     }
 
-    pub fn database_path(&self) -> &Path {
-        &self.inner.path
+    pub fn database_path(&self) -> PathBuf {
+        self.inner
+            .path
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone()
+    }
+
+    /// Replace the open SQLite file. Callers keep the same `Library` handle.
+    pub fn reopen(&self, path: impl AsRef<Path>) -> Result<(), DbError> {
+        let next = Library::open(path)?;
+        let mut dest = self.lock()?;
+        let mut src = next.lock()?;
+        std::mem::swap(&mut *dest, &mut *src);
+        drop(dest);
+        drop(src);
+        let mut dest_path = self.inner.path.lock().map_err(|_| DbError::Poisoned)?;
+        let mut src_path = next.inner.path.lock().map_err(|_| DbError::Poisoned)?;
+        std::mem::swap(&mut *dest_path, &mut *src_path);
+        Ok(())
+    }
+
+    pub fn vacuum_into(&self, dest: &Path) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute("VACUUM INTO ?1", params![dest.to_string_lossy().as_ref()])?;
+        Ok(())
+    }
+
+    pub fn keep_media_ids(&self, ids: &[i64]) -> Result<usize, DbError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let conn = self.lock()?;
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("DELETE FROM media_files WHERE id NOT IN ({placeholders})");
+        let mut stmt = conn.prepare(&sql)?;
+        let params = rusqlite::params_from_iter(ids.iter());
+        Ok(stmt.execute(params)?)
+    }
+
+    pub fn rewrite_thumbnail_path(&self, id: i64, thumbnail_path: &str) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE media_files SET thumbnail_path = ?1 WHERE id = ?2",
+            params![thumbnail_path, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_cull_hint(&self, id: i64, hint: Option<&str>) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE media_files SET cull_hint = ?1 WHERE id = ?2",
+            params![hint, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_marks(&self, path: &str, mark_in_ms: Option<i64>, mark_out_ms: Option<i64>) -> Result<MediaRecord, DbError> {
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE media_files SET mark_in_ms = ?1, mark_out_ms = ?2 WHERE file_path = ?3",
+            params![mark_in_ms, mark_out_ms, path],
+        )?;
+        if changed == 0 {
+            return Err(DbError::NotFound(path.to_string()));
+        }
+        drop(conn);
+        self.find_by_path(path)?
+            .ok_or_else(|| DbError::NotFound(path.to_string()))
+    }
+
+    pub fn set_video_json(&self, path: &str, video_json: &str) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE media_files SET video_json = ?1 WHERE file_path = ?2",
+            params![video_json, path],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_thumbnail(&self, path: &str) -> Result<(), DbError> {
+        let conn = self.lock()?;
+        conn.execute(
+            "UPDATE media_files SET thumbnail_path = NULL WHERE file_path = ?1",
+            params![path],
+        )?;
+        Ok(())
     }
 
     pub fn summary(&self) -> Result<crate::models::LibrarySummary, DbError> {
@@ -117,7 +204,7 @@ impl Library {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(crate::models::LibrarySummary {
-            database_path: self.inner.path.display().to_string(),
+            database_path: self.database_path().display().to_string(),
             media_count,
             schema_version,
             columns,
@@ -956,6 +1043,14 @@ fn map_media(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaRecord> {
         relative_path: row.get(19).ok().flatten(),
         original_online: true,
         plug_hint: None,
+        cull_hint: row.get(20).ok().flatten(),
+        mark_in_ms: row.get(21).ok().flatten(),
+        mark_out_ms: row.get(22).ok().flatten(),
+        video: row
+            .get::<_, Option<String>>(23)
+            .ok()
+            .flatten()
+            .and_then(|raw| serde_json::from_str::<VideoProbe>(&raw).ok()),
     })
 }
 
@@ -1139,6 +1234,34 @@ fn migrate(conn: &Connection) -> Result<(), DbError> {
             [],
         )?;
     }
+    let columns = {
+        let mut stmt = conn.prepare("PRAGMA table_info(media_files)")?;
+        stmt.query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if !columns.iter().any(|name| name == "cull_hint") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN cull_hint TEXT", [])?;
+    }
+    if !columns.iter().any(|name| name == "mark_in_ms") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN mark_in_ms INTEGER", [])?;
+    }
+    if !columns.iter().any(|name| name == "mark_out_ms") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN mark_out_ms INTEGER", [])?;
+    }
+    if !columns.iter().any(|name| name == "video_json") {
+        conn.execute("ALTER TABLE media_files ADD COLUMN video_json TEXT", [])?;
+    }
+    let has_v7: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM schema_migrations WHERE version = 7",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_v7 == 0 {
+        conn.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (7, CAST(strftime('%s', 'now') AS INTEGER))",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -1186,6 +1309,9 @@ mod tests {
             "modified_at",
             "indexed_at",
             "rating",
+            "cull_hint",
+            "mark_in_ms",
+            "video_json",
         ] {
             assert!(
                 SCHEMA_SQL.contains(column),
@@ -1200,7 +1326,7 @@ mod tests {
         let library = Library::open(dir.path().join("library.sqlite")).unwrap();
         let summary = library.summary().unwrap();
 
-        assert_eq!(summary.schema_version, 6);
+        assert_eq!(summary.schema_version, 7);
         assert_eq!(summary.media_count, 0);
         for column in [
             "file_path",
@@ -1210,6 +1336,9 @@ mod tests {
             "modified_at",
             "indexed_at",
             "rating",
+            "cull_hint",
+            "mark_in_ms",
+            "video_json",
         ] {
             assert!(
                 summary.columns.iter().any(|name| name == column),
@@ -1218,7 +1347,7 @@ mod tests {
         }
 
         let again = Library::open(dir.path().join("library.sqlite")).unwrap();
-        assert_eq!(again.summary().unwrap().schema_version, 6);
+        assert_eq!(again.summary().unwrap().schema_version, 7);
     }
 
     #[test]
@@ -1624,6 +1753,12 @@ mod tests {
             .unwrap();
         assert_eq!(copied, 1);
         assert!(dest.join("a.jpg").is_file());
+        library
+            .set_marks(source.to_str().unwrap(), Some(1000), Some(4000))
+            .unwrap();
+        let marked = library.find_by_path(source.to_str().unwrap()).unwrap().unwrap();
+        assert_eq!(marked.mark_in_ms, Some(1000));
+        assert_eq!(marked.mark_out_ms, Some(4000));
     }
 
     #[test]

@@ -286,3 +286,58 @@ export async function workingPreview(path: string): Promise<string> {
   assertBridge();
   return invoke<string>("working_preview", { path });
 }
+
+export async function pauseCatalog(paused: boolean): Promise<void> {
+  assertBridge();
+  return invoke("pause_catalog", { paused });
+}
+
+export async function stopCatalog(): Promise<void> {
+  assertBridge();
+  return invoke("stop_catalog");
+}
+
+export async function ejectVolume(mount: string): Promise<void> {
+  assertBridge();
+  return invoke("eject_volume", { mount });
+}
+
+export async function exportTravelLibrary(destination: string, ids: number[]): Promise<{ destination: string; mediaCount: number; previews: number }> {
+  assertBridge();
+  return invoke("export_travel_library", { destination, ids });
+}
+
+export async function openLibrary(path: string): Promise<LibrarySummary> {
+  assertBridge();
+  return invoke<LibrarySummary>("open_library", { path });
+}
+
+export async function newLibrary(destination: string): Promise<LibrarySummary> {
+  assertBridge();
+  return invoke<LibrarySummary>("new_library", { destination });
+}
+
+export async function writeXmp(path: string): Promise<{ path: string; wrote: boolean }> {
+  assertBridge();
+  return invoke("write_xmp", { path });
+}
+
+export async function setMarks(path: string, markInMs: number | null, markOutMs: number | null): Promise<MediaRecord> {
+  assertBridge();
+  return invoke<MediaRecord>("set_marks", { path, markInMs, markOutMs });
+}
+
+export async function exportSubclip(path: string, destination: string): Promise<string> {
+  assertBridge();
+  return invoke<string>("export_subclip", { path, destination });
+}
+
+export async function rebuildPreviews(): Promise<void> {
+  assertBridge();
+  return invoke("rebuild_previews");
+}
+
+export async function ffmpegStatus(): Promise<boolean> {
+  assertBridge();
+  return invoke<boolean>("ffmpeg_status");
+}

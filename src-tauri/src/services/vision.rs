@@ -144,6 +144,13 @@ where
         return Err(error);
     }
     for (index, target) in pending.iter().enumerate() {
+        if super::catalog_control::canceled() {
+            break;
+        }
+        super::catalog_control::wait_if_paused();
+        if super::catalog_control::canceled() {
+            break;
+        }
         progress(index, pending.len(), "Running ONNX on image pixels");
         match prepare_frame(target) {
             Ok(prepared) => {

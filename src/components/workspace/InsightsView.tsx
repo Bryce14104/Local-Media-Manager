@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { ConceptIndex } from "../../lib/types";
 import { libraryOverview, presentConcepts, type InsightGroup, type LibraryBucket } from "../../studio/concepts";
 import type { StudioItem } from "../../studio/types";
+import { tripGroups } from "../../studio/trips";
 import { FrameStill } from "./FrameStill";
 
 type Props = {
@@ -13,13 +14,27 @@ type Props = {
   onShowSubject: (value: string) => void;
   onShowPerson?: (personId: string, name: string) => void;
   onRenamePerson?: (personId: string, name: string) => void;
+  onMergePeople?: (keepId: string, dropId: string) => void;
+  onSplitFace?: (faceId: string) => void;
 };
 
 type Focus = { type: "burst"; id: string } | { type: "bucket"; id: string };
 
-export function InsightsView({ items, index, pending, onOpen, onShowFrames, onShowSubject, onShowPerson, onRenamePerson }: Props) {
+export function InsightsView({
+  items,
+  index,
+  pending,
+  onOpen,
+  onShowFrames,
+  onShowSubject,
+  onShowPerson,
+  onRenamePerson,
+  onMergePeople,
+  onSplitFace,
+}: Props) {
   const [query, setQuery] = useState("");
   const [focus, setFocus] = useState<Focus | null>(null);
+  const [pickedPeople, setPickedPeople] = useState<string[]>([]);
   const people = useMemo(() => {
     const map = new Map<string, { id: string; name: string; items: StudioItem[] }>();
     for (const item of items) {
@@ -33,6 +48,7 @@ export function InsightsView({ items, index, pending, onOpen, onShowFrames, onSh
     }
     return [...map.values()].sort((left, right) => right.items.length - left.items.length);
   }, [items]);
+  const trips = useMemo(() => tripGroups(items), [items]);
   const presented = useMemo(() => (pending ? null : presentConcepts(items, index)), [items, index, pending]);
   const overview = useMemo(() => (pending ? null : libraryOverview(items)), [items, pending]);
 
@@ -74,6 +90,7 @@ export function InsightsView({ items, index, pending, onOpen, onShowFrames, onSh
   const active = resolveFocus(filtered, focus);
   const visibleCount =
     people.length +
+    trips.length +
     filtered.bursts.length +
     filtered.cameras.length +
     filtered.scenes.length +
@@ -144,31 +161,85 @@ export function InsightsView({ items, index, pending, onOpen, onShowFrames, onSh
             ) : null}
 
             {people.length > 0 ? (
-              <Section title="People" hint="Name a cluster. Search uses the name." count={people.length}>
+              <Section title="People" hint="Name, merge, or split a cluster. Search uses the name." count={people.length}>
                 <Row>
                   {people.map((person) => (
                     <GroupCard
                       key={person.id}
-                      pressed={false}
+                      pressed={pickedPeople.includes(person.id)}
                       items={person.items}
                       label={person.name}
                       summary={`${person.items.length} photos`}
-                      onClick={() => onShowPerson?.(person.id, person.name)}
+                      onClick={() => {
+                        setPickedPeople((current) =>
+                          current.includes(person.id)
+                            ? current.filter((id) => id !== person.id)
+                            : [...current, person.id].slice(-2),
+                        );
+                        onShowPerson?.(person.id, person.name);
+                      }}
                     />
                   ))}
                 </Row>
-                {onRenamePerson && people[0] ? (
-                  <button
-                    type="button"
-                    className="mt-2 text-xs text-mute hover:text-foam"
-                    onClick={() => {
-                      const name = window.prompt("Name this person", people[0]?.name ?? "");
-                      if (name && people[0]) onRenamePerson(people[0].id, name);
-                    }}
-                  >
-                    Name the largest cluster
-                  </button>
-                ) : null}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {onRenamePerson && (people.find((person) => pickedPeople.includes(person.id)) ?? people[0]) ? (
+                    <button
+                      type="button"
+                      className="text-xs text-mute hover:text-foam"
+                      onClick={() => {
+                        const person = people.find((row) => pickedPeople.includes(row.id)) ?? people[0];
+                        const name = window.prompt("Name this person", person?.name ?? "");
+                        if (name && person) onRenamePerson(person.id, name);
+                      }}
+                    >
+                      Rename
+                    </button>
+                  ) : null}
+                  {onMergePeople && pickedPeople.length === 2 ? (
+                    <button
+                      type="button"
+                      className="text-xs text-mute hover:text-foam"
+                      onClick={() => {
+                        const keep = pickedPeople[0];
+                        const drop = pickedPeople[1];
+                        if (keep && drop) onMergePeople(keep, drop);
+                        setPickedPeople([]);
+                      }}
+                    >
+                      Merge selected
+                    </button>
+                  ) : null}
+                  {onSplitFace && pickedPeople[0] ? (
+                    <button
+                      type="button"
+                      className="text-xs text-mute hover:text-foam"
+                      onClick={() => {
+                        const person = people.find((row) => row.id === pickedPeople[0]);
+                        const face = person?.items.flatMap((item) => item.faces).find((mark) => mark.personId === person.id);
+                        if (face) onSplitFace(face.id);
+                      }}
+                    >
+                      Split one face
+                    </button>
+                  ) : null}
+                </div>
+              </Section>
+            ) : null}
+
+            {trips.length > 0 ? (
+              <Section title="Trips" hint="GPS clusters a day or two apart" count={trips.length}>
+                <Row>
+                  {trips.map((trip) => (
+                    <GroupCard
+                      key={trip.id}
+                      pressed={false}
+                      items={trip.items}
+                      label={trip.label}
+                      summary={trip.summary}
+                      onClick={() => onShowFrames(trip.items.map((item) => item.id), trip.label)}
+                    />
+                  ))}
+                </Row>
               </Section>
             ) : null}
 

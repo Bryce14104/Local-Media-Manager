@@ -12,6 +12,29 @@ export function readAutoScanOnPlug(): boolean {
   }
 }
 
+export type PersonAlias = { alias: string; personId: string; name: string };
+
+const ALIAS_KEY = "shelf-person-aliases";
+
+export function readPersonAliases(): PersonAlias[] {
+  try {
+    const raw = localStorage.getItem(ALIAS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as PersonAlias[];
+    return Array.isArray(parsed) ? parsed.filter((row) => row.alias && row.personId) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function writePersonAliases(aliases: PersonAlias[]): void {
+  try {
+    localStorage.setItem(ALIAS_KEY, JSON.stringify(aliases));
+  } catch {
+    // Local only.
+  }
+}
+
 export function writeAutoScanOnPlug(enabled: boolean): void {
   try {
     localStorage.setItem(AUTO_SCAN_KEY, enabled ? "1" : "0");

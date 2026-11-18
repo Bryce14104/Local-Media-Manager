@@ -52,7 +52,20 @@ pub fn thumbnail_dir(library: &Library) -> PathBuf {
 }
 
 /// Write a JPEG preview for each file that does not have one yet.
-pub fn generate_missing_thumbnails_with<F, E>(library: &Library, mut progress: F, mut emit: E) -> Vec<ThumbnailReady>
+pub fn generate_missing_thumbnails_with<F, E>(library: &Library, progress: F, emit: E) -> Vec<ThumbnailReady>
+where
+    F: FnMut(usize, usize),
+    E: FnMut(&ThumbnailReady),
+{
+    generate_previews(library, progress, emit, false)
+}
+
+pub fn generate_previews<F, E>(
+    library: &Library,
+    mut progress: F,
+    mut emit: E,
+    force: bool,
+) -> Vec<ThumbnailReady>
 where
     F: FnMut(usize, usize),
     E: FnMut(&ThumbnailReady),
@@ -80,7 +93,7 @@ where
             if record.media_kind == MediaKind::Video && !ffmpeg {
                 return false;
             }
-            preview_incomplete(record.thumbnail_path.as_deref(), record.media_kind)
+            force || preview_incomplete(record.thumbnail_path.as_deref(), record.media_kind)
         })
         .collect();
     let jobs: Vec<PreviewJob> = pending
@@ -109,7 +122,19 @@ where
 
     let mut ready = Vec::new();
     let mut done = 0;
-    for item in map_unordered(jobs, workers, |job| build_still_preview(job)) {
+    for item in map_unordered(jobs, workers, |job| {
+        if super::catalog_control::canceled() {
+            return None;
+        }
+        super::catalog_control::wait_if_paused();
+        if super::catalog_control::canceled() {
+            return None;
+        }
+        build_still_preview(job)
+    }) {
+        if super::catalog_control::canceled() {
+            break;
+        }
         done += 1;
         progress(done, total);
         let Some(item) = item else {
@@ -136,7 +161,16 @@ where
             "shelf index: writing {} video proxies on {proxy_workers} workers",
             videos.len()
         );
-        for item in map_unordered(videos, proxy_workers, |item| finish_video_proxy(item)) {
+        for item in map_unordered(videos, proxy_workers, |item| {
+            if super::catalog_control::canceled() {
+                return item;
+            }
+            super::catalog_control::wait_if_paused();
+            finish_video_proxy(item)
+        }) {
+            if super::catalog_control::canceled() {
+                break;
+            }
             done += 1;
             progress(done, total);
             if item.play_path.is_some() {
@@ -429,11 +463,11 @@ fn is_video(kind: &str) -> bool {
     matches!(kind, "mp4" | "mov" | "m4v" | "mkv" | "avi" | "webm")
 }
 
-fn ffmpeg_available() -> bool {
+pub fn ffmpeg_available() -> bool {
     ffmpeg_bin().is_some()
 }
 
-fn ffmpeg_bin() -> Option<PathBuf> {
+pub fn ffmpeg_bin() -> Option<PathBuf> {
     static BIN: OnceLock<Option<PathBuf>> = OnceLock::new();
     BIN.get_or_init(|| {
         let candidates = [
@@ -624,6 +658,112 @@ fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
     file.read_to_end(&mut tail)?;
     head.extend(tail);
     Ok(head)
+}
+
+pub fn probe_video(source: &Path) -> Option<crate::models::VideoProbe> {
+    let bin = ffprobe_bin()?;
+    let output = Command::new(bin)
+        .args([
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+        ])
+        .arg(source)
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let duration_ms = json
+        .pointer("/format/duration")
+        .and_then(|value| value.as_str())
+        .and_then(|raw| raw.parse::<f64>().ok())
+        .map(|seconds| (seconds * 1000.0) as i64);
+    let stream = json
+        .get("streams")
+        .and_then(|value| value.as_array())
+        .and_then(|streams| {
+            streams
+                .iter()
+                .find(|stream| stream.get("codec_type").and_then(|kind| kind.as_str()) == Some("video"))
+        });
+    let codec = stream
+        .and_then(|stream| stream.get("codec_name"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let fps_milli = stream
+        .and_then(|stream| stream.get("avg_frame_rate"))
+        .and_then(|value| value.as_str())
+        .and_then(parse_rate_milli);
+    Some(crate::models::VideoProbe {
+        duration_ms,
+        fps_milli,
+        codec,
+    })
+}
+
+fn parse_rate_milli(value: &str) -> Option<i64> {
+    let (num, den) = value.split_once('/').unwrap_or((value, "1"));
+    let num: f64 = num.parse().ok()?;
+    let den: f64 = den.parse().ok()?;
+    if den == 0.0 {
+        return None;
+    }
+    Some(((num / den) * 1000.0) as i64)
+}
+
+fn ffprobe_bin() -> Option<PathBuf> {
+    let ffmpeg = ffmpeg_bin()?;
+    let name = if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" };
+    let sibling = ffmpeg.with_file_name(name);
+    if sibling.is_file() || ffmpeg_runs(&sibling) {
+        return Some(sibling);
+    }
+    let candidates = ["ffprobe", "ffprobe.exe", "/usr/bin/ffprobe", "/usr/local/bin/ffprobe", "/opt/homebrew/bin/ffprobe"];
+    candidates
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| ffmpeg_runs(path))
+}
+
+pub fn write_subclip(source: &Path, dest: &Path, start_ms: i64, end_ms: Option<i64>) -> Result<(), ThumbError> {
+    let bin = ffmpeg_bin().ok_or_else(|| ThumbError::Decode("ffmpeg is not installed".into()))?;
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| ThumbError::Io(err.to_string()))?;
+    }
+    let start = format!("{}", start_ms.max(0) as f64 / 1000.0);
+    let mut args = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-nostdin".into(),
+        "-y".into(),
+        "-ss".into(),
+        start,
+        "-i".into(),
+        source.display().to_string(),
+    ];
+    if let Some(end) = end_ms {
+        args.push("-to".into());
+        args.push(format!("{}", end.max(start_ms) as f64 / 1000.0));
+    }
+    args.extend(["-c".into(), "copy".into(), dest.display().to_string()]);
+    let status = Command::new(bin)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|err| ThumbError::Io(err.to_string()))?;
+    if !status.success() || !dest.is_file() {
+        return Err(ThumbError::Decode("could not write the subclip".into()));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

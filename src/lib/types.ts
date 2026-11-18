@@ -43,6 +43,10 @@ export type MediaRecord = {
   relativePath?: string | null;
   originalOnline?: boolean;
   plugHint?: string | null;
+  cullHint?: string | null;
+  markInMs?: number | null;
+  markOutMs?: number | null;
+  video?: { durationMs?: number | null; fpsMilli?: number | null; codec?: string | null } | null;
 };
 
 export type VolumeRecord = {

@@ -29,6 +29,13 @@ export function PreferencesModal({
   onAutoScanOnPlug,
   onRelink,
   healthLine,
+  ffmpegOk,
+  aliases,
+  onAliases,
+  onOpenLibrary,
+  onNewLibrary,
+  onExportTravel,
+  onRebuildPreviews,
 }: {
   onClose: () => void;
   maxZoom: MapZoom;
@@ -41,6 +48,13 @@ export function PreferencesModal({
   onAutoScanOnPlug: (enabled: boolean) => void;
   onRelink?: () => void;
   healthLine?: string | null;
+  ffmpegOk?: boolean | null;
+  aliases?: { alias: string; personId: string; name: string }[];
+  onAliases?: (aliases: { alias: string; personId: string; name: string }[]) => void;
+  onOpenLibrary?: () => void;
+  onNewLibrary?: () => void;
+  onExportTravel?: () => void;
+  onRebuildPreviews?: () => void;
 }) {
   const [group, setGroup] = useState<PrefGroup>("library");
   const library = useMapLibrary();
@@ -85,10 +99,46 @@ export function PreferencesModal({
                 Relink files from a folder
               </button>
             ) : null}
+            {onRebuildPreviews ? (
+              <button
+                type="button"
+                onClick={onRebuildPreviews}
+                className="mt-2 rounded-full border border-line px-3 py-1.5 text-xs text-foam hover:border-teal"
+              >
+                Rebuild previews
+              </button>
+            ) : null}
+            {ffmpegOk === false ? (
+              <p className="mt-3 text-xs text-mute">Install ffmpeg to play video proxies.</p>
+            ) : null}
           </PrefCard>
+          <PrefCard title="Libraries" hint="The Air can open a travel pack of 720p previews. Originals stay on the archive disk.">
+            <div className="flex flex-wrap gap-2">
+              {onOpenLibrary ? (
+                <button type="button" onClick={onOpenLibrary} className="rounded-full border border-line px-3 py-1.5 text-xs text-foam hover:border-teal">
+                  Open library
+                </button>
+              ) : null}
+              {onNewLibrary ? (
+                <button type="button" onClick={onNewLibrary} className="rounded-full border border-line px-3 py-1.5 text-xs text-foam hover:border-teal">
+                  New library
+                </button>
+              ) : null}
+              {onExportTravel ? (
+                <button type="button" onClick={onExportTravel} className="rounded-full border border-line px-3 py-1.5 text-xs text-foam hover:border-teal">
+                  Export travel pack
+                </button>
+              ) : null}
+            </div>
+          </PrefCard>
+          {onAliases ? (
+            <PrefCard title="Search aliases" hint="Type mum in search to jump to a named person.">
+              <AliasEditor aliases={aliases ?? []} onChange={onAliases} />
+            </PrefCard>
+          ) : null}
           <PrefCard title="Keyboard" hint="Culling happens in fullscreen. Grid stays viewing-first.">
             <p className="text-xs leading-relaxed text-mute">
-              J/K or arrows move · Enter opens · E develops · Z 1:1 · C two-up · P pick · X reject · 1–5 rate · F fullscreen
+              J/K or arrows move · Enter opens · E develops · Z 1:1 hold-to-zoom · C two-up · P pick · X reject · 1–5 rate · I/O video marks · F fullscreen
             </p>
           </PrefCard>
           </div>
@@ -266,5 +316,68 @@ function PrefToggle({
         <span className={`block h-5 w-5 rounded-full bg-foam transition ${checked ? "translate-x-4" : "translate-x-0.5"}`} />
       </button>
     </label>
+  );
+}
+
+function AliasEditor({
+  aliases,
+  onChange,
+}: {
+  aliases: { alias: string; personId: string; name: string }[];
+  onChange: (aliases: { alias: string; personId: string; name: string }[]) => void;
+}) {
+  const [alias, setAlias] = useState("");
+  const [name, setName] = useState("");
+  const [personId, setPersonId] = useState("");
+  return (
+    <div className="space-y-2">
+      {aliases.map((row) => (
+        <div key={`${row.alias}-${row.personId}`} className="flex items-center justify-between gap-2 text-xs">
+          <span>
+            {row.alias} → {row.name || row.personId}
+          </span>
+          <button
+            type="button"
+            className="text-mute hover:text-foam"
+            onClick={() => onChange(aliases.filter((item) => item.alias !== row.alias || item.personId !== row.personId))}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <div className="grid grid-cols-3 gap-1">
+        <input
+          value={alias}
+          onChange={(event) => setAlias(event.target.value)}
+          placeholder="mum"
+          className="rounded-lg border border-line bg-studio px-2 py-1 text-xs outline-none"
+        />
+        <input
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="Name"
+          className="rounded-lg border border-line bg-studio px-2 py-1 text-xs outline-none"
+        />
+        <input
+          value={personId}
+          onChange={(event) => setPersonId(event.target.value)}
+          placeholder="person-1"
+          className="rounded-lg border border-line bg-studio px-2 py-1 text-xs outline-none"
+        />
+      </div>
+      <button
+        type="button"
+        className="rounded-full border border-line px-3 py-1 text-xs text-foam"
+        onClick={() => {
+          if (!alias.trim() || !personId.trim()) return;
+          onChange([...aliases, { alias: alias.trim(), personId: personId.trim(), name: name.trim() || alias.trim() }]);
+          setAlias("");
+          setName("");
+          setPersonId("");
+        }}
+      >
+        Add alias
+      </button>
+    </div>
   );
 }

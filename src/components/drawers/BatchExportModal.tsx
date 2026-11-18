@@ -38,6 +38,8 @@ export function BatchExportModal({ count, onClose, onExport }: BatchExportModalP
           <option>JPEG</option>
           <option>TIFF</option>
           <option>Original</option>
+          <option>Subclip</option>
+          <option>XMP</option>
         </select>
         <label className="block text-xs text-mute" htmlFor="export-dest">
           Destination

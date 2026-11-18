@@ -29,6 +29,9 @@ type LightboxProps = {
   poolIds?: string[];
   slideshow: SlideshowSettings;
   onSlideshow: (settings: SlideshowSettings) => void;
+  onPerson?: (personId: string, name: string) => void;
+  onMarkIn?: (ms: number) => void;
+  onMarkOut?: (ms: number) => void;
 };
 
 export function Lightbox({
@@ -55,6 +58,9 @@ export function Lightbox({
   poolIds = [],
   slideshow: slideshowSettings,
   onSlideshow,
+  onPerson,
+  onMarkIn,
+  onMarkOut,
 }: LightboxProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -67,6 +73,10 @@ export function Lightbox({
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
   const [immersive, setImmersive] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const holdTimer = useRef<number | null>(null);
+  const holding = useRef(false);
+  const origin = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
   const [slideshow, setSlideshow] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
@@ -88,6 +98,7 @@ export function Lightbox({
   useEffect(() => {
     setNatural(null);
     setZoom(1);
+    setPan({ x: 0, y: 0 });
   }, [item.id]);
 
   useEffect(() => {
@@ -178,7 +189,23 @@ export function Lightbox({
       if (event.key === "0" && !onRate) setZoom(1);
       if (event.key === "z" || event.key === "Z") {
         event.preventDefault();
-        setZoom((current) => (current > 1.05 ? 1 : 3));
+        setZoom((current) => {
+          if (current > 1.05) {
+            setPan({ x: 0, y: 0 });
+            return 1;
+          }
+          return 3;
+        });
+      }
+      if ((event.key === "i" || event.key === "I") && onMarkIn) {
+        const video = rootRef.current?.querySelector("video");
+        event.preventDefault();
+        onMarkIn(Math.round((video?.currentTime ?? 0) * 1000));
+      }
+      if ((event.key === "o" || event.key === "O") && onMarkOut) {
+        const video = rootRef.current?.querySelector("video");
+        event.preventDefault();
+        onMarkOut(Math.round((video?.currentTime ?? 0) * 1000));
       }
       if ((event.key === "c" || event.key === "C") && onToggleCompare) {
         event.preventDefault();
@@ -187,7 +214,7 @@ export function Lightbox({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onRate, onToggleCompare]);
+  }, [onMarkIn, onMarkOut, onRate, onToggleCompare]);
 
   useEffect(() => {
     const node = rootRef.current;
@@ -233,15 +260,43 @@ export function Lightbox({
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return;
     dragX.current = event.clientX;
+    origin.current = { x: event.clientX, y: event.clientY, panX: pan.x, panY: pan.y };
+    holding.current = false;
+    if (holdTimer.current) window.clearTimeout(holdTimer.current);
+    holdTimer.current = window.setTimeout(() => {
+      holding.current = true;
+      setZoom(3);
+    }, 180);
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (dragX.current == null) return;
+    if (holding.current || zoom > 1.05) {
+      setPan({
+        x: origin.current.panX + (event.clientX - origin.current.x),
+        y: origin.current.panY + (event.clientY - origin.current.y),
+      });
+    }
   }
 
   function onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+    if (holdTimer.current) {
+      window.clearTimeout(holdTimer.current);
+      holdTimer.current = null;
+    }
     if (dragX.current == null) return;
     const delta = event.clientX - dragX.current;
     dragX.current = null;
+    if (holding.current) {
+      holding.current = false;
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+      return;
+    }
     if (Math.abs(delta) < 10) {
       if (zoom > 1) {
         setZoom(1);
+        setPan({ x: 0, y: 0 });
         return;
       }
       setImmersive((current) => !current);
@@ -263,14 +318,20 @@ export function Lightbox({
       <div
         className="absolute inset-0"
         onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={() => {
           dragX.current = null;
+          holding.current = false;
+          if (holdTimer.current) window.clearTimeout(holdTimer.current);
         }}
       >
         <div
-          className={`h-full w-full ${comparePrevious && before ? "grid grid-cols-2" : ""}`}
-          style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
+          className={`relative h-full w-full ${comparePrevious && before ? "grid grid-cols-2" : ""}`}
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transformOrigin: "center center",
+          }}
         >
           {comparePrevious && before ? (
             <ProgressiveMedia item={before} fit="contain" playback="hold" quality="full" />
@@ -282,6 +343,27 @@ export function Lightbox({
             quality={immersive || zoom > 1.05 ? "full" : "proxy"}
             onSize={(nextWidth, nextHeight) => setNatural({ width: nextWidth, height: nextHeight })}
           />
+          {item.faces.length > 0 && onPerson ? (
+            <div className="pointer-events-none absolute inset-0">
+              {item.faces.map((face) => (
+                <button
+                  key={face.id}
+                  type="button"
+                  className="pointer-events-auto absolute border border-teal/80"
+                  style={{
+                    left: `${face.x * 100}%`,
+                    top: `${face.y * 100}%`,
+                    width: `${face.width * 100}%`,
+                    height: `${face.height * 100}%`,
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onPerson(face.personId, face.name ?? "Unnamed person");
+                  }}
+                />
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -424,10 +506,35 @@ export function Lightbox({
                 Two-up
               </Hud>
             ) : null}
-            <Hud onClick={() => setZoom((current) => (current > 1.05 ? 1 : 3))} active={zoom > 1.05}>
+            <Hud
+              onClick={() =>
+                setZoom((current) => {
+                  if (current > 1.05) {
+                    setPan({ x: 0, y: 0 });
+                    return 1;
+                  }
+                  return 3;
+                })
+              }
+              active={zoom > 1.05}
+            >
               1:1
             </Hud>
           </div>
+        ) : null}
+        {item.cullHint ? (
+          <p className="mb-1 text-center text-[11px] uppercase tracking-[0.14em] text-amber-200">
+            Needs a look · {item.cullHint}
+          </p>
+        ) : null}
+        {item.format === "video" ? (
+          <p className="mb-1 text-center text-[11px] text-white/55">
+            {item.durationMs ? `${Math.round(item.durationMs / 1000)}s` : "clip"}
+            {item.videoCodec ? ` · ${item.videoCodec}` : ""}
+            {item.markInMs != null ? ` · in ${(item.markInMs / 1000).toFixed(1)}s` : ""}
+            {item.markOutMs != null ? ` · out ${(item.markOutMs / 1000).toFixed(1)}s` : ""}
+            {" · I in / O out"}
+          </p>
         ) : null}
         {item.matchReasons && item.matchReasons.length > 0 ? (
           <p className="mb-1 text-center text-[11px] text-white/55">{item.matchReasons.join(" · ")}</p>

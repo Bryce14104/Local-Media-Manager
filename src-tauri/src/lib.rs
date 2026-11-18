@@ -10,6 +10,7 @@ mod models;
 mod services;
 
 use db::Library;
+use std::path::PathBuf;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -24,7 +25,13 @@ pub fn run() {
         })
         .setup(|app| {
             let directory = app.path().app_data_dir()?;
-            let library = Library::open(directory.join("library.sqlite")).map_err(|err| {
+            let marker = directory.join("active-library.txt");
+            let sqlite = std::fs::read_to_string(&marker)
+                .ok()
+                .map(|raw| PathBuf::from(raw.trim()))
+                .filter(|path| path.is_file())
+                .unwrap_or_else(|| directory.join("library.sqlite"));
+            let library = Library::open(sqlite).map_err(|err| {
                 let boxed: Box<dyn std::error::Error> = Box::new(err);
                 boxed
             })?;
@@ -90,6 +97,17 @@ pub fn run() {
             commands::clone_virtual,
             commands::working_preview,
             commands::write_bytes,
+            commands::pause_catalog,
+            commands::stop_catalog,
+            commands::eject_volume,
+            commands::export_travel_library,
+            commands::open_library,
+            commands::new_library,
+            commands::write_xmp,
+            commands::set_marks,
+            commands::export_subclip,
+            commands::rebuild_previews,
+            commands::ffmpeg_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Shelf");

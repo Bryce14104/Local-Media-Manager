@@ -21,6 +21,7 @@ import { useMapLibrary } from "../../studio/useMapLibrary";
 import { LAND_PATHS } from "../../studio/land";
 import { formatLabel } from "../../studio/query";
 import type { GeoBounds, StudioItem } from "../../studio/types";
+import { tripGroups } from "../../studio/trips";
 
 type MediaMapProps = {
   items: StudioItem[];
@@ -366,6 +367,24 @@ export function MediaMap({
         {LAND_PATHS.map((path, index) => (
           <path key={index} d={path} fill="#1c222c" stroke="#2c3340" strokeWidth={0.45 * unit} />
         ))}
+        {tripGroups(items).map((trip) => {
+          const points = trip.items
+            .map((item) => {
+              const point = project(item.longitude, item.latitude);
+              return `${point.x},${point.y}`;
+            })
+            .join(" ");
+          return (
+            <polyline
+              key={trip.id}
+              points={points}
+              fill="none"
+              stroke="#2ee0c5"
+              strokeOpacity={0.4}
+              strokeWidth={0.9 * unit}
+            />
+          );
+        })}
         {detailTiles.map((tile) => {
           const origin = project(tile.west, tile.north);
           const end = project(tile.east, tile.south);

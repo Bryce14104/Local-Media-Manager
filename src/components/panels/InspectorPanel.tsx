@@ -22,6 +22,8 @@ type InspectorPanelProps = {
   onReveal?: () => void;
   onCopyPath?: () => void;
   onEdit?: () => void;
+  onPerson?: (personId: string, name: string) => void;
+  onWriteXmp?: () => void;
 };
 
 export function InspectorPanel({
@@ -40,6 +42,8 @@ export function InspectorPanel({
   onReveal,
   onCopyPath,
   onEdit,
+  onPerson,
+  onWriteXmp,
 }: InspectorPanelProps) {
   const floating = mode === "floating";
   return (
@@ -70,9 +74,25 @@ export function InspectorPanel({
       {!collapsed ? (
         item ? (
           <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
-            <div className="flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-studio">
+            <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden rounded-xl bg-studio">
               <ProgressiveMedia item={item} fit="contain" playback="hold" />
+              {item.faces.map((face) => (
+                <button
+                  key={face.id}
+                  type="button"
+                  title={face.name ?? "Unnamed"}
+                  onClick={() => onPerson?.(face.personId, face.name ?? "Unnamed person")}
+                  className="absolute border border-teal/80"
+                  style={{
+                    left: `${face.x * 100}%`,
+                    top: `${face.y * 100}%`,
+                    width: `${face.width * 100}%`,
+                    height: `${face.height * 100}%`,
+                  }}
+                />
+              ))}
             </div>
+            {item.cullHint ? <p className="text-xs text-teal">Needs a look · {item.cullHint}</p> : null}
             {onEdit ? (
               <button
                 type="button"
@@ -161,6 +181,11 @@ export function InspectorPanel({
                   Reveal in Finder
                 </button>
               ) : null}
+              {onWriteXmp && item.originalOnline ? (
+                <button type="button" onClick={onWriteXmp} className="rounded-full border border-line px-2 py-1 text-[11px]">
+                  Write sidecar
+                </button>
+              ) : null}
             </div>
             {item.volumeLabel ? (
               <p className="text-xs text-mute">
@@ -197,6 +222,20 @@ export function InspectorPanel({
                 label="Frame"
                 value={item.width && item.height ? `${item.width} × ${item.height}` : "—"}
               />
+              {item.format === "video" ? (
+                <Fact
+                  label="Clip"
+                  value={[
+                    item.durationMs != null ? `${Math.round(item.durationMs / 1000)}s` : null,
+                    item.videoFps != null ? `${item.videoFps.toFixed(2)} fps` : null,
+                    item.videoCodec,
+                    item.markInMs != null ? `in ${(item.markInMs / 1000).toFixed(1)}s` : null,
+                    item.markOutMs != null ? `out ${(item.markOutMs / 1000).toFixed(1)}s` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "—"}
+                />
+              ) : null}
               <Fact
                 label="Captured"
                 value={formatTimestamp(Math.floor(new Date(item.capturedAt).getTime() / 1000))}

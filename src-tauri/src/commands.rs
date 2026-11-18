@@ -1,13 +1,13 @@
 //! Tauri commands the React UI calls through `invoke`.
 
 use crate::db::Library;
-use crate::models::{ExportReport, JobProgress, LibrarySummary, MediaRecord, ScanReport, VolumeRecord, WatchedRoot};
+use crate::models::{ExportReport, JobProgress, LibrarySummary, MediaKind, MediaRecord, ScanReport, VolumeRecord, WatchedRoot};
 use crate::services;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::ipc::Response;
-use tauri::{AppHandle, Emitter, State, async_runtime};
+use tauri::{AppHandle, Emitter, Manager, State, async_runtime};
 
 static CATALOG_JOB: Mutex<()> = Mutex::new(());
 
@@ -167,10 +167,18 @@ pub async fn index_paths(
 }
 
 pub fn spawn_catalog_jobs(library: Library, app: AppHandle) {
+    spawn_catalog_jobs_with(library, app, false);
+}
+
+pub fn spawn_catalog_jobs_with(library: Library, app: AppHandle, force_previews: bool) {
     std::thread::spawn(move || {
         let _guard = CATALOG_JOB.lock().unwrap_or_else(|err| err.into_inner());
+        services::begin_job();
         eprintln!("shelf index: catalog job started");
-        let ready = services::generate_missing_thumbnails_with(
+        if !services::ffmpeg_available() {
+            emit_progress(&app, "warning", 0, 1, "Install ffmpeg to play video proxies");
+        }
+        let ready = services::generate_previews(
             &library,
             |done, total| {
                 emit_progress(&app, "thumbnails", done, total, "Writing previews");
@@ -178,17 +186,39 @@ pub fn spawn_catalog_jobs(library: Library, app: AppHandle) {
             |item| {
                 let _ = app.emit("thumbnail-ready", item);
             },
+            force_previews,
         );
         eprintln!("shelf index: wrote {} previews", ready.len());
+        if services::canceled() {
+            emit_progress(&app, "done", 1, 1, "Catalog stopped");
+            return;
+        }
         emit_progress(&app, "vision", 0, 1, "Tagging photos");
         if let Err(error) = services::recognize_library(&library, |done, total, label| {
             emit_progress(&app, "vision", done, total, label);
         }) {
             eprintln!("shelf index: visual tagging failed: {error}");
         }
-        emit_progress(&app, "done", 1, 1, "Catalog ready");
+        if !services::canceled() {
+            let hinted = services::score_cull(&library);
+            eprintln!("shelf index: cull hints on {hinted} frames");
+            probe_pending_videos(&library);
+        }
+        emit_progress(&app, "done", 1, 1, if services::canceled() { "Catalog stopped" } else { "Catalog ready" });
         eprintln!("shelf index: catalog job finished");
     });
+}
+
+fn probe_pending_videos(library: &Library) {
+    let Ok(media) = library.list_media() else {
+        return;
+    };
+    for record in media {
+        if record.media_kind != MediaKind::Video || record.video.is_some() {
+            continue;
+        }
+        let _ = services::fill_video_meta(library, &record.file_path);
+    }
 }
 
 fn emit_progress(app: &AppHandle, phase: &str, done: usize, total: usize, label: &str) {
@@ -401,6 +431,102 @@ pub fn clone_virtual(path: String, state: State<'_, Library>) -> Result<MediaRec
 #[tauri::command]
 pub fn working_preview(path: String, state: State<'_, Library>) -> Result<String, String> {
     services::working_preview(&state, &path).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn pause_catalog(paused: bool) {
+    services::set_paused(paused);
+}
+
+#[tauri::command]
+pub fn stop_catalog() {
+    services::request_cancel();
+}
+
+#[tauri::command]
+pub fn eject_volume(mount: String) -> Result<(), String> {
+    services::eject_volume(&mount).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn export_travel_library(
+    destination: String,
+    ids: Vec<i64>,
+    state: State<'_, Library>,
+) -> Result<services::TravelReport, String> {
+    services::export_travel_library(&state, Path::new(&destination), &ids).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn open_library(path: String, state: State<'_, Library>, app: AppHandle) -> Result<LibrarySummary, String> {
+    let file = PathBuf::from(path.trim());
+    state.reopen(&file).map_err(|err| err.to_string())?;
+    persist_active_library(&app, &file);
+    Ok(state.summary().map_err(|err| err.to_string())?)
+}
+
+#[tauri::command]
+pub fn new_library(destination: String, state: State<'_, Library>, app: AppHandle) -> Result<LibrarySummary, String> {
+    let dest = PathBuf::from(destination.trim());
+    if dest.is_dir() {
+        let sqlite = dest.join("library.sqlite");
+        state.reopen(&sqlite).map_err(|err| err.to_string())?;
+        persist_active_library(&app, &sqlite);
+    } else {
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        state.reopen(&dest).map_err(|err| err.to_string())?;
+        persist_active_library(&app, &dest);
+    }
+    Ok(state.summary().map_err(|err| err.to_string())?)
+}
+
+fn persist_active_library(app: &AppHandle, path: &Path) {
+    if let Ok(dir) = app.path().app_data_dir() {
+        let _ = std::fs::write(dir.join("active-library.txt"), path.to_string_lossy().as_bytes());
+    }
+}
+
+#[tauri::command]
+pub fn write_xmp(path: String, state: State<'_, Library>) -> Result<services::XmpReport, String> {
+    services::write_xmp(&state, &path).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn set_marks(
+    path: String,
+    mark_in_ms: Option<i64>,
+    mark_out_ms: Option<i64>,
+    state: State<'_, Library>,
+) -> Result<MediaRecord, String> {
+    let mut record = state
+        .set_marks(&path, mark_in_ms, mark_out_ms)
+        .map_err(|err| err.to_string())?;
+    services::hydrate_origins(&state, std::slice::from_mut(&mut record));
+    services::attach_sidecars(&mut record);
+    Ok(record)
+}
+
+#[tauri::command]
+pub fn export_subclip(path: String, destination: String, state: State<'_, Library>) -> Result<String, String> {
+    services::export_subclip(&state, &path, Path::new(&destination)).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+pub fn rebuild_previews(state: State<'_, Library>, app: AppHandle) -> Result<(), String> {
+    if let Ok(media) = state.list_media() {
+        for record in media {
+            let _ = state.clear_thumbnail(&record.file_path);
+        }
+    }
+    spawn_catalog_jobs_with(Library::clone(&*state), app, true);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn ffmpeg_status() -> bool {
+    services::ffmpeg_available()
 }
 
 #[tauri::command]

@@ -13,11 +13,25 @@ import {
   searchEmbeddings,
   similarTo,
   cloneVirtual,
+  copyOriginals,
   previewImport,
   relinkFolder,
   libraryHealth,
   pickImportPaths,
   pickDirectory,
+  pauseCatalog,
+  stopCatalog,
+  ejectVolume,
+  exportTravelLibrary,
+  openLibrary,
+  newLibrary,
+  writeXmp,
+  setMarks,
+  exportSubclip,
+  rebuildPreviews,
+  ffmpegStatus,
+  mergePeople,
+  splitFace,
   removeFromLibrary,
   revealPath,
   setColor,
@@ -66,7 +80,14 @@ import {
 } from "./develop";
 import { burstStrip } from "./bursts";
 import { DEFAULT_EXPORT, blobToBytes, renderExportBlob } from "./exportFrame";
-import { AUTO_SCAN_POLL_MS, newlyPlugged, readAutoScanOnPlug, writeAutoScanOnPlug } from "./libraryPrefs";
+import {
+  AUTO_SCAN_POLL_MS,
+  newlyPlugged,
+  readAutoScanOnPlug,
+  readPersonAliases,
+  writeAutoScanOnPlug,
+  writePersonAliases,
+} from "./libraryPrefs";
 import { numericSuffix } from "./insights";
 import { readSlideshowSettings, writeSlideshowSettings, type SlideshowSettings } from "./slideshow";
 import type { MapZoom } from "./mapRegions";
@@ -141,12 +162,23 @@ export function Workspace() {
   const [collapseBursts, setCollapseBursts] = useState(false);
   const [comparePrevious, setComparePrevious] = useState(false);
   const [healthLine, setHealthLine] = useState<string | null>(null);
+  const [catalogPaused, setCatalogPaused] = useState(false);
+  const [aliases, setAliases] = useState(readPersonAliases);
+  const [ffmpegOk, setFfmpegOk] = useState<boolean | null>(null);
+  const [needsLook, setNeedsLook] = useState(false);
 
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(null), 4200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!desktopBridgeAvailable()) return;
+    void ffmpegStatus()
+      .then(setFfmpegOk)
+      .catch(() => setFfmpegOk(null));
+  }, []);
   const [wantOriginal, setWantOriginal] = useState(false);
   const [conceptIndex, setConceptIndex] = useState<ConceptIndex | null>(null);
   const [conceptsLive, setConceptsLive] = useState(() => desktopBridgeAvailable());
@@ -155,10 +187,11 @@ export function Workspace() {
   const dupes = useMemo(() => duplicateIds(items), [items]);
   const resolvedFilters = useMemo(
     () =>
-      filters.map((filter) =>
-        filter.kind === "duplicates" ? { ...filter, ids: dupes } : filter,
-      ),
-    [dupes, filters],
+      [
+        ...filters.map((filter) => (filter.kind === "duplicates" ? { ...filter, ids: dupes } : filter)),
+        ...(needsLook ? [{ id: "cull", kind: "cull" as const }] : []),
+      ],
+    [dupes, filters, needsLook],
   );
   const visible = useMemo(
     () => sortItems(items.filter((item) => matchesFilters(item, resolvedFilters)), sort),
@@ -249,6 +282,11 @@ export function Workspace() {
     let cancel = false;
     void listen<JobProgress>("library-progress", (event) => {
       const job = event.payload;
+      if (job.phase === "warning") {
+        setFfmpegOk(false);
+        setToast(job.label);
+        return;
+      }
       if (job.phase === "done") {
         void fetchLibrary()
           .then(async ({ media }) => {
@@ -1141,6 +1179,73 @@ export function Workspace() {
     }
   }
 
+  async function copyThenIndex() {
+    if (!importPreview || !desktopBridgeAvailable()) return;
+    try {
+      const destination = await pickDirectory("Copy new files here");
+      if (!destination) return;
+      const paths = importPreview.newFiles.map((file) => file.path);
+      setImportBusy(true);
+      setImportMessage(`Copying ${paths.length} files`);
+      await copyOriginals(paths, destination);
+      setPendingImportRoots(null);
+      setImportPreview(null);
+      await ingestPaths([destination]);
+    } catch (error) {
+      setImportError(errorMessage(error));
+      setImportBusy(false);
+    }
+  }
+
+  async function ejectPreviewVolume() {
+    if (!importPreview?.volumeMount || !desktopBridgeAvailable()) return;
+    try {
+      await ejectVolume(importPreview.volumeMount);
+      setToast(`Ejected ${importPreview.volumeLabel}`);
+    } catch (error) {
+      setImportError(errorMessage(error));
+    }
+  }
+
+  async function reloadLibrary() {
+    const { media } = await fetchLibrary();
+    setItems(media.map(presentRecord));
+    void refreshSources();
+  }
+
+  async function openAnotherLibrary() {
+    const folder = await pickDirectory("Open a Shelf library folder");
+    if (!folder) return;
+    await openLibrary(`${folder.replace(/\/$/, "")}/library.sqlite`);
+    await reloadLibrary();
+    setModal(null);
+  }
+
+  async function createLibrary() {
+    const folder = await pickDirectory("New library folder");
+    if (!folder) return;
+    await newLibrary(folder);
+    await reloadLibrary();
+    setModal(null);
+  }
+
+  async function exportTravel() {
+    const folder = await pickDirectory("Travel pack destination");
+    if (!folder) return;
+    const ids = selectedIds
+      .map((id) => numericSuffix(id, "library-"))
+      .filter((id): id is number => id != null);
+    const report = await exportTravelLibrary(folder, ids);
+    setToast(`Travel pack · ${report.mediaCount} frames · ${report.previews} previews`);
+    setModal(null);
+  }
+
+  async function saveMarks(item: StudioItem, markInMs: number | null, markOutMs: number | null) {
+    if (!item.sourcePath || !desktopBridgeAvailable()) return;
+    const record = await setMarks(item.sourcePath, markInMs, markOutMs);
+    setItems((current) => mergeItems([presentRecord(record)], current));
+  }
+
   async function ingestPaths(paths: string[]) {
     const folderName = paths[0]?.split(/[/\\]/).filter(Boolean).pop() ?? "folder";
     setImportBusy(true);
@@ -1336,6 +1441,39 @@ export function Workspace() {
     const chosen = items.filter((item) =>
       (selectedIds.length > 0 ? selectedIds.includes(item.id) : visible.some((row) => row.id === item.id)),
     );
+    if (format === "Subclip" && desktopBridgeAvailable()) {
+      void (async () => {
+        let wrote = 0;
+        for (const item of chosen) {
+          if (item.format !== "video" || !item.sourcePath) continue;
+          try {
+            const name = item.fileName.replace(/\.[^.]+$/, "") + "-clip.mp4";
+            await exportSubclip(item.sourcePath, `${destination.replace(/\/$/, "")}/${name}`);
+            wrote += 1;
+          } catch (error) {
+            setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+          }
+        }
+        setTelemetry((current) => ({ ...current, exportLabel: `Exported ${wrote} subclips to ${destination}` }));
+      })();
+      return;
+    }
+    if (format === "XMP" && desktopBridgeAvailable()) {
+      void (async () => {
+        let wrote = 0;
+        for (const item of chosen) {
+          if (!item.sourcePath) continue;
+          try {
+            const report = await writeXmp(item.sourcePath);
+            if (report.wrote) wrote += 1;
+          } catch {
+            // Offline originals stay silent.
+          }
+        }
+        setTelemetry((current) => ({ ...current, exportLabel: `Wrote ${wrote} XMP sidecars` }));
+      })();
+      return;
+    }
     if (format !== "Original" && desktopBridgeAvailable()) {
       void (async () => {
         let wrote = 0;
@@ -1389,7 +1527,14 @@ export function Workspace() {
       />
 
       {viewMode !== "insights" && preset !== "compare" ? (
-        <FilterRail sort={sort} onSort={setSort} collapseBursts={collapseBursts} onCollapseBursts={setCollapseBursts} />
+        <FilterRail
+          sort={sort}
+          onSort={setSort}
+          collapseBursts={collapseBursts}
+          onCollapseBursts={setCollapseBursts}
+          needsLook={needsLook}
+          onNeedsLook={setNeedsLook}
+        />
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -1453,6 +1598,35 @@ export function Workspace() {
                 );
               });
             }}
+            onMergePeople={(keepId, dropId) => {
+              const keep = numericSuffix(keepId, "person-");
+              const drop = numericSuffix(dropId, "person-");
+              if (keep == null || drop == null) return;
+              void mergePeople(keep, drop).then(() => {
+                setItems((current) =>
+                  current.map((item) => ({
+                    ...item,
+                    faces: item.faces.map((face) =>
+                      face.personId === dropId ? { ...face, personId: keepId } : face,
+                    ),
+                  })),
+                );
+              });
+            }}
+            onSplitFace={(faceId) => {
+              const id = numericSuffix(faceId, "face-");
+              if (id == null) return;
+              void splitFace(id).then((personId) => {
+                setItems((current) =>
+                  current.map((item) => ({
+                    ...item,
+                    faces: item.faces.map((face) =>
+                      face.id === faceId ? { ...face, personId: `person-${personId}`, name: null } : face,
+                    ),
+                  })),
+                );
+              });
+            }}
           />
         ) : (
           <MediaStage
@@ -1512,6 +1686,10 @@ export function Workspace() {
                   }
                 : undefined
             }
+            onPerson={(personId, name) => setFilters((current) => upsertFilter(current, { kind: "person", personId, name }))}
+            onWriteXmp={() => {
+              if (primary?.sourcePath) void writeXmp(primary.sourcePath).then((report) => setToast(report.wrote ? "Wrote XMP sidecar" : "Original is offline"));
+            }}
           />
         ) : null}
       </div>
@@ -1547,6 +1725,10 @@ export function Workspace() {
                 }
               : undefined
           }
+            onPerson={(personId, name) => setFilters((current) => upsertFilter(current, { kind: "person", personId, name }))}
+            onWriteXmp={() => {
+              if (primary?.sourcePath) void writeXmp(primary.sourcePath).then((report) => setToast(report.wrote ? "Wrote XMP sidecar" : "Original is offline"));
+            }}
         />
       ) : null}
 
@@ -1582,6 +1764,16 @@ export function Workspace() {
           writeGridZoom(next);
         }}
         onPreferences={openPreferences}
+        paused={catalogPaused}
+        onPause={() => {
+          const next = !catalogPaused;
+          setCatalogPaused(next);
+          void pauseCatalog(next).catch(() => undefined);
+        }}
+        onStop={() => {
+          void stopCatalog().catch(() => undefined);
+          setCatalogPaused(false);
+        }}
       />
 
       {modal === "add" ? (
@@ -1619,6 +1811,8 @@ export function Workspace() {
                 }
               : undefined
           }
+          onCopyThenIndex={importPreview && importPreview.newCount > 0 ? () => void copyThenIndex() : undefined}
+          onEject={importPreview?.volumeMount ? () => void ejectPreviewVolume() : undefined}
         />
       ) : null}
       {modal === "preferences" ? (
@@ -1634,6 +1828,18 @@ export function Workspace() {
           onAutoScanOnPlug={changeAutoScanOnPlug}
           onRelink={() => void relinkFromFolder()}
           healthLine={healthLine}
+          ffmpegOk={ffmpegOk}
+          aliases={aliases}
+          onAliases={(next) => {
+            setAliases(next);
+            writePersonAliases(next);
+          }}
+          onOpenLibrary={() => void openAnotherLibrary()}
+          onNewLibrary={() => void createLibrary()}
+          onExportTravel={() => void exportTravel()}
+          onRebuildPreviews={() => {
+            void rebuildPreviews().then(() => setToast("Rebuilding previews"));
+          }}
         />
       ) : null}
       {confirmDelete ? (
@@ -1717,6 +1923,9 @@ export function Workspace() {
           comparePrevious={comparePrevious}
           onToggleCompare={() => setComparePrevious((current) => !current)}
           strip={burstStrip(lightboxPool, lightboxItem)}
+          onPerson={(personId, name) => setFilters((current) => upsertFilter(current, { kind: "person", personId, name }))}
+          onMarkIn={(ms) => void saveMarks(lightboxItem, ms, lightboxItem.markOutMs ?? null)}
+          onMarkOut={(ms) => void saveMarks(lightboxItem, lightboxItem.markInMs ?? null, ms)}
         />
       ) : null}
       {developOpen && lightboxItem?.originalOnline ? (

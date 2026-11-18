@@ -83,6 +83,12 @@ export type StudioItem = {
   burstSize?: number;
   burstIds?: string[];
   virtualCopy?: boolean;
+  cullHint?: string | null;
+  markInMs?: number | null;
+  markOutMs?: number | null;
+  durationMs?: number | null;
+  videoCodec?: string | null;
+  videoFps?: number | null;
 };
 
 export type FaceMark = {
@@ -123,7 +129,8 @@ export type Filter =
   | { kind: "album"; albumId: number; ids: string[]; label: string }
   | { kind: "volume"; volumeId: number; label: string }
   | { kind: "folder"; path: string; label: string }
-  | { kind: "offline" };
+  | { kind: "offline" }
+  | { kind: "cull" };
 
 export type ActiveFilter = Filter & { id: string };
 

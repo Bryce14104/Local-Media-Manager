@@ -4,11 +4,12 @@ use super::scanner::{hash_file, scan_directory};
 use super::thumbs::{self, extract_largest_jpeg, thumbnail_dir};
 use super::volumes;
 use crate::db::{DbError, Library};
-use crate::models::MediaRecord;
+use crate::models::{MediaKind, MediaRecord};
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ExtendedColorType};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -203,6 +204,222 @@ pub fn working_preview(library: &Library, path: &str) -> Result<String, super::S
     )))
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TravelReport {
+    pub destination: String,
+    pub media_count: usize,
+    pub previews: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XmpReport {
+    pub path: String,
+    pub wrote: bool,
+}
+
+pub fn eject_volume(mount: &str) -> Result<(), super::ServiceError> {
+    let mount = mount.trim();
+    if mount.is_empty() {
+        return Err(super::ServiceError::Empty);
+    }
+    let status = if cfg!(target_os = "macos") {
+        Command::new("diskutil").args(["eject", mount]).status()
+    } else if cfg!(target_os = "linux") {
+        Command::new("umount").arg(mount).status()
+    } else {
+        return Err(super::ServiceError::Scan(super::scanner::ScanError::Io {
+            path: mount.to_string(),
+            source: std::io::Error::other("eject is not available on this OS"),
+        }));
+    };
+    match status {
+        Ok(code) if code.success() => Ok(()),
+        Ok(_) => Err(super::ServiceError::Scan(super::scanner::ScanError::Io {
+            path: mount.to_string(),
+            source: std::io::Error::other("the volume did not eject"),
+        })),
+        Err(err) => Err(super::ServiceError::Io(err)),
+    }
+}
+
+pub fn export_travel_library(
+    library: &Library,
+    dest: &Path,
+    ids: &[i64],
+) -> Result<TravelReport, super::ServiceError> {
+    std::fs::create_dir_all(dest)?;
+    let sqlite = dest.join("library.sqlite");
+    if sqlite.exists() {
+        let _ = std::fs::remove_file(&sqlite);
+    }
+    library.vacuum_into(&sqlite)?;
+    let packed = Library::open(&sqlite)?;
+    if !ids.is_empty() {
+        packed.keep_media_ids(ids)?;
+    }
+    let previews = dest.join("previews");
+    std::fs::create_dir_all(&previews)?;
+    let mut copied = 0;
+    let media = packed.list_media()?;
+    for record in &media {
+        let Some(thumb) = record.thumbnail_path.as_deref() else {
+            continue;
+        };
+        let source = Path::new(thumb);
+        if !source.is_file() {
+            continue;
+        }
+        let name = source.file_name().unwrap_or_default();
+        let target = previews.join(name);
+        std::fs::copy(source, &target)?;
+        copied += 1;
+        if let Some(stem) = source.file_stem() {
+            let stem = stem.to_string_lossy();
+            let parent = source.parent().unwrap_or_else(|| Path::new("."));
+            for extra in [format!("{stem}.720.jpg"), format!("{stem}.play.mp4"), format!("{stem}.1080.jpg")] {
+                let extra_src = parent.join(&extra);
+                if extra_src.is_file() {
+                    let _ = std::fs::copy(&extra_src, previews.join(&extra));
+                    copied += 1;
+                }
+            }
+        }
+        packed.rewrite_thumbnail_path(record.id, &target.display().to_string())?;
+    }
+    Ok(TravelReport {
+        destination: dest.display().to_string(),
+        media_count: media.len(),
+        previews: copied,
+    })
+}
+
+pub fn write_xmp(library: &Library, path: &str) -> Result<XmpReport, super::ServiceError> {
+    let record = library
+        .find_by_path(path)?
+        .ok_or_else(|| DbError::NotFound(path.to_string()))?;
+    let disk = PathBuf::from(catalog_path(&record.file_path));
+    if !disk.is_file() {
+        return Ok(XmpReport {
+            path: disk.display().to_string(),
+            wrote: false,
+        });
+    }
+    let sidecar = PathBuf::from(format!("{}.xmp", disk.display()));
+    let xml = xmp_document(&record);
+    std::fs::write(&sidecar, xml)?;
+    Ok(XmpReport {
+        path: sidecar.display().to_string(),
+        wrote: true,
+    })
+}
+
+pub fn xmp_document(record: &MediaRecord) -> String {
+    let rating = record.rating.unwrap_or(0);
+    let flag = match record.flag.as_deref() {
+        Some("pick") => "Accepted",
+        Some("reject") => "Rejected",
+        _ => "",
+    };
+    let keywords = record
+        .keywords
+        .iter()
+        .map(|word| format!("      <rdf:li>{}</rdf:li>", xml_escape(word)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let notes = record.notes.clone().unwrap_or_default();
+    let gps = match (record.exif.as_ref().and_then(|exif| exif.latitude), record.exif.as_ref().and_then(|exif| exif.longitude)) {
+        (Some(lat), Some(lon)) => format!(
+            "   <exif:GPSLatitude>{}</exif:GPSLatitude>\n   <exif:GPSLongitude>{}</exif:GPSLongitude>\n",
+            lat as f64 / 1_000_000.0,
+            lon as f64 / 1_000_000.0
+        ),
+        _ => String::new(),
+    };
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+    xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/"
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:photoshop="http://ns.adobe.com/photoshop/1.0/"
+    xmlns:exif="http://ns.adobe.com/exif/1.0/"
+    xmp:Rating="{rating}">
+   <dc:description>
+    <rdf:Alt><rdf:li xml:lang="x-default">{notes}</rdf:li></rdf:Alt>
+   </dc:description>
+   <dc:subject>
+    <rdf:Bag>
+{keywords}
+    </rdf:Bag>
+   </dc:subject>
+   <photoshop:Urgency>{flag}</photoshop:Urgency>
+{gps}  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+"#
+    )
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+pub fn export_subclip(
+    library: &Library,
+    path: &str,
+    dest: &Path,
+) -> Result<String, super::ServiceError> {
+    let record = library
+        .find_by_path(path)?
+        .ok_or_else(|| DbError::NotFound(path.to_string()))?;
+    if record.media_kind != MediaKind::Video {
+        return Err(super::ServiceError::Scan(super::scanner::ScanError::Unsupported(
+            path.to_string(),
+        )));
+    }
+    let disk = PathBuf::from(catalog_path(&record.file_path));
+    let source = if disk.is_file() {
+        disk
+    } else if let Some(play) = record.play_path.as_deref().filter(|value| Path::new(value).is_file()) {
+        PathBuf::from(play)
+    } else {
+        return Err(super::ServiceError::Scan(super::scanner::ScanError::Missing(
+            record.file_path,
+        )));
+    };
+    let start = record.mark_in_ms.unwrap_or(0);
+    let end = record.mark_out_ms;
+    thumbs::write_subclip(&source, dest, start, end).map_err(|err| {
+        super::ServiceError::Scan(super::scanner::ScanError::Io {
+            path: dest.display().to_string(),
+            source: std::io::Error::other(err.to_string()),
+        })
+    })?;
+    Ok(dest.display().to_string())
+}
+
+pub fn fill_video_meta(library: &Library, path: &str) -> Result<MediaRecord, super::ServiceError> {
+    let record = library
+        .find_by_path(path)?
+        .ok_or_else(|| DbError::NotFound(path.to_string()))?;
+    let disk = PathBuf::from(catalog_path(&record.file_path));
+    if record.media_kind != MediaKind::Video || !disk.is_file() {
+        return Ok(record);
+    }
+    if let Some(probe) = thumbs::probe_video(&disk) {
+        let json = serde_json::to_string(&probe)?;
+        library.set_video_json(&record.file_path, &json)?;
+    }
+    Ok(library.find_by_path(path)?.ok_or_else(|| DbError::NotFound(path.to_string()))?)
+}
+
 fn save_full_jpeg(image: &DynamicImage, destination: &Path) -> Result<(), super::ServiceError> {
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent)?;
@@ -230,6 +447,46 @@ mod tests {
     }
 
     #[test]
+    fn xmp_includes_rating_and_keywords() {
+        let record = crate::models::MediaRecord {
+            id: 1,
+            file_path: "/tmp/a.jpg".into(),
+            content_hash: None,
+            file_size: 1,
+            created_at: None,
+            modified_at: 0,
+            indexed_at: 0,
+            rating: Some(4),
+            media_kind: MediaKind::Image,
+            exif: None,
+            captured_at: None,
+            thumbnail_path: None,
+            proxy_path: None,
+            play_path: None,
+            flag: Some("pick".into()),
+            color_label: None,
+            rotation: 0,
+            notes: Some("keep".into()),
+            keywords: vec!["beach".into()],
+            develop_json: None,
+            volume_id: None,
+            volume_label: None,
+            volume_mount: None,
+            relative_path: None,
+            original_online: true,
+            plug_hint: None,
+            cull_hint: None,
+            mark_in_ms: None,
+            mark_out_ms: None,
+            video: None,
+        };
+        let xml = xmp_document(&record);
+        assert!(xml.contains("xmp:Rating=\"4\""));
+        assert!(xml.contains("<rdf:li>beach</rdf:li>"));
+        assert!(xml.contains("Accepted"));
+    }
+
+    #[test]
     fn preview_counts_new_files_without_hashing() {
         let dir = tempfile::tempdir().unwrap();
         let library = crate::db::Library::open(dir.path().join("library.sqlite")).unwrap();
@@ -239,5 +496,47 @@ mod tests {
         let preview = preview_import(&library, &roll).unwrap();
         assert_eq!(preview.new_count, 1);
         assert_eq!(preview.known_count, 0);
+    }
+
+    #[test]
+    fn travel_pack_copies_the_catalog_slice() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = crate::db::Library::open(dir.path().join("library.sqlite")).unwrap();
+        library
+            .upsert_media(crate::db::NewMedia {
+                file_path: "/photos/keep.jpg",
+                content_hash: "aa",
+                file_size: 4,
+                created_at: None,
+                modified_at: 1,
+                media_kind: MediaKind::Image,
+                exif_json: None,
+                captured_at: None,
+                volume_id: None,
+                relative_path: None,
+            })
+            .unwrap();
+        library
+            .upsert_media(crate::db::NewMedia {
+                file_path: "/photos/drop.jpg",
+                content_hash: "bb",
+                file_size: 4,
+                created_at: None,
+                modified_at: 1,
+                media_kind: MediaKind::Image,
+                exif_json: None,
+                captured_at: None,
+                volume_id: None,
+                relative_path: None,
+            })
+            .unwrap();
+        let keep = library.find_by_path("/photos/keep.jpg").unwrap().unwrap().id;
+        let dest = dir.path().join("travel");
+        let report = export_travel_library(&library, &dest, &[keep]).unwrap();
+        assert_eq!(report.media_count, 1);
+        let packed = crate::db::Library::open(dest.join("library.sqlite")).unwrap();
+        assert_eq!(packed.list_media().unwrap().len(), 1);
+        assert!(packed.find_by_path("/photos/keep.jpg").unwrap().is_some());
+        assert!(packed.find_by_path("/photos/drop.jpg").unwrap().is_none());
     }
 }

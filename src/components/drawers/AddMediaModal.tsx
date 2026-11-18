@@ -13,6 +13,8 @@ type AddMediaModalProps = {
   onPaths: (paths: string[]) => void;
   onFiles: (files: File[]) => void;
   onIndexAnyway?: () => void;
+  onCopyThenIndex?: () => void;
+  onEject?: () => void;
 };
 
 export function AddMediaModal({
@@ -26,6 +28,8 @@ export function AddMediaModal({
   onPaths,
   onFiles,
   onIndexAnyway,
+  onCopyThenIndex,
+  onEject,
 }: AddMediaModalProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const onPathsRef = useRef(onPaths);
@@ -75,16 +79,38 @@ export function AddMediaModal({
           {preview.names.length > 0 ? (
             <p className="mt-1 truncate text-xs text-mute">{preview.names.slice(0, 4).join(" · ")}</p>
           ) : null}
-          {onIndexAnyway ? (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={onIndexAnyway}
-              className="mt-2 rounded-full bg-teal px-3 py-1.5 text-xs font-medium text-teal-ink disabled:opacity-40"
-            >
-              Index {preview.newCount} new file{preview.newCount === 1 ? "" : "s"}
-            </button>
-          ) : null}
+          <div className="mt-2 flex flex-wrap gap-2">
+            {onIndexAnyway ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onIndexAnyway}
+                className="rounded-full bg-teal px-3 py-1.5 text-xs font-medium text-teal-ink disabled:opacity-40"
+              >
+                Index in place
+              </button>
+            ) : null}
+            {onCopyThenIndex ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onCopyThenIndex}
+                className="rounded-full border border-line px-3 py-1.5 text-xs text-foam hover:border-teal disabled:opacity-40"
+              >
+                Copy new files to a folder
+              </button>
+            ) : null}
+            {onEject ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onEject}
+                className="rounded-full border border-line px-3 py-1.5 text-xs text-mute hover:text-foam disabled:opacity-40"
+              >
+                Eject this volume
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
       <div

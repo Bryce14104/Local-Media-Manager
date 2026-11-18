@@ -113,6 +113,10 @@ export function itemFromRecord(record: {
   volumeLabel?: string | null;
   originalOnline?: boolean;
   plugHint?: string | null;
+  cullHint?: string | null;
+  markInMs?: number | null;
+  markOutMs?: number | null;
+  video?: { durationMs?: number | null; fpsMilli?: number | null; codec?: string | null } | null;
 }): StudioItem {
   const fileName = (record.filePath.split(/[/\\]/).filter(Boolean).pop() ?? record.filePath).replace(/::v.*$/, "");
   const folder = parentFolder(record.filePath);
@@ -164,6 +168,12 @@ export function itemFromRecord(record: {
     plugHint: record.plugHint ?? null,
     volumeId: record.volumeId ?? null,
     volumeLabel: record.volumeLabel ?? null,
+    cullHint: record.cullHint ?? null,
+    markInMs: record.markInMs ?? null,
+    markOutMs: record.markOutMs ?? null,
+    durationMs: record.video?.durationMs ?? null,
+    videoCodec: record.video?.codec ?? null,
+    videoFps: record.video?.fpsMilli != null ? record.video.fpsMilli / 1000 : null,
     ...placed(folder, id, exif?.latitude, exif?.longitude),
   };
 }

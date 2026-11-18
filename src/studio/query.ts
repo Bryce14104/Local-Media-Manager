@@ -1,6 +1,7 @@
 import { captureMillis } from "./catalog";
 import { formatLatitude, formatLongitude } from "./geo";
 import { takePlace } from "./gazetteer";
+import { readPersonAliases } from "./libraryPrefs";
 import type {
   ActiveFilter,
   Filter,
@@ -97,6 +98,19 @@ export function parseQuery(input: string, items: StudioItem[] = [], aiSearch = t
   return parseSearch(input, items, aiSearch);
 }
 
+/** Map a typed alias such as `mum` onto a named person filter. */
+export function filterFromAlias(
+  query: string,
+  aliases: { alias: string; personId: string; name: string }[],
+): Filter | null {
+  const rest = ` ${query} `;
+  for (const alias of aliases) {
+    const taken = takePhrase(rest, alias.alias);
+    if (taken.found) return { kind: "person", personId: alias.personId, name: alias.name || alias.alias };
+  }
+  return null;
+}
+
 export function parseSearch(input: string, items: StudioItem[], aiSearch = true): Filter[] {
   const filters: Filter[] = [];
   const structured = input.match(STRUCTURED) ?? [];
@@ -112,6 +126,12 @@ export function parseSearch(input: string, items: StudioItem[], aiSearch = true)
       if (!taken.found) continue;
       rest = taken.rest;
       filters.push({ kind: "person", personId: person.personId, name: person.name });
+    }
+    for (const alias of readPersonAliases()) {
+      const taken = takePhrase(rest, alias.alias);
+      if (!taken.found) continue;
+      rest = taken.rest;
+      filters.push({ kind: "person", personId: alias.personId, name: alias.name || alias.alias });
     }
     const phrases = [
       ...SUBJECT_WORDS.flatMap((entry) => entry.words.map((word) => ({ phrase: word, value: entry.value }))),
@@ -269,6 +289,8 @@ export function filterLabel(filter: ActiveFilter): string {
       return filter.label;
     case "offline":
       return "Original offline";
+    case "cull":
+      return "Needs a look";
   }
 }
 
@@ -477,6 +499,8 @@ function matchesOne(item: StudioItem, filter: Filter): boolean {
       return (item.sourcePath ?? item.folder).replace(/\\/g, "/").startsWith(filter.path.replace(/\\/g, "/"));
     case "offline":
       return !item.originalOnline;
+    case "cull":
+      return Boolean(item.cullHint);
   }
 }
 
@@ -524,6 +548,8 @@ function filterKey(filter: Filter): string {
       return `folder:${filter.path}`;
     case "offline":
       return "offline";
+    case "cull":
+      return "cull";
   }
 }
 

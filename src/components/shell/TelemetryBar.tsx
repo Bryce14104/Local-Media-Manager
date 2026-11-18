@@ -7,11 +7,17 @@ export function TelemetryBar({
   gridZoom,
   onGridZoom,
   onPreferences,
+  onPause,
+  onStop,
+  paused = false,
 }: {
   telemetry: Telemetry;
   gridZoom: number;
   onGridZoom: (zoom: number) => void;
   onPreferences: () => void;
+  onPause?: () => void;
+  onStop?: () => void;
+  paused?: boolean;
 }) {
   const scanning = telemetry.scanProgress != null && telemetry.scanProgress < 1;
   const percent = telemetry.scanProgress == null ? null : Math.round(telemetry.scanProgress * 100);
@@ -61,6 +67,16 @@ export function TelemetryBar({
           <span aria-hidden className="h-3.5 w-3.5 rounded-[3px] border border-current" />
         </label>
         {telemetry.pipeline ? <PipelineMeter pipeline={telemetry.pipeline} /> : null}
+        {onPause && scanning ? (
+          <button type="button" onClick={onPause} className="shrink-0 text-[11px] text-mute hover:text-foam">
+            {paused ? "Resume" : "Pause"}
+          </button>
+        ) : null}
+        {onStop && scanning ? (
+          <button type="button" onClick={onStop} className="shrink-0 text-[11px] text-mute hover:text-foam">
+            Stop
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={onPreferences}

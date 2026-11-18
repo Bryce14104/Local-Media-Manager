@@ -1,7 +1,9 @@
 //! File-system scanning and EXIF reading, then a write into the local catalog.
 
 mod capture;
+mod catalog_control;
 mod clip;
+mod cull;
 mod exif;
 mod library_ops;
 mod pool;
@@ -11,12 +13,18 @@ mod vocab;
 mod vision;
 pub mod volumes;
 
+pub use catalog_control::{begin_job, canceled, paused, request_cancel, set_paused};
 pub use library_ops::{
-    clone_virtual, library_health, preview_import, relink_folder, working_preview, ImportPreview,
-    LibraryHealth, RelinkReport,
+    clone_virtual, eject_volume, export_subclip, export_travel_library, fill_video_meta, library_health,
+    preview_import, relink_folder, write_xmp, working_preview, ImportPreview, LibraryHealth, RelinkReport,
+    TravelReport, XmpReport,
 };
-pub use thumbs::{attach_sidecars, extract_largest_jpeg, generate_missing_thumbnails_with};
+pub use thumbs::{
+    attach_sidecars, extract_largest_jpeg, ffmpeg_available, generate_missing_thumbnails_with,
+    generate_previews, probe_video,
+};
 pub use vision::{recognize_library, search_embeddings, similar_to, warm_vision};
+pub use cull::score_library as score_cull;
 
 use crate::db::{DbError, Library, NewMedia};
 use crate::models::{ExportReport, MediaRecord, ScanReport, VolumeRecord};

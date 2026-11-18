@@ -122,6 +122,19 @@ pub struct MediaRecord {
     pub relative_path: Option<String>,
     pub original_online: bool,
     pub plug_hint: Option<String>,
+    pub cull_hint: Option<String>,
+    pub mark_in_ms: Option<i64>,
+    pub mark_out_ms: Option<i64>,
+    pub video: Option<VideoProbe>,
+}
+
+/// ffprobe fields cached on a video row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoProbe {
+    pub duration_ms: Option<i64>,
+    pub fps_milli: Option<i64>,
+    pub codec: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { collapseBursts as collapseBurstItems } from "../../studio/bursts";
 import { gridMetrics } from "../../studio/gridZoom";
 import { formatMonth } from "../../studio/query";
+import { formatShootDay, shootDay } from "../../studio/trips";
 import type { PointerMods } from "../../studio/selection";
 import type { GeoBounds, StudioItem, ViewMode } from "../../studio/types";
 import { MediaCard } from "./MediaCard";
@@ -263,18 +264,32 @@ function Grid({
 function Timeline(props: Parameters<typeof Grid>[0]) {
   const groups = new Map<string, StudioItem[]>();
   for (const item of props.items) {
-    const key = item.capturedAt.slice(0, 7);
+    const key = shootDay(item);
     const list = groups.get(key) ?? [];
     list.push(item);
     groups.set(key, list);
   }
-  const months = [...groups.keys()].sort().reverse();
+  const days = [...groups.keys()].sort().reverse();
+  const months = new Map<string, string[]>();
+  for (const day of days) {
+    const month = day.slice(0, 7);
+    const list = months.get(month) ?? [];
+    list.push(day);
+    months.set(month, list);
+  }
   return (
     <div className="space-y-8">
-      {months.map((month) => (
+      {[...months.keys()].map((month) => (
         <section key={month}>
           <h2 className="mb-3 text-xs uppercase tracking-[0.16em] text-mute">{formatMonth(month)}</h2>
-          <Grid {...props} items={groups.get(month) ?? []} />
+          <div className="space-y-6">
+            {(months.get(month) ?? []).map((day) => (
+              <div key={day}>
+                <h3 className="mb-2 text-[11px] text-foam">{formatShootDay(day)}</h3>
+                <Grid {...props} items={groups.get(day) ?? []} />
+              </div>
+            ))}
+          </div>
         </section>
       ))}
     </div>
