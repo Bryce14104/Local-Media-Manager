@@ -57,9 +57,11 @@ export function TopBar({
   const [open, setOpen] = useState(false);
   const [highlight, setHighlight] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [arrowed, setArrowed] = useState(false);
 
   useEffect(() => {
     setHighlight(0);
+    setArrowed(false);
   }, [query]);
 
   useEffect(() => {
@@ -84,14 +86,16 @@ export function TopBar({
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setOpen(true);
+      setArrowed(true);
       setHighlight((current) => Math.min(suggestions.length - 1, current + 1));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
+      setArrowed(true);
       setHighlight((current) => Math.max(0, current - 1));
     } else if (event.key === "Enter") {
       event.preventDefault();
       const suggestion = suggestions[highlight];
-      if (open && suggestion) choose(suggestion);
+      if (open && arrowed && suggestion) choose(suggestion);
       else onSubmitQuery();
       setOpen(false);
     } else if (event.key === "Escape") {

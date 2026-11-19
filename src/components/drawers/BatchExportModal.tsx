@@ -36,7 +36,6 @@ export function BatchExportModal({ count, onClose, onExport }: BatchExportModalP
           autoFocus
         >
           <option>JPEG</option>
-          <option>TIFF</option>
           <option>Original</option>
           <option>Subclip</option>
           <option>XMP</option>

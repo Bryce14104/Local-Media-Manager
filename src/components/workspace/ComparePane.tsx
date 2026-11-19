@@ -33,7 +33,7 @@ export function ComparePane({ pair, onClear }: ComparePaneProps) {
         </div>
       ) : (
         <div className="mx-4 rounded-2xl border border-dashed border-line px-5 py-16 text-center text-sm text-mute">
-          Use the + mark on two frames. Compare keeps that pair side by side.
+          Select two photos, then open Compare to see them side by side.
         </div>
       )}
     </section>

@@ -241,7 +241,9 @@ export function upsertFilter(current: ActiveFilter[], filter: Filter): ActiveFil
 }
 
 export function matchesFilters(item: StudioItem, filters: ActiveFilter[]): boolean {
-  return filters.every((filter) => matchesOne(item, filter));
+  return filters
+    .filter((filter) => !(filter.kind === "visual" && filter.ids.length === 0))
+    .every((filter) => matchesOne(item, filter));
 }
 
 export function filterLabel(filter: ActiveFilter): string {
@@ -462,6 +464,7 @@ function matchesOne(item: StudioItem, filter: Filter): boolean {
     }
     case "region":
       return (
+        item.geotagged &&
         item.longitude >= filter.west &&
         item.longitude <= filter.east &&
         item.latitude >= filter.south &&

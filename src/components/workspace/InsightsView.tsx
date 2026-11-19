@@ -176,12 +176,23 @@ export function InsightsView({
                             ? current.filter((id) => id !== person.id)
                             : [...current, person.id].slice(-2),
                         );
-                        onShowPerson?.(person.id, person.name);
                       }}
                     />
                   ))}
                 </Row>
                 <div className="mt-2 flex flex-wrap gap-2">
+                  {onShowPerson && pickedPeople[0] ? (
+                    <button
+                      type="button"
+                      className="text-xs text-mute hover:text-foam"
+                      onClick={() => {
+                        const person = people.find((row) => row.id === pickedPeople[0]);
+                        if (person) onShowPerson(person.id, person.name);
+                      }}
+                    >
+                      Show in library
+                    </button>
+                  ) : null}
                   {onRenamePerson && (people.find((person) => pickedPeople.includes(person.id)) ?? people[0]) ? (
                     <button
                       type="button"

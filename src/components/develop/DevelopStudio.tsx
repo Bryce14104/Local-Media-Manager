@@ -213,7 +213,10 @@ export function DevelopStudio({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.92));
-    if (!blob) return;
+    if (!blob) {
+      setExportLabel("Could not write a JPEG from this preview.");
+      return;
+    }
     const bytes = new Uint8Array(await blob.arrayBuffer());
     const fallback = item.fileName.replace(/\.[^.]+$/, "") + "-edit.jpg";
     if (!desktopBridgeAvailable()) {

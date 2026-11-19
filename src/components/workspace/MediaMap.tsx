@@ -316,7 +316,7 @@ export function MediaMap({
           type="button"
           onClick={() => {
             fitted.current = ids;
-            setView(items.length ? fitItems(items, sizeRef.current) : fitWorld(sizeRef.current));
+            setView(located.length ? fitItems(located, sizeRef.current) : fitWorld(sizeRef.current));
           }}
           className="rounded-full border border-line bg-card/95 px-3 py-1 text-xs text-mute hover:text-foam"
         >

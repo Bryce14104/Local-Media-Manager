@@ -328,7 +328,7 @@ pub fn xmp_document(record: &MediaRecord) -> String {
         .map(|word| format!("      <rdf:li>{}</rdf:li>", xml_escape(word)))
         .collect::<Vec<_>>()
         .join("\n");
-    let notes = record.notes.clone().unwrap_or_default();
+    let notes = xml_escape(&record.notes.clone().unwrap_or_default());
     let gps = match (record.exif.as_ref().and_then(|exif| exif.latitude), record.exif.as_ref().and_then(|exif| exif.longitude)) {
         (Some(lat), Some(lon)) => format!(
             "   <exif:GPSLatitude>{}</exif:GPSLatitude>\n   <exif:GPSLongitude>{}</exif:GPSLongitude>\n",
@@ -429,10 +429,12 @@ pub fn download_originals(
         }
         let name = disk.file_name().unwrap_or_default();
         let mut target = dest.join(name);
-        if target.exists() && target != disk {
-            let stem = disk.file_stem().and_then(|s| s.to_str()).unwrap_or("frame");
-            let ext = disk.extension().and_then(|s| s.to_str()).unwrap_or("");
-            target = dest.join(format!("{stem}-local.{ext}"));
+        let stem = disk.file_stem().and_then(|s| s.to_str()).unwrap_or("frame");
+        let ext = disk.extension().and_then(|s| s.to_str()).unwrap_or("");
+        let mut n = 0u32;
+        while target.exists() && target != disk {
+            n += 1;
+            target = dest.join(format!("{stem}-local{n}.{ext}"));
         }
         if target != disk {
             std::fs::copy(&disk, &target)?;
@@ -440,9 +442,16 @@ pub fn download_originals(
         let volume = volumes::detect(&target);
         let volume_id = library.upsert_volume(&volume.fingerprint, &volume.label, &volume.mount)?;
         let relative = volumes::relative_to(&target, &volume.mount);
-        if let Some(record) = library.find_by_path(path)? {
-            library.set_file_path(record.id, &target.display().to_string())?;
-            library.set_volume(record.id, volume_id, &relative)?;
+        let origin = catalog_path(path).to_string();
+        if let Ok(rows) = library.list_media() {
+            for row in rows {
+                if crate::models::catalog_path(&row.file_path) != origin {
+                    continue;
+                }
+                let next = format!("{}{}", target.display(), crate::models::virtual_suffix(&row.file_path));
+                let _ = library.set_file_path(row.id, &next);
+                let _ = library.set_volume(row.id, volume_id, &relative);
+            }
         }
         copied += 1;
     }

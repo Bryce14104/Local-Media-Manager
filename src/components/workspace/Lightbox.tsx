@@ -34,6 +34,7 @@ type LightboxProps = {
   onMarkIn?: (ms: number) => void;
   onMarkOut?: (ms: number) => void;
   onDownload?: () => void;
+  autoPlay?: boolean;
 };
 
 export function Lightbox({
@@ -64,6 +65,7 @@ export function Lightbox({
   onMarkIn,
   onMarkOut,
   onDownload,
+  autoPlay = false,
 }: LightboxProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -87,6 +89,10 @@ export function Lightbox({
   useEffect(() => {
     closeRef.current?.focus();
   }, []);
+
+  useEffect(() => {
+    if (autoPlay) setSlideshow(true);
+  }, [autoPlay]);
 
   useEffect(() => {
     if (!showSettings) return;

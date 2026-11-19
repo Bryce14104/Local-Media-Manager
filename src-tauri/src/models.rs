@@ -19,6 +19,10 @@ pub fn catalog_path(path: &str) -> &str {
     path.split_once("::v").map(|(base, _)| base).unwrap_or(path)
 }
 
+pub fn virtual_suffix(path: &str) -> &str {
+    path.find("::v").map(|index| &path[index..]).unwrap_or("")
+}
+
 impl MediaKind {
     pub fn as_str(self) -> &'static str {
         match self {

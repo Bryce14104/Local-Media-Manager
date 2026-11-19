@@ -469,14 +469,17 @@ pub fn export_travel_library(
 #[tauri::command]
 pub fn open_library(path: String, state: State<'_, Library>, app: AppHandle) -> Result<LibrarySummary, String> {
     let file = PathBuf::from(path.trim());
+    services::request_cancel();
     state.reopen(&file).map_err(|err| err.to_string())?;
     persist_active_library(&app, &file);
+    spawn_catalog_jobs(Library::clone(&*state), app);
     Ok(state.summary().map_err(|err| err.to_string())?)
 }
 
 #[tauri::command]
 pub fn new_library(destination: String, state: State<'_, Library>, app: AppHandle) -> Result<LibrarySummary, String> {
     let dest = PathBuf::from(destination.trim());
+    services::request_cancel();
     if dest.is_dir() {
         let sqlite = dest.join("library.sqlite");
         state.reopen(&sqlite).map_err(|err| err.to_string())?;
@@ -488,6 +491,7 @@ pub fn new_library(destination: String, state: State<'_, Library>, app: AppHandl
         state.reopen(&dest).map_err(|err| err.to_string())?;
         persist_active_library(&app, &dest);
     }
+    spawn_catalog_jobs(Library::clone(&*state), app);
     Ok(state.summary().map_err(|err| err.to_string())?)
 }
 

@@ -87,7 +87,7 @@ where
             if record.content_hash.is_none() {
                 return false;
             }
-            if !Path::new(&record.file_path).is_file() {
+            if !Path::new(crate::models::catalog_path(&record.file_path)).is_file() {
                 return false;
             }
             if record.media_kind == MediaKind::Video && !ffmpeg {
@@ -191,7 +191,7 @@ struct PreviewJob {
 
 fn build_still_preview(job: PreviewJob) -> Option<ThumbnailReady> {
     let PreviewJob { record, destination } = job;
-    if let Err(error) = write_thumbnail(Path::new(&record.file_path), &destination) {
+    if let Err(error) = write_thumbnail(Path::new(crate::models::catalog_path(&record.file_path)), &destination) {
         eprintln!("shelf index: preview failed for {}: {error}", record.file_path);
         return None;
     }
@@ -211,7 +211,7 @@ fn build_still_preview(job: PreviewJob) -> Option<ThumbnailReady> {
 
 fn finish_video_proxy(mut item: ThumbnailReady) -> ThumbnailReady {
     let dest = play_path(Path::new(&item.thumbnail_path));
-    if let Err(error) = write_playable(Path::new(&item.file_path), &dest) {
+    if let Err(error) = write_playable(Path::new(crate::models::catalog_path(&item.file_path)), &dest) {
         eprintln!("shelf index: playback proxy failed for {}: {error}", item.file_path);
     }
     item.play_path = existing_file(&dest);
@@ -749,8 +749,9 @@ pub fn write_subclip(source: &Path, dest: &Path, start_ms: i64, end_ms: Option<i
         source.display().to_string(),
     ];
     if let Some(end) = end_ms {
-        args.push("-to".into());
-        args.push(format!("{}", end.max(start_ms) as f64 / 1000.0));
+        let duration = (end.max(start_ms) - start_ms) as f64 / 1000.0;
+        args.push("-t".into());
+        args.push(format!("{duration}"));
     }
     args.extend(["-c".into(), "copy".into(), dest.display().to_string()]);
     let status = Command::new(bin)

@@ -54,6 +54,10 @@ pub fn run() {
                 let boxed: Box<dyn std::error::Error> = Box::new(error);
                 return Err(boxed);
             }
+            services::sync_volumes(&library);
+            if let Ok(mut media) = library.list_media() {
+                services::hydrate_origins(&library, &mut media);
+            }
             app.manage(library.clone());
             commands::spawn_catalog_jobs(library, app.handle().clone());
             Ok(())

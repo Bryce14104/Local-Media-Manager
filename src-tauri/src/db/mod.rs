@@ -670,7 +670,7 @@ impl Library {
         std::fs::create_dir_all(dest)?;
         let mut copied = 0;
         for path in paths {
-            let source = Path::new(path);
+            let source = Path::new(crate::models::catalog_path(path));
             if !source.is_file() {
                 continue;
             }
@@ -694,7 +694,13 @@ impl Library {
             let thumb = self
                 .find_by_path(path)?
                 .and_then(|record| record.thumbnail_path);
-            delete_owned_thumbnail(thumb.as_deref());
+            let shared = match thumb.as_deref() {
+                Some(thumb) => self.thumbnail_refcount(thumb)? > 1,
+                None => false,
+            };
+            if !shared {
+                delete_owned_thumbnail(thumb.as_deref());
+            }
             let conn = self.lock()?;
             removed += conn.execute("DELETE FROM media_files WHERE file_path = ?1", params![path])?;
         }
@@ -711,15 +717,24 @@ impl Library {
                 failed.push(format!("{path}: not in the library"));
                 continue;
             };
-            match std::fs::remove_file(path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => {
-                    failed.push(format!("{path}: {error}"));
-                    continue;
+            let disk = crate::models::catalog_path(&record.file_path);
+            if self.origin_refcount(disk)? <= 1 {
+                match std::fs::remove_file(disk) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        failed.push(format!("{path}: {error}"));
+                        continue;
+                    }
                 }
             }
-            delete_owned_thumbnail(record.thumbnail_path.as_deref());
+            let shared = match record.thumbnail_path.as_deref() {
+                Some(thumb) => self.thumbnail_refcount(thumb)? > 1,
+                None => false,
+            };
+            if !shared {
+                delete_owned_thumbnail(record.thumbnail_path.as_deref());
+            }
             let conn = self.lock()?;
             removed += conn.execute("DELETE FROM media_files WHERE file_path = ?1", params![path])?;
         }
@@ -971,6 +986,27 @@ impl Library {
             params![person_id, face_id],
         )?;
         Ok(person_id)
+    }
+
+    pub fn origin_refcount(&self, disk: &str) -> Result<usize, DbError> {
+        let conn = self.lock()?;
+        let like = format!("{disk}::v%");
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM media_files WHERE file_path = ?1 OR file_path LIKE ?2",
+            params![disk, like],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    pub fn thumbnail_refcount(&self, thumb: &str) -> Result<usize, DbError> {
+        let conn = self.lock()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM media_files WHERE thumbnail_path = ?1",
+            params![thumb],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 
     pub fn set_captured_at(&self, path: &str, captured_at: i64) -> Result<(), DbError> {

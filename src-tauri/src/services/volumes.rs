@@ -14,6 +14,12 @@ pub struct DetectedVolume {
 
 static CACHE: Mutex<Option<HashMap<String, DetectedVolume>>> = Mutex::new(None);
 
+pub fn clear_cache() {
+    if let Ok(mut guard) = CACHE.lock() {
+        *guard = None;
+    }
+}
+
 pub fn detect(path: &Path) -> DetectedVolume {
     let key = path
         .parent()

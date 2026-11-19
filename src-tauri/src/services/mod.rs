@@ -478,20 +478,21 @@ pub fn hydrate_origins(library: &Library, records: &mut [MediaRecord]) {
     let by_id: HashMap<i64, VolumeRecord> = volumes.into_iter().map(|volume| (volume.id, volume)).collect();
     for record in records {
         let Some(volume_id) = record.volume_id else {
-            record.original_online = Path::new(&record.file_path).is_file();
+            record.original_online = Path::new(crate::models::catalog_path(&record.file_path)).is_file();
             continue;
         };
         let Some(volume) = by_id.get(&volume_id) else {
-            record.original_online = Path::new(&record.file_path).is_file();
+            record.original_online = Path::new(crate::models::catalog_path(&record.file_path)).is_file();
             continue;
         };
         record.volume_label = Some(volume.label.clone());
         record.volume_mount = Some(volume.last_mount.clone());
         let relative = record.relative_path.clone().unwrap_or_default();
         let remounted = volumes::join_mount(&volume.last_mount, &relative);
-        let disk_path = library_ops::catalog_path(&record.file_path);
+        let suffix = crate::models::virtual_suffix(&record.file_path);
+        let disk_path = crate::models::catalog_path(&record.file_path);
         if remounted.is_file() && remounted.to_string_lossy() != disk_path {
-            let next = remounted.to_string_lossy().into_owned();
+            let next = format!("{}{suffix}", remounted.display());
             let _ = library.set_file_path(record.id, &next);
             record.file_path = next;
         }
@@ -507,6 +508,7 @@ pub fn hydrate_origins(library: &Library, records: &mut [MediaRecord]) {
 }
 
 pub fn sync_volumes(library: &Library) {
+    volumes::clear_cache();
     let Ok(known) = library.list_volumes() else {
         return;
     };
@@ -632,7 +634,7 @@ pub fn export_media(library: &Library, paths: &[String], destination: &str) -> R
         };
         hydrate_origins(library, std::slice::from_mut(&mut record));
         thumbs::attach_sidecars(&mut record);
-        let source = Path::new(&record.file_path);
+        let source = Path::new(crate::models::catalog_path(&record.file_path));
         if source.is_file() {
             copy_named(source, dest, source.file_name().unwrap_or_default(), &mut report.originals)?;
             continue;

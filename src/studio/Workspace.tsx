@@ -168,6 +168,8 @@ export function Workspace() {
   const [aliases, setAliases] = useState(readPersonAliases);
   const [ffmpegOk, setFfmpegOk] = useState<boolean | null>(null);
   const [needsLook, setNeedsLook] = useState(false);
+  const [slideshowPlay, setSlideshowPlay] = useState(false);
+  const itemsRef = useRef<StudioItem[]>([]);
 
   useEffect(() => {
     if (!toast) return;
@@ -200,6 +202,7 @@ export function Workspace() {
     [items, resolvedFilters, sort],
   );
   const palette = useMemo(() => suggestions(query, items, aiSearch), [query, items, aiSearch]);
+  itemsRef.current = items;
   const primary = items.find((item) => item.id === primaryId) ?? null;
   const lightboxPool = visible.some((item) => item.id === lightboxId) ? visible : items;
   const lightboxIndex = lightboxPool.findIndex((item) => item.id === lightboxId);
@@ -386,7 +389,7 @@ export function Workspace() {
           const report = await rescanWatched(volume.fingerprint);
           if (cancel) return;
           const { media } = await fetchLibrary();
-          setItems(media.map(presentRecord));
+          await paintLibrary(media);
           await refreshSources();
           previous = await listVolumes().catch(() => next);
           const line = report.indexed
@@ -435,6 +438,7 @@ export function Workspace() {
       }
       if (event.key === "Escape") {
         if (selectingCache) return;
+        if (developOpen) return;
         if (lightboxId) {
           if (document.fullscreenElement) {
             event.preventDefault();
@@ -456,6 +460,7 @@ export function Workspace() {
         if (typing) return;
         if (selectMode) {
           setSelectMode(false);
+          setSelectedIds([]);
           return;
         }
         if (selectedIds.length > 0) {
@@ -669,9 +674,13 @@ export function Workspace() {
         break;
       case "clear-filters":
         setFilters([]);
+        setNeedsLook(false);
         break;
       case "slideshow":
-        if (primaryId) viewItem(primaryId);
+        if (primaryId) {
+          viewItem(primaryId);
+          setSlideshowPlay(true);
+        }
         break;
       case "rotate":
         if (primaryId) void rotateItem(primaryId);
@@ -683,11 +692,6 @@ export function Workspace() {
     if (suggestion.type === "action") {
       applyAction(suggestion.action);
     } else {
-      if (aiSearch) {
-        const typed = query.trim();
-        void runEmbeddingSearch(typed || suggestion.label);
-        return;
-      }
       setFilters((current) => suggestion.filters.reduce(upsertFilter, current));
       if (viewMode === "insights") chooseView("compact");
       void logSearch(
@@ -724,12 +728,7 @@ export function Workspace() {
     if (!trimmed) return;
     setQuery("");
     if (!desktopBridgeAvailable()) {
-      setFilters((current) =>
-        upsertFilter(
-          current.filter((filter) => filter.kind !== "subject" && filter.kind !== "text" && filter.kind !== "person"),
-          { kind: "visual", ids: [], label: `Smart “${trimmed}”` },
-        ),
-      );
+      setToast("Smart Search runs on this Mac in the desktop app.");
       setTelemetry((current) => ({
         ...current,
         scanLabel: "Smart Search scores ONNX embeddings in the desktop app.",
@@ -754,11 +753,7 @@ export function Workspace() {
             : item.matchReasons,
         })),
       );
-      const visual = {
-        kind: "visual" as const,
-        ids: hits.map((hit) => `library-${hit.mediaId}`),
-        label: `Smart “${trimmed}”`,
-      };
+      const ids = hits.map((hit) => `library-${hit.mediaId}`);
       const extra = parsed.filter((filter) => filter.kind === "subject" || filter.kind === "person" || filter.kind === "region");
       setFilters((current) => {
         const kept = current.filter(
@@ -769,22 +764,21 @@ export function Workspace() {
             filter.kind !== "person" &&
             filter.kind !== "region",
         );
-        return [...structured, ...extra, visual].reduce(upsertFilter, kept);
+        const visual = ids.length
+          ? [{ kind: "visual" as const, ids, label: `Smart “${trimmed}”` }]
+          : [];
+        return [...structured, ...extra, ...visual].reduce(upsertFilter, kept);
       });
       setTelemetry((current) => ({
         ...current,
         scanLabel: hits.length === 0 ? `No ONNX match for “${trimmed}”` : `ONNX matched ${hits.length}`,
       }));
+      if (hits.length === 0) setToast(`No Smart Search match for “${trimmed}”`);
       void logSearch(true, trimmed, hits.length === 0 ? "no embedding match" : `${hits.length} embedding matches`);
       const snapshot = await fetchInsights().catch(() => null);
       if (snapshot) setItems((current) => applyInsights(current, snapshot));
     } catch (error) {
-      setFilters((current) =>
-        upsertFilter(
-          current.filter((filter) => filter.kind !== "subject" && filter.kind !== "text" && filter.kind !== "person"),
-          { kind: "visual", ids: [], label: `Smart “${trimmed}”` },
-        ),
-      );
+      setToast(errorMessage(error));
       setTelemetry((current) => ({
         ...current,
         scanLabel: "ONNX search failed. The model did not return embeddings.",
@@ -839,6 +833,7 @@ export function Workspace() {
     const id = lightboxId;
     if (!id) return;
     setWantOriginal(false);
+    setSlideshowPlay(false);
     setDevelopOpen(false);
     setBatchDevelop(false);
     lightboxIdRef.current = null;
@@ -874,14 +869,14 @@ export function Workspace() {
   function rate(id: string, rating: number | null) {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, rating } : item)));
     setPrimaryId(id);
-    const path = items.find((item) => item.id === id)?.sourcePath;
+    const path = itemsRef.current.find((item) => item.id === id)?.sourcePath;
     if (path && desktopBridgeAvailable()) {
       void setRating(path, rating).catch(() => undefined);
     }
   }
 
   function flag(id: string) {
-    const current = items.find((item) => item.id === id);
+    const current = itemsRef.current.find((item) => item.id === id);
     if (!current) return;
     void applyFlag(id, nextFlag(current.flag));
   }
@@ -889,14 +884,14 @@ export function Workspace() {
   function applyFlag(id: string, next: FlagStatus) {
     setItems((current) => current.map((item) => (item.id === id ? { ...item, flag: next } : item)));
     setPrimaryId(id);
-    const path = items.find((item) => item.id === id)?.sourcePath;
+    const path = itemsRef.current.find((item) => item.id === id)?.sourcePath;
     if (path && desktopBridgeAvailable()) {
       void setFlags([path], next === "unflagged" ? null : next).catch(() => undefined);
     }
   }
 
   function rotateItem(id: string) {
-    const current = items.find((item) => item.id === id);
+    const current = itemsRef.current.find((item) => item.id === id);
     if (!current) return;
     const rotation = (current.rotation + 90) % 360;
     setItems((list) => list.map((item) => (item.id === id ? { ...item, rotation } : item)));
@@ -907,7 +902,7 @@ export function Workspace() {
 
   function colorItem(id: string, color: ColorLabel | null) {
     setItems((list) => list.map((item) => (item.id === id ? { ...item, colorLabel: color } : item)));
-    const path = items.find((item) => item.id === id)?.sourcePath;
+    const path = itemsRef.current.find((item) => item.id === id)?.sourcePath;
     if (path && desktopBridgeAvailable()) {
       void setColor([path], color).catch(() => undefined);
     }
@@ -926,7 +921,7 @@ export function Workspace() {
   }
 
   function persistDevelop(id: string, next: DevelopSettings) {
-    const item = items.find((item) => item.id === id);
+    const item = itemsRef.current.find((item) => item.id === id);
     if (!item?.originalOnline) return;
     const path = item.sourcePath;
     if (!path || !desktopBridgeAvailable()) return;
@@ -937,7 +932,7 @@ export function Workspace() {
   function saveDevelop(id: string, next: DevelopSettings) {
     if (batchDevelop && selectedIds.length > 1) {
       const chosen = new Set(
-        selectedIds.filter((id) => items.find((item) => item.id === id)?.originalOnline),
+        selectedIds.filter((id) => itemsRef.current.find((item) => item.id === id)?.originalOnline),
       );
       setItems((current) =>
         current.map((item) => {
@@ -1077,7 +1072,11 @@ export function Workspace() {
     const chosen = items.filter((item) => wanted.includes(item.id) && item.sourcePath && item.originalOnline);
     const paths = chosen.map((item) => item.sourcePath as string);
     if (!desktopBridgeAvailable() || paths.length === 0) {
-      setToast(chosen.length === 0 ? "Select online originals to download onto this computer" : "Desktop library required");
+      setToast(
+      chosen.length === 0
+        ? "Plug in the disk that holds this original, then tap the cloud again."
+        : "Desktop library required",
+    );
       return;
     }
     try {
@@ -1217,7 +1216,7 @@ export function Workspace() {
               ? `${preview.volumeLabel}: everything here is already in the library`
               : `${preview.volumeLabel}: ${preview.newCount} new · ${preview.knownCount} already indexed`,
           );
-          if (preview.newCount === 0) return;
+          return;
         } catch {
           // Fall through to a full index if the preview command is unavailable.
         }
@@ -1258,8 +1257,14 @@ export function Workspace() {
 
   async function reloadLibrary() {
     const { media } = await fetchLibrary();
-    setItems(media.map(presentRecord));
+    await paintLibrary(media);
     void refreshSources();
+  }
+
+  async function paintLibrary(media: MediaRecord[]) {
+    const snapshot = await fetchInsights().catch(() => null);
+    const library = media.map(presentRecord);
+    setItems(snapshot ? applyInsights(library, snapshot) : library);
   }
 
   async function openAnotherLibrary() {
@@ -1476,7 +1481,7 @@ export function Workspace() {
       if (!root) return;
       const report = await relinkFolder(root);
       const { media } = await fetchLibrary();
-      setItems(media.map(presentRecord));
+      await paintLibrary(media);
       setToast(`Relinked ${report.relinked} of ${report.scanned}`);
       setModal(null);
     } catch (error) {
@@ -1606,7 +1611,7 @@ export function Workspace() {
               void rescanWatched()
                 .then(async (report) => {
                   const { media } = await fetchLibrary();
-                  setItems(media.map(presentRecord));
+                  await paintLibrary(media);
                   await refreshSources();
                   setTelemetry((current) => ({
                     ...current,
@@ -1622,7 +1627,7 @@ export function Workspace() {
             onOpen={viewItem}
           />
         ) : null}
-        {preset === "compare" ? (
+        {preset === "compare" && comparePair[0] && comparePair[1] ? (
           <ComparePane pair={comparePair} onClear={() => setSelectedIds([])} />
         ) : viewMode === "insights" ? (
           <InsightsView
@@ -1689,13 +1694,19 @@ export function Workspace() {
             onOpen={openItem}
             onView={viewItem}
             selectMode={selectMode}
-            onSelectMode={setSelectMode}
+            onSelectMode={(enabled) => {
+              setSelectMode(enabled);
+              if (!enabled) setSelectedIds([]);
+            }}
             onSelect={selectItem}
             onSelectVisible={selectVisible}
             onToggle={toggleItem}
             onRate={rate}
             onFlag={flag}
-            onClearFilters={() => setFilters([])}
+            onClearFilters={() => {
+              setFilters([]);
+              setNeedsLook(false);
+            }}
             filteredEmpty={visible.length === 0}
             onRegion={applyRegion}
             onCluster={applyCluster}
@@ -1942,9 +1953,13 @@ export function Workspace() {
           onClose={closeLightbox}
           onPrev={() => stepLightbox(-1)}
           onNext={() => stepLightbox(1)}
+          autoPlay={slideshowPlay}
           onJump={(id) => {
+            setWantOriginal(false);
+            lightboxIdRef.current = id;
             setLightboxId(id);
             setPrimaryId(id);
+            anchorRef.current = id;
           }}
           onRotate={() => rotateItem(lightboxItem.id)}
           onCopyPath={() => copyItemPath(lightboxItem)}
@@ -1985,7 +2000,7 @@ export function Workspace() {
         <DevelopStudio
           item={lightboxItem}
           settings={lightboxItem.develop}
-          peers={batchDevelop ? items.filter((item) => selectedIds.includes(item.id)) : []}
+          peers={batchDevelop ? items.filter((item) => selectedIds.includes(item.id) && item.originalOnline) : []}
           onPick={(id) => {
             lightboxIdRef.current = id;
             setLightboxId(id);
