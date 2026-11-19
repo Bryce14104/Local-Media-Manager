@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, ty
 import { formatTimestamp } from "../../lib/format";
 import type { SlideshowSettings } from "../../studio/slideshow";
 import type { StudioItem } from "../../studio/types";
+import { DownloadCloudButton } from "./DownloadCloudButton";
 import { ProgressiveMedia } from "./ProgressiveMedia";
 import { SlideshowControls } from "./SlideshowControls";
 
@@ -369,6 +370,12 @@ export function Lightbox({
         </div>
       </div>
 
+      {onDownload && item.originalOnline ? (
+        <div className="absolute bottom-28 right-5 z-30 md:bottom-24">
+          <DownloadCloudButton onClick={onDownload} className="h-10 w-10" />
+        </div>
+      ) : null}
+
       <header
         className={`pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center gap-2 px-3 py-3 md:px-4 ${
           immersive ? "bg-transparent" : "bg-gradient-to-b from-black/70 to-transparent"
@@ -439,7 +446,6 @@ export function Lightbox({
           {immersive ? null : onOriginal ? (
             <BarLabel onClick={onOriginal}>{item.originalOnline ? "Original" : "Full res"}</BarLabel>
           ) : null}
-          {immersive ? null : onDownload && item.originalOnline ? <BarLabel onClick={onDownload}>Download</BarLabel> : null}
           {!clip ? (
             <BarAction label={immersive ? "Exit fullscreen" : "Full screen"} onClick={() => void toggleFullscreen()}>
               {immersive ? <ExitFullIcon /> : <FullIcon />}

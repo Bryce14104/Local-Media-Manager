@@ -1066,12 +1066,15 @@ export function Workspace() {
     });
   }
 
-  async function downloadToComputer() {
-    const chosen = items.filter((item) =>
-      (selectedIds.length > 0 ? selectedIds.includes(item.id) : Boolean(primary && item.id === primary.id)) &&
-      item.sourcePath &&
-      item.originalOnline,
-    );
+  async function downloadToComputer(targetId?: string) {
+    const wanted = targetId
+      ? [targetId]
+      : selectedIds.length > 0
+        ? selectedIds
+        : primary
+          ? [primary.id]
+          : [];
+    const chosen = items.filter((item) => wanted.includes(item.id) && item.sourcePath && item.originalOnline);
     const paths = chosen.map((item) => item.sourcePath as string);
     if (!desktopBridgeAvailable() || paths.length === 0) {
       setToast(chosen.length === 0 ? "Select online originals to download onto this computer" : "Desktop library required");
@@ -1570,7 +1573,6 @@ export function Workspace() {
         onAdd={openAdd}
         onPreferences={openPreferences}
         onHelp={() => setModal("help")}
-        onDownload={() => void downloadToComputer()}
         inputRef={inputRef}
       />
 
@@ -1701,6 +1703,7 @@ export function Workspace() {
             onCacheBounds={finishCacheSelect}
             onCancelCache={cancelCacheSelect}
             collapseBursts={collapseBursts}
+            onDownload={(id) => void downloadToComputer(id)}
           />
         )}
         {panelMode === "docked" ? (
@@ -1786,7 +1789,6 @@ export function Workspace() {
           canDelete={desktopBridgeAvailable() && items.some((item) => selectedIds.includes(item.id) && item.sourcePath)}
           onRotate={() => selectedIds.forEach((id) => rotateItem(id))}
           onExport={() => void exportCopies()}
-          onDownload={() => void downloadToComputer()}
           canEdit={items.some((item) => selectedIds.includes(item.id) && item.originalOnline)}
           onBatchEdit={openBatchEdit}
           onAutoGrade={() => void autoGradeSelection()}
@@ -1976,7 +1978,7 @@ export function Workspace() {
           onPerson={(personId, name) => setFilters((current) => upsertFilter(current, { kind: "person", personId, name }))}
           onMarkIn={(ms) => void saveMarks(lightboxItem, ms, lightboxItem.markOutMs ?? null)}
           onMarkOut={(ms) => void saveMarks(lightboxItem, lightboxItem.markInMs ?? null, ms)}
-          onDownload={lightboxItem.originalOnline ? () => void downloadToComputer() : undefined}
+          onDownload={lightboxItem.originalOnline ? () => void downloadToComputer(lightboxItem.id) : undefined}
         />
       ) : null}
       {developOpen && lightboxItem?.originalOnline ? (

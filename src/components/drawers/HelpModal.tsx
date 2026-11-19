@@ -7,7 +7,7 @@ const TOPICS = [
     title: "Start here",
     steps: [
       "Add media picks a folder. Shelf indexes the files where they already are, or copies new ones onto this Mac first.",
-      "Download copies full-resolution originals into a folder on this computer so they stay after you eject the card.",
+      "The cloud on a photo copies that full-resolution original onto this computer so it stays after you eject the card.",
       "Nothing is deleted unless you choose Delete files.",
     ],
   },

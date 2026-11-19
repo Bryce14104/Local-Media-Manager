@@ -28,7 +28,7 @@ const ACTIONS: { action: StudioAction; label: string; hint: string; keywords: st
   { action: "clear-filters", label: "Clear filters", hint: "Show the full roll", keywords: "clear filters reset" },
   { action: "preferences", label: "Preferences", hint: "Library auto-scan, relink, slideshow, or map tiles", keywords: "preferences settings library drives auto scan plug relink slideshow playback map tiles download cache zoom area keyboard" },
   { action: "help", label: "Help", hint: "Short steps for search, cull, and files", keywords: "help guide how to keyboard burst review" },
-  { action: "download", label: "Download originals", hint: "Copy full-resolution files onto this computer", keywords: "download copy originals full resolution archive" },
+  { action: "download", label: "Download originals", hint: "Cloud on a photo copies the full-resolution file onto this computer", keywords: "download copy originals full resolution archive cloud" },
   { action: "slideshow", label: "Slideshow", hint: "Play the current view", keywords: "slideshow play auto" },
   { action: "rotate", label: "Rotate 90°", hint: "Turn the selected frame", keywords: "rotate turn orientation" },
 ];

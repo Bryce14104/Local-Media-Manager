@@ -33,6 +33,7 @@ type MediaStageProps = {
   onCacheBounds?: (bounds: GeoBounds) => void;
   onCancelCache?: () => void;
   collapseBursts?: boolean;
+  onDownload?: (id: string) => void;
   className?: string;
 };
 
@@ -57,6 +58,7 @@ export function MediaStage({
   onCacheBounds,
   onCancelCache,
   collapseBursts = false,
+  onDownload,
   className,
 }: MediaStageProps) {
   const [focus, setFocus] = useState<{ id: string; nonce: number } | null>(null);
@@ -146,6 +148,7 @@ export function MediaStage({
             selectMode={selectMode}
             onOpen={activate}
             onToggle={onToggle}
+            onDownload={onDownload}
           />
         ) : (
           <Grid
@@ -156,6 +159,7 @@ export function MediaStage({
             selectMode={selectMode}
             onOpen={activate}
             onToggle={onToggle}
+            onDownload={onDownload}
           />
         )}
       </div>
@@ -171,12 +175,14 @@ function Grid({
   selectMode,
   onOpen,
   onToggle,
+  onDownload,
 }: {
   items: StudioItem[];
   zoom: number;
   selectedIds: string[];
   primaryId: string | null;
   selectMode: boolean;
+  onDownload?: (id: string) => void;
   onOpen: (id: string, mods: PointerMods) => void;
   onToggle: (id: string) => void;
 }) {
@@ -263,6 +269,7 @@ function Grid({
             selectMode={selectMode}
             onOpen={(mods) => onOpen(item.id, mods)}
             onToggle={() => onToggle(item.id)}
+            onDownload={item.originalOnline && onDownload ? () => onDownload(item.id) : undefined}
           />
         ))}
       </div>

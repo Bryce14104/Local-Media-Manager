@@ -19,7 +19,6 @@ type TopBarProps = {
   onAdd: () => void;
   onPreferences: () => void;
   onHelp?: () => void;
-  onDownload?: () => void;
   inputRef: RefObject<HTMLInputElement | null>;
 };
 
@@ -53,7 +52,6 @@ export function TopBar({
   onAdd,
   onPreferences,
   onHelp,
-  onDownload,
   inputRef,
 }: TopBarProps) {
   const [open, setOpen] = useState(false);
@@ -164,7 +162,6 @@ export function TopBar({
         </div>
 
         <div className="hidden items-center gap-1 lg:flex">
-          {onDownload ? <Action label="Download" onClick={onDownload} /> : null}
           {onHelp ? <Action label="Help" onClick={onHelp} /> : null}
           <Action label="Add media" onClick={onAdd} />
         </div>
@@ -193,7 +190,6 @@ export function TopBar({
                   }}
                 />
               ))}
-              {onDownload ? <MenuRow label="Download originals" onClick={() => { onDownload(); setMenuOpen(false); }} /> : null}
               {onHelp ? <MenuRow label="Help" onClick={() => { onHelp(); setMenuOpen(false); }} /> : null}
               <MenuRow label="Add media" onClick={() => { onAdd(); setMenuOpen(false); }} />
               <MenuRow

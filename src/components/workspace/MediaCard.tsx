@@ -2,6 +2,7 @@ import { isNeutralDevelop, stageStyle } from "../../studio/develop";
 import { gridMetrics } from "../../studio/gridZoom";
 import type { PointerMods } from "../../studio/selection";
 import type { StudioItem } from "../../studio/types";
+import { DownloadCloudButton } from "./DownloadCloudButton";
 import { FrameStill } from "./FrameStill";
 
 type MediaCardProps = {
@@ -12,6 +13,7 @@ type MediaCardProps = {
   selectMode: boolean;
   onOpen: (mods: PointerMods) => void;
   onToggle: () => void;
+  onDownload?: () => void;
 };
 
 export function MediaCard({
@@ -22,6 +24,7 @@ export function MediaCard({
   selectMode,
   onOpen,
   onToggle,
+  onDownload,
 }: MediaCardProps) {
   const { roomy, dense } = gridMetrics(zoom);
   const showMeta = roomy;
@@ -86,6 +89,16 @@ export function MediaCard({
           <p className="truncate px-2 py-1 text-[11px] text-mute">{item.fileName}</p>
         )}
       </button>
+
+      {onDownload && item.originalOnline ? (
+        <div
+          className={`pointer-events-none absolute inset-x-0 top-0 z-20 ${roomy ? "aspect-[4/3]" : "aspect-square"}`}
+        >
+          <div className="pointer-events-auto absolute bottom-1.5 right-1.5">
+            <DownloadCloudButton onClick={onDownload} className="h-7 w-7" />
+          </div>
+        </div>
+      ) : null}
 
       <button
         type="button"
