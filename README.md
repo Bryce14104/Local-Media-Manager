@@ -93,3 +93,9 @@ For each JPEG, PNG, HEIC, common raw file, and video under the folder, Shelf sto
 - a pick or reject flag, when one has been set
 
 Hidden names are skipped. Symbolic links are not followed. A later scan leaves a file alone when the size and modification time are unchanged, and it does not clear the rating.
+
+
+
+
+
+Copyright © 2026 Bryce. All rights reserved. Source code is visible for transparency during the public beta; redistribution or commercial use is not permitted.
