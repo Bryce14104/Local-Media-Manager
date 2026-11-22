@@ -13,11 +13,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest # Apple Silicon
+          # ort 2.0.0-rc.15 dropped Intel macOS and requires macOS 13.4+.
+          - platform: macos-latest
             args: --target aarch64-apple-darwin
-          - platform: macos-latest # Intel
-            args: --target x86_64-apple-darwin
-          - platform: ubuntu-22.04
+          # ort's Linux prebuilts need glibc 2.38+ (Ubuntu 24.04).
+          - platform: ubuntu-24.04
             args: ""
           - platform: windows-latest
             args: ""
@@ -35,17 +35,21 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # Cross-compile targets are only needed on macOS runners.
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
 
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Match ort's macOS floor (13.4+) for CoreML / compiler-rt linkage.
+      - name: Set macOS deployment target
+        if: matrix.platform == 'macos-latest'
+        run: echo "MACOSX_DEPLOYMENT_TARGET=13.4" >> "$GITHUB_ENV"
 
       - name: Build and upload release assets
         uses: tauri-apps/tauri-action@v1

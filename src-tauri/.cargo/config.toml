@@ -1,0 +1,3 @@
+[target.aarch64-apple-darwin]
+# ort 2.0.0-rc.15 ships macOS binaries built for 13.4+.
+rustflags = ["-C", "link-arg=-mmacosx-version-min=13.4"]

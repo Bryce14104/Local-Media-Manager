@@ -41,6 +41,9 @@
     ],
     "resources": [
       "models/tokenizer.json"
-    ]
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.4"
+    }
   }
 }
