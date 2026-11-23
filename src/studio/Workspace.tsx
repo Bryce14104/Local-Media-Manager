@@ -1641,8 +1641,29 @@ export function Workspace() {
                   setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
                 });
             }}
+            onRescanVolume={(fingerprint) => {
+              if (blockIfBetaExpired()) return;
+              if (!desktopBridgeAvailable()) return;
+              void rescanWatched(fingerprint)
+                .then(async (report) => {
+                  const { media } = await fetchLibrary();
+                  await paintLibrary(media);
+                  await refreshSources();
+                  setTelemetry((current) => ({
+                    ...current,
+                    scanLabel: `Rescanned ${report.indexed} new · ${report.unchanged} unchanged`,
+                  }));
+                })
+                .catch((error) => {
+                  setTelemetry((current) => ({ ...current, scanLabel: errorMessage(error) }));
+                });
+            }}
             onAddFolder={() => void browseFolders()}
             importsLocked={beta.expired}
+            onRevealFolder={(path) => {
+              if (!desktopBridgeAvailable()) return;
+              void revealPath(path).catch((error) => setToast(errorMessage(error)));
+            }}
             onRemoveVolume={(volumeId) => {
               if (!desktopBridgeAvailable()) return;
               const volume = volumes.find((item) => item.id === volumeId);
@@ -1673,7 +1694,6 @@ export function Workspace() {
                 });
             }}
             onOpenAlbum={(album) => void openAlbum(album)}
-            onOpen={viewItem}
           />
         ) : null}
         {preset === "compare" && comparePair[0] && comparePair[1] ? (

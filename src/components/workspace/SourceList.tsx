@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { formatBytes } from "../../lib/format";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { formatBytes, formatTimestamp } from "../../lib/format";
 import type { AlbumRecord, VolumeRecord, WatchedRoot } from "../../lib/types";
 import type { ActiveFilter, StudioItem } from "../../studio/types";
 
@@ -12,11 +12,12 @@ type SourceListProps = {
   onFilter: (filter: ActiveFilter) => void;
   onClear: () => void;
   onRescan: () => void;
+  onRescanVolume?: (fingerprint: string) => void;
   onAddFolder: () => void;
   importsLocked?: boolean;
   onRemoveVolume?: (volumeId: number) => void;
+  onRevealFolder?: (path: string) => void;
   onOpenAlbum: (album: AlbumRecord) => void;
-  onOpen: (id: string) => void;
 };
 
 export function SourceList({
@@ -28,73 +29,80 @@ export function SourceList({
   onFilter,
   onClear,
   onRescan,
+  onRescanVolume,
   onAddFolder,
   importsLocked = false,
   onRemoveVolume,
+  onRevealFolder,
   onOpenAlbum,
-  onOpen,
 }: SourceListProps) {
   const source = filters.find(
     (filter) => filter.kind === "volume" || filter.kind === "folder" || filter.kind === "album",
   );
-  const [open, setOpen] = useState<Set<string>>(() => new Set());
-  const tree = useMemo(() => buildTree(volumes, watches, items), [volumes, watches, items]);
-
-  function toggle(key: string) {
-    setOpen((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }
-
-  function expanded(key: string) {
-    return open.has(key);
-  }
-
-  function reveal(key: string) {
-    setOpen((current) => {
-      if (current.has(key)) return current;
-      const next = new Set(current);
-      next.add(key);
-      return next;
-    });
-  }
+  const [infoId, setInfoId] = useState<number | null>(null);
+  const drives = useMemo(() => buildDrives(volumes, watches, items), [volumes, watches, items]);
 
   return (
-    <aside className="flex max-h-48 w-full shrink-0 flex-col border-b border-line bg-studio md:h-full md:max-h-none md:w-52 md:border-b-0 md:border-r">
-      <div className="px-1.5 pb-1 pt-1.5">
+    <aside className="flex max-h-48 w-full shrink-0 flex-col border-b border-line bg-studio md:h-full md:max-h-none md:w-56 md:border-b-0 md:border-r">
+      <div className="px-2 pb-1 pt-2">
         <button type="button" onClick={onClear} className={rowClass(!source)}>
-          <span className="grid h-5 w-5 place-items-center rounded-md bg-raised text-teal">
+          <span className="grid h-6 w-6 place-items-center rounded-lg bg-raised text-teal">
             <LibraryIcon />
           </span>
           <span className="min-w-0 flex-1 truncate text-left text-[12px] font-medium text-foam">All photos</span>
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-3 overflow-auto px-1.5 pb-2">
+      <div className="min-h-0 flex-1 space-y-4 overflow-auto px-2 pb-2">
         <section>
           <Header title="Drives" />
-          {tree.length === 0 ? (
-            <p className="px-1 pt-0.5 text-[11px] leading-snug text-mute">Add a folder. Shelf remembers the disk.</p>
+          {drives.length === 0 ? (
+            <p className="px-1 pt-1 text-[11px] leading-snug text-mute">Add a folder. Shelf remembers the disk.</p>
           ) : (
-            <ul>
-              {tree.map((node) => (
-                <DriveNode
-                  key={node.key}
-                  node={node}
-                  source={source}
-                  expanded={expanded}
-                  onToggle={toggle}
-                  onReveal={reveal}
-                  onFilter={onFilter}
-                  onOpen={onOpen}
-                  onRemove={
-                    node.volumeId != null && onRemoveVolume
-                      ? () => onRemoveVolume(node.volumeId!)
+            <ul className="space-y-0.5">
+              {drives.map((drive) => (
+                <DriveRow
+                  key={drive.key}
+                  drive={drive}
+                  active={
+                    (source?.kind === "volume" && drive.volumeId != null && source.volumeId === drive.volumeId) ||
+                    (source?.kind === "folder" && source.path === drive.name)
+                  }
+                  infoOpen={drive.volumeId != null && infoId === drive.volumeId}
+                  onToggleInfo={() => {
+                    if (drive.volumeId == null) return;
+                    setInfoId((current) => (current === drive.volumeId ? null : drive.volumeId!));
+                  }}
+                  onCloseInfo={() => setInfoId(null)}
+                  onSelect={() => {
+                    if (drive.volumeId != null) {
+                      onFilter({
+                        id: drive.key,
+                        kind: "volume",
+                        volumeId: drive.volumeId,
+                        label: drive.name,
+                      });
+                      return;
+                    }
+                    onFilter({ id: drive.key, kind: "folder", path: drive.name, label: drive.name });
+                  }}
+                  onRevealFolder={
+                    drive.mount && onRevealFolder ? () => onRevealFolder(drive.mount!) : undefined
+                  }
+                  onRescan={
+                    drive.fingerprint && onRescanVolume
+                      ? () => onRescanVolume(drive.fingerprint!)
                       : undefined
                   }
+                  onRemove={
+                    drive.volumeId != null && onRemoveVolume
+                      ? () => {
+                          setInfoId(null);
+                          onRemoveVolume(drive.volumeId!);
+                        }
+                      : undefined
+                  }
+                  importsLocked={importsLocked}
                 />
               ))}
             </ul>
@@ -104,15 +112,15 @@ export function SourceList({
         <section>
           <Header title="Albums" />
           {albums.length === 0 ? (
-            <p className="px-1 pt-0.5 text-[11px] leading-snug text-mute">None yet.</p>
+            <p className="px-1 pt-1 text-[11px] leading-snug text-mute">None yet.</p>
           ) : (
-            <ul>
+            <ul className="space-y-0.5">
               {albums.map((album) => {
                 const active = source?.kind === "album" && source.albumId === album.id;
                 return (
                   <li key={album.id}>
                     <button type="button" onClick={() => onOpenAlbum(album)} className={rowClass(active)}>
-                      <span className="w-3" />
+                      <span className="w-6" />
                       <span className="min-w-0 flex-1 truncate text-left text-[12px]">{album.name}</span>
                       <Count value={album.count} />
                     </button>
@@ -124,13 +132,13 @@ export function SourceList({
         </section>
       </div>
 
-      <div className="mt-auto flex gap-0.5 border-t border-line p-1">
+      <div className="mt-auto flex gap-1 border-t border-line p-1.5">
         <button
           type="button"
           onClick={onAddFolder}
           aria-disabled={importsLocked || undefined}
           title={importsLocked ? "Beta ended — imports are locked" : undefined}
-          className={`flex flex-1 items-center justify-center gap-1 rounded-md px-1 py-1.5 text-[11px] hover:bg-raised ${
+          className={`flex flex-1 items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[11px] hover:bg-raised ${
             importsLocked ? "text-mute opacity-50" : "text-foam"
           }`}
         >
@@ -142,7 +150,7 @@ export function SourceList({
           onClick={onRescan}
           aria-disabled={importsLocked || undefined}
           title={importsLocked ? "Beta ended — imports are locked" : undefined}
-          className={`flex flex-1 items-center justify-center gap-1 rounded-md px-1 py-1.5 text-[11px] hover:bg-raised ${
+          className={`flex flex-1 items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[11px] hover:bg-raised ${
             importsLocked ? "text-mute opacity-50" : "text-foam"
           }`}
         >
@@ -154,229 +162,193 @@ export function SourceList({
   );
 }
 
-type FileLeaf = { id: string; name: string; previewUrl: string | null };
-type FolderNode = { key: string; name: string; path: string; files: FileLeaf[] };
-type DriveNodeData = {
+type DriveData = {
   key: string;
   name: string;
-  hint: string;
   mount?: string;
   online?: boolean;
   count: number;
   bytes?: number;
+  lastSeenAt?: number;
+  fingerprint?: string;
   volumeId?: number;
-  folders: FolderNode[];
-  files: FileLeaf[];
+  watchCount: number;
+  watchPaths: string[];
 };
 
-function DriveNode({
-  node,
-  source,
-  expanded,
-  onToggle,
-  onReveal,
-  onFilter,
-  onOpen,
+function DriveRow({
+  drive,
+  active,
+  infoOpen,
+  onToggleInfo,
+  onCloseInfo,
+  onSelect,
+  onRevealFolder,
+  onRescan,
   onRemove,
+  importsLocked,
 }: {
-  node: DriveNodeData;
-  source: ActiveFilter | undefined;
-  expanded: (key: string) => boolean;
-  onToggle: (key: string) => void;
-  onReveal: (key: string) => void;
-  onFilter: (filter: ActiveFilter) => void;
-  onOpen: (id: string) => void;
+  drive: DriveData;
+  active: boolean;
+  infoOpen: boolean;
+  onToggleInfo: () => void;
+  onCloseInfo: () => void;
+  onSelect: () => void;
+  onRevealFolder?: () => void;
+  onRescan?: () => void;
   onRemove?: () => void;
+  importsLocked: boolean;
 }) {
-  const open = expanded(node.key);
-  const hasChildren = node.folders.length > 0 || node.files.length > 0;
-  const active = source?.kind === "volume" && node.volumeId != null && source.volumeId === node.volumeId;
-  const status =
-    node.online == null ? null : node.online ? "Online" : "Offline";
-  const sizeLabel = node.bytes != null && node.bytes > 0 ? formatBytes(node.bytes) : null;
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!infoOpen) return;
+    function onPointer(event: MouseEvent) {
+      if (!panelRef.current?.contains(event.target as Node)) onCloseInfo();
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onCloseInfo();
+    }
+    window.addEventListener("mousedown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [infoOpen, onCloseInfo]);
+
   return (
-    <li className="mb-1">
-      <div className={rowClass(Boolean(active))}>
-        <Chevron open={open} disabled={!hasChildren} onClick={() => hasChildren && onToggle(node.key)} />
-        <button
-          type="button"
-          title={node.hint}
-          onClick={() => {
-            onReveal(node.key);
-            if (node.volumeId != null) {
-              onFilter({
-                id: node.key,
-                kind: "volume",
-                volumeId: node.volumeId,
-                label: node.name,
-              });
-            } else {
-              onFilter({ id: node.key, kind: "folder", path: node.name, label: node.name });
-            }
-          }}
-          className="flex min-w-0 flex-1 items-center gap-1 text-left"
-        >
-          <span className="relative grid h-4 w-4 shrink-0 place-items-center">
+    <li className="relative">
+      <div className={rowClass(active)}>
+        <button type="button" onClick={onSelect} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+          <span className="relative grid h-6 w-6 shrink-0 place-items-center rounded-lg bg-raised/80">
             <DriveIcon />
-            {node.online != null ? (
+            {drive.online != null ? (
               <span
-                className={`absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full ${node.online ? "bg-teal" : "bg-mute"}`}
+                className={`absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-studio ${
+                  drive.online ? "bg-teal" : "bg-mute"
+                }`}
               />
             ) : null}
           </span>
-          <span className="min-w-0 flex-1 truncate text-[12px] text-foam">{node.name}</span>
-          <Count value={node.count} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-[12px] text-foam">{drive.name}</span>
+            <span className="block truncate text-[10px] text-mute">
+              {drive.online == null
+                ? `${drive.count} items`
+                : drive.online
+                  ? "Online"
+                  : "Offline"}
+            </span>
+          </span>
+          <Count value={drive.count} />
         </button>
+        {drive.volumeId != null ? (
+          <button
+            type="button"
+            aria-label={`Disk info for ${drive.name}`}
+            aria-expanded={infoOpen}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleInfo();
+            }}
+            className={`grid h-6 w-6 shrink-0 place-items-center rounded-full text-[10px] font-medium ${
+              infoOpen ? "bg-teal/15 text-teal" : "text-mute hover:bg-raised hover:text-foam"
+            }`}
+          >
+            i
+          </button>
+        ) : null}
       </div>
-      {node.volumeId != null ? (
-        <div className="ml-5 space-y-0.5 px-1 pb-1">
-          <p className="truncate text-[10px] leading-snug text-mute" title={node.mount ?? node.hint}>
-            {[status, sizeLabel, node.count === 1 ? "1 photo" : `${node.count} photos`]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
-          {node.mount ? (
-            <p className="truncate font-mono text-[9px] leading-snug text-mute/80" title={node.mount}>
-              {node.mount}
-            </p>
-          ) : null}
-          {onRemove ? (
-            <button
-              type="button"
-              onClick={onRemove}
-              className="rounded px-1 py-0.5 text-[10px] text-mute hover:bg-raised hover:text-foam"
-              title="Remove this disk from the library. Files stay on disk."
-            >
-              Remove disk
-            </button>
-          ) : null}
+
+      {infoOpen ? (
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-label={`${drive.name} disk info`}
+          className="absolute left-0 right-0 top-[calc(100%+0.25rem)] z-40 rounded-xl border border-line bg-card p-2.5 shadow-2xl shadow-black/40"
+        >
+          <p className="text-[12px] font-medium text-foam">{drive.name}</p>
+          <dl className="mt-2 space-y-1.5 text-[10px] leading-snug">
+            <InfoRow label="Status" value={drive.online ? "Online" : "Offline"} />
+            <InfoRow label="Mount" value={drive.mount ?? "—"} mono />
+            <InfoRow
+              label="Indexed"
+              value={`${drive.count} photo${drive.count === 1 ? "" : "s"}${
+                drive.bytes && drive.bytes > 0 ? ` · ${formatBytes(drive.bytes)}` : ""
+              }`}
+            />
+            <InfoRow label="Last scan" value={formatTimestamp(drive.lastSeenAt ?? null)} />
+            <InfoRow
+              label="Watched"
+              value={
+                drive.watchCount === 0
+                  ? "No folders"
+                  : drive.watchCount === 1
+                    ? drive.watchPaths[0] ?? "1 folder"
+                    : `${drive.watchCount} folders`
+              }
+              mono={drive.watchCount === 1}
+            />
+          </dl>
+          <div className="mt-2.5 flex flex-col gap-1">
+            {onRevealFolder ? (
+              <button
+                type="button"
+                disabled={!drive.online}
+                title={drive.online ? "Reveal in Finder / Files" : "Plug the drive in to open its folder"}
+                onClick={onRevealFolder}
+                className="rounded-lg border border-line px-2 py-1.5 text-left text-[11px] text-foam hover:border-mute disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                View folder
+              </button>
+            ) : null}
+            {onRescan ? (
+              <button
+                type="button"
+                disabled={importsLocked || !drive.online}
+                title={
+                  importsLocked
+                    ? "Beta ended — imports are locked"
+                    : drive.online
+                      ? "Rescan this drive"
+                      : "Plug the drive in to scan"
+                }
+                onClick={onRescan}
+                className="rounded-lg border border-line px-2 py-1.5 text-left text-[11px] text-foam hover:border-mute disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Scan now
+              </button>
+            ) : null}
+            {onRemove ? (
+              <button
+                type="button"
+                onClick={onRemove}
+                className="rounded-lg border border-danger/30 px-2 py-1.5 text-left text-[11px] text-danger hover:bg-danger/10"
+              >
+                Remove & forget drive
+              </button>
+            ) : null}
+          </div>
         </div>
       ) : null}
-      {open ? (
-        <ul className="ml-2 border-l border-line pl-1">
-          {node.folders.map((folder) => (
-            <FolderRow
-              key={folder.key}
-              folder={folder}
-              source={source}
-              expanded={expanded}
-              onToggle={onToggle}
-              onReveal={onReveal}
-              onFilter={onFilter}
-              onOpen={onOpen}
-            />
-          ))}
-          {node.files.map((file) => (
-            <FileRow key={file.id} file={file} onOpen={onOpen} />
-          ))}
-        </ul>
-      ) : null}
     </li>
   );
 }
 
-function FolderRow({
-  folder,
-  source,
-  expanded,
-  onToggle,
-  onReveal,
-  onFilter,
-  onOpen,
-}: {
-  folder: FolderNode;
-  source: ActiveFilter | undefined;
-  expanded: (key: string) => boolean;
-  onToggle: (key: string) => void;
-  onReveal: (key: string) => void;
-  onFilter: (filter: ActiveFilter) => void;
-  onOpen: (id: string) => void;
-}) {
-  const open = expanded(folder.key);
-  const active = source?.kind === "folder" && source.path === folder.path;
+function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <li>
-      <div className={rowClass(Boolean(active), "py-0.5")}>
-        <Chevron open={open} disabled={folder.files.length === 0} onClick={() => onToggle(folder.key)} />
-        <button
-          type="button"
-          title={folder.path}
-          onClick={() => {
-            onReveal(folder.key);
-            onFilter({
-              id: folder.key,
-              kind: "folder",
-              path: folder.path,
-              label: folder.name,
-            });
-          }}
-          className="flex min-w-0 flex-1 items-center gap-1 text-left"
-        >
-          <span className="min-w-0 flex-1 truncate text-[11px]">{folder.name}</span>
-          <Count value={folder.files.length} />
-        </button>
-      </div>
-      {open ? (
-        <ul className="ml-2 border-l border-line pl-1">
-          {folder.files.slice(0, 80).map((file) => (
-            <FileRow key={file.id} file={file} onOpen={onOpen} />
-          ))}
-          {folder.files.length > 80 ? (
-            <li className="px-1 py-0.5 text-[10px] text-mute">+{folder.files.length - 80} more</li>
-          ) : null}
-        </ul>
-      ) : null}
-    </li>
-  );
-}
-
-function FileRow({ file, onOpen }: { file: FileLeaf; onOpen: (id: string) => void }) {
-  return (
-    <li>
-      <button
-        type="button"
-        title={file.name}
-        onClick={() => onOpen(file.id)}
-        className="flex w-full items-center gap-1 rounded-md px-1 py-0.5 text-left hover:bg-raised"
-      >
-        {file.previewUrl ? (
-          <img src={file.previewUrl} alt="" className="h-4 w-4 shrink-0 rounded-sm object-cover" />
-        ) : (
-          <span className="h-4 w-4 shrink-0 rounded-sm bg-raised" />
-        )}
-        <span className="min-w-0 flex-1 truncate text-[11px] text-mute">{file.name}</span>
-      </button>
-    </li>
-  );
-}
-
-function Chevron({ open, disabled, onClick }: { open: boolean; disabled: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-label={open ? "Collapse" : "Expand"}
-      disabled={disabled}
-      onClick={(event) => {
-        event.stopPropagation();
-        onClick();
-      }}
-      className={`grid h-4 w-4 shrink-0 place-items-center rounded text-mute ${disabled ? "opacity-20" : "hover:text-foam"}`}
-    >
-      <svg
-        width="8"
-        height="8"
-        viewBox="0 0 8 8"
-        className={`transition-transform ${open ? "rotate-90" : ""}`}
-        aria-hidden
-      >
-        <path d="M2.2 1.2 5.8 4 2.2 6.8" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      </svg>
-    </button>
+    <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-2">
+      <dt className="text-mute">{label}</dt>
+      <dd className={`min-w-0 truncate text-foam ${mono ? "font-mono text-[9px]" : ""}`} title={value}>
+        {value}
+      </dd>
+    </div>
   );
 }
 
 function Header({ title }: { title: string }) {
-  return <p className="px-1 pb-1 text-[9px] font-medium uppercase tracking-[0.16em] text-mute/80">{title}</p>;
+  return <p className="px-1 pb-1.5 text-[9px] font-medium uppercase tracking-[0.16em] text-mute/80">{title}</p>;
 }
 
 function Count({ value }: { value: number }) {
@@ -384,90 +356,45 @@ function Count({ value }: { value: number }) {
 }
 
 function rowClass(active: boolean, extra = "") {
-  return `flex w-full items-center gap-0.5 rounded-lg px-0.5 py-0.5 text-mute ${extra} ${
+  return `flex w-full items-center gap-1 rounded-xl px-1 py-1 text-mute ${extra} ${
     active ? "bg-raised text-foam" : "hover:bg-raised/70 hover:text-foam"
   }`;
 }
 
-function leaf(item: StudioItem): FileLeaf {
-  return { id: item.id, name: item.fileName, previewUrl: item.previewUrl ?? null };
-}
-
-function folderOf(item: StudioItem) {
-  if (item.sourcePath) {
-    const parts = item.sourcePath.split(/[/\\]/).filter(Boolean);
-    parts.pop();
-    return parts.join("/") || item.folder;
-  }
-  return item.folder;
-}
-
-function buildTree(volumes: VolumeRecord[], watches: WatchedRoot[], items: StudioItem[]): DriveNodeData[] {
+function buildDrives(volumes: VolumeRecord[], watches: WatchedRoot[], items: StudioItem[]): DriveData[] {
   if (volumes.length === 0) {
-    const byFolder = new Map<string, FileLeaf[]>();
+    const byFolder = new Map<string, number>();
     for (const item of items) {
       const folder = item.folder || "Library";
-      const list = byFolder.get(folder) ?? [];
-      list.push(leaf(item));
-      byFolder.set(folder, list);
+      byFolder.set(folder, (byFolder.get(folder) ?? 0) + 1);
     }
     return [...byFolder.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([name, files]) => ({
+      .map(([name, count]) => ({
         key: `folder:${name}`,
         name,
-        hint: name,
-        count: files.length,
-        folders: [],
-        files,
+        count,
+        watchCount: 0,
+        watchPaths: [],
       }));
   }
 
-  const known = new Set(volumes.map((volume) => volume.id));
   return volumes.map((volume) => {
-    const owned = items.filter((item) => item.volumeId === volume.id);
-    const byFolder = new Map<string, FileLeaf[]>();
-    const loose: FileLeaf[] = [];
-    for (const item of owned) {
-      const path = folderOf(item);
-      if (!path) {
-        loose.push(leaf(item));
-        continue;
-      }
-      const list = byFolder.get(path) ?? [];
-      list.push(leaf(item));
-      byFolder.set(path, list);
-    }
-    for (const watch of watches) {
-      if (watch.volumeId !== volume.id || !known.has(watch.volumeId ?? -1)) continue;
-      const path = watch.path.replace(/\\/g, "/");
-      if (!byFolder.has(path)) byFolder.set(path, []);
-    }
-    const folders: FolderNode[] = [...byFolder.entries()]
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([path, files]) => ({
-        key: `folder:${path}`,
-        name: folderName(path),
-        path,
-        files,
-      }));
+    const volumeWatches = watches.filter((watch) => watch.volumeId === volume.id);
     return {
       key: `volume-${volume.id}`,
       name: volume.label,
-      hint: volume.online ? volume.lastMount : `Unplugged · last seen as ${volume.lastMount}`,
       mount: volume.lastMount,
       online: volume.online,
       count: volume.mediaCount,
       bytes: volume.mediaBytes,
+      lastSeenAt: volume.lastSeenAt,
+      fingerprint: volume.fingerprint,
       volumeId: volume.id,
-      folders,
-      files: loose,
+      watchCount: volumeWatches.length,
+      watchPaths: volumeWatches.map((watch) => watch.path),
     };
   });
-}
-
-function folderName(path: string) {
-  return path.split(/[/\\]/).filter(Boolean).pop() ?? path;
 }
 
 function LibraryIcon() {

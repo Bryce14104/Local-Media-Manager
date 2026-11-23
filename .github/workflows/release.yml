@@ -83,7 +83,7 @@ jobs:
             ```
 
             ### Feedback
-            https://tally.so
+            https://tally.so/r/9N76BG
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
