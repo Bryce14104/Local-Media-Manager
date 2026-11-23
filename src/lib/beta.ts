@@ -2,7 +2,7 @@
 export const BETA_CUTOFF_DATE = "2026-12-23";
 
 /** Feedback form for Shelf beta testers. */
-export const BETA_FEEDBACK_URL = "https://forms.gle/shelfBetaFeedback";
+export const BETA_FEEDBACK_URL = "https://tally.so/r/9N76BG";
 
 export type BetaStatus = {
   cutoff: string;
