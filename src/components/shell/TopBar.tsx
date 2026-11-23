@@ -17,6 +17,7 @@ type TopBarProps = {
   preset: LayoutPreset;
   onPreset: (preset: LayoutPreset) => void;
   onAdd: () => void;
+  addDisabled?: boolean;
   onPreferences: () => void;
   onHelp?: () => void;
   inputRef: RefObject<HTMLInputElement | null>;
@@ -50,6 +51,7 @@ export function TopBar({
   preset,
   onPreset,
   onAdd,
+  addDisabled = false,
   onPreferences,
   onHelp,
   inputRef,
@@ -167,7 +169,7 @@ export function TopBar({
 
         <div className="hidden items-center gap-1 lg:flex">
           {onHelp ? <Action label="Help" onClick={onHelp} /> : null}
-          <Action label="Add media" onClick={onAdd} />
+          <Action label="Add media" onClick={onAdd} locked={addDisabled} />
         </div>
 
         <div className="relative lg:hidden">
@@ -195,7 +197,14 @@ export function TopBar({
                 />
               ))}
               {onHelp ? <MenuRow label="Help" onClick={() => { onHelp(); setMenuOpen(false); }} /> : null}
-              <MenuRow label="Add media" onClick={() => { onAdd(); setMenuOpen(false); }} />
+              <MenuRow
+                label="Add media"
+                onClick={() => {
+                  onAdd();
+                  setMenuOpen(false);
+                }}
+                locked={addDisabled}
+              />
               <MenuRow
                 label="Preferences"
                 onClick={() => {
@@ -323,18 +332,22 @@ function Action({
   label,
   onClick,
   pressed = false,
+  locked = false,
 }: {
   label: string;
   onClick: () => void;
   pressed?: boolean;
+  locked?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-pressed={pressed}
+      aria-disabled={locked || undefined}
+      title={locked ? "Beta ended — imports are locked" : undefined}
       onClick={onClick}
       className={`rounded-full border px-3 py-1.5 text-xs ${
-        pressed ? "border-teal text-teal" : "border-line text-foam hover:border-mute"
+        locked ? "border-line text-mute opacity-50" : pressed ? "border-teal text-teal" : "border-line text-foam hover:border-mute"
       }`}
     >
       {label}
@@ -342,9 +355,25 @@ function Action({
   );
 }
 
-function MenuRow({ label, onClick }: { label: string; onClick: () => void }) {
+function MenuRow({
+  label,
+  onClick,
+  locked = false,
+}: {
+  label: string;
+  onClick: () => void;
+  locked?: boolean;
+}) {
   return (
-    <button type="button" onClick={onClick} className="block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-raised">
+    <button
+      type="button"
+      aria-disabled={locked || undefined}
+      title={locked ? "Beta ended — imports are locked" : undefined}
+      onClick={onClick}
+      className={`block w-full rounded-lg px-2 py-1.5 text-left text-sm hover:bg-raised ${
+        locked ? "text-mute opacity-50" : ""
+      }`}
+    >
       {label}
     </button>
   );

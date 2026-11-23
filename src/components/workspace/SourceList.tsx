@@ -12,6 +12,7 @@ type SourceListProps = {
   onClear: () => void;
   onRescan: () => void;
   onAddFolder: () => void;
+  importsLocked?: boolean;
   onOpenAlbum: (album: AlbumRecord) => void;
   onOpen: (id: string) => void;
 };
@@ -26,6 +27,7 @@ export function SourceList({
   onClear,
   onRescan,
   onAddFolder,
+  importsLocked = false,
   onOpenAlbum,
   onOpen,
 }: SourceListProps) {
@@ -118,7 +120,11 @@ export function SourceList({
         <button
           type="button"
           onClick={onAddFolder}
-          className="flex flex-1 items-center justify-center gap-1 rounded-md px-1 py-1.5 text-[11px] text-foam hover:bg-raised"
+          aria-disabled={importsLocked || undefined}
+          title={importsLocked ? "Beta ended — imports are locked" : undefined}
+          className={`flex flex-1 items-center justify-center gap-1 rounded-md px-1 py-1.5 text-[11px] hover:bg-raised ${
+            importsLocked ? "text-mute opacity-50" : "text-foam"
+          }`}
         >
           <PlusIcon />
           Add
@@ -126,7 +132,11 @@ export function SourceList({
         <button
           type="button"
           onClick={onRescan}
-          className="flex flex-1 items-center justify-center gap-1 rounded-md px-1 py-1.5 text-[11px] text-foam hover:bg-raised"
+          aria-disabled={importsLocked || undefined}
+          title={importsLocked ? "Beta ended — imports are locked" : undefined}
+          className={`flex flex-1 items-center justify-center gap-1 rounded-md px-1 py-1.5 text-[11px] hover:bg-raised ${
+            importsLocked ? "text-mute opacity-50" : "text-foam"
+          }`}
         >
           <ScanIcon />
           Scan

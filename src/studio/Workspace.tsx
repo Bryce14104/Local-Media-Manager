@@ -53,6 +53,7 @@ import {
 } from "../lib/api";
 import type { AlbumRecord, ConceptIndex, ImportPreview, MediaKind, MediaRecord, VolumeRecord, WatchedRoot } from "../lib/types";
 import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
+import { BetaExpiredModal } from "../components/drawers/BetaExpiredModal";
 import { HelpModal } from "../components/drawers/HelpModal";
 import { BatchExportModal } from "../components/drawers/BatchExportModal";
 import { PlugDriveModal } from "../components/drawers/PlugDriveModal";
@@ -60,6 +61,7 @@ import { PreferencesModal } from "../components/drawers/PreferencesModal";
 import { InspectorPanel } from "../components/panels/InspectorPanel";
 import { TopBar } from "../components/shell/TopBar";
 import { TelemetryBar } from "../components/shell/TelemetryBar";
+import { getBetaStatus } from "../lib/beta";
 import { ComparePane } from "../components/workspace/ComparePane";
 import { Lightbox } from "../components/workspace/Lightbox";
 import { DevelopStudio } from "../components/develop/DevelopStudio";
@@ -122,6 +124,8 @@ const INITIAL_TELEMETRY: Telemetry = {
 export function Workspace() {
   const inputRef = useRef<HTMLInputElement>(null);
   const desktop = desktopBridgeAvailable();
+  const beta = useMemo(() => getBetaStatus(), []);
+  const [betaNoticeOpen, setBetaNoticeOpen] = useState(beta.expired);
   const [items, setItems] = useState<StudioItem[]>(() => (desktop ? [] : createCatalog()));
   const [query, setQuery] = useState("");
   const [aiSearch, setAiSearch] = useState(storedAiSearch);
@@ -360,8 +364,14 @@ export function Workspace() {
     };
   }, []);
 
+  function blockIfBetaExpired(): boolean {
+    if (!beta.expired) return false;
+    setBetaNoticeOpen(true);
+    return true;
+  }
+
   useEffect(() => {
-    if (!desktopBridgeAvailable() || !autoScanOnPlug) return;
+    if (!desktopBridgeAvailable() || !autoScanOnPlug || beta.expired) return;
     let cancel = false;
     let previous: VolumeRecord[] | null = null;
 
@@ -414,7 +424,7 @@ export function Workspace() {
       cancel = true;
       window.clearInterval(timer);
     };
-  }, [autoScanOnPlug]);
+  }, [autoScanOnPlug, beta.expired]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -576,6 +586,7 @@ export function Workspace() {
   }
 
   function openAdd() {
+    if (blockIfBetaExpired()) return;
     setImportError(null);
     setImportMessage(null);
     setModal("add");
@@ -1201,6 +1212,7 @@ export function Workspace() {
   }
 
   async function browseFolders() {
+    if (blockIfBetaExpired()) return;
     setImportError(null);
     setImportMessage(null);
     try {
@@ -1228,6 +1240,7 @@ export function Workspace() {
   }
 
   async function copyThenIndex() {
+    if (blockIfBetaExpired()) return;
     if (!importPreview || !desktopBridgeAvailable()) return;
     try {
       const destination = await pickDirectory("Copy new files here");
@@ -1276,6 +1289,7 @@ export function Workspace() {
   }
 
   async function createLibrary() {
+    if (blockIfBetaExpired()) return;
     const folder = await pickDirectory("New library folder");
     if (!folder) return;
     await newLibrary(folder);
@@ -1301,6 +1315,7 @@ export function Workspace() {
   }
 
   async function ingestPaths(paths: string[]) {
+    if (blockIfBetaExpired()) return;
     const folderName = paths[0]?.split(/[/\\]/).filter(Boolean).pop() ?? "folder";
     setImportBusy(true);
     setImportError(null);
@@ -1350,6 +1365,7 @@ export function Workspace() {
   }
 
   async function ingestFiles(files: File[]) {
+    if (blockIfBetaExpired()) return;
     const token = (jobToken.current += 1);
     setImportBusy(true);
     setImportError(null);
@@ -1576,6 +1592,7 @@ export function Workspace() {
         preset={preset}
         onPreset={applyPreset}
         onAdd={openAdd}
+        addDisabled={beta.expired}
         onPreferences={openPreferences}
         onHelp={() => setModal("help")}
         inputRef={inputRef}
@@ -1607,6 +1624,7 @@ export function Workspace() {
               )
             }
             onRescan={() => {
+              if (blockIfBetaExpired()) return;
               if (!desktopBridgeAvailable()) return;
               void rescanWatched()
                 .then(async (report) => {
@@ -1623,6 +1641,7 @@ export function Workspace() {
                 });
             }}
             onAddFolder={() => void browseFolders()}
+            importsLocked={beta.expired}
             onOpenAlbum={(album) => void openAlbum(album)}
             onOpen={viewItem}
           />
@@ -1827,6 +1846,8 @@ export function Workspace() {
         }}
         onPreferences={openPreferences}
         paused={catalogPaused}
+        betaLabel={beta.label}
+        onBetaClick={beta.expired ? () => setBetaNoticeOpen(true) : undefined}
         onPause={() => {
           const next = !catalogPaused;
           setCatalogPaused(next);
@@ -1888,7 +1909,10 @@ export function Workspace() {
           slideshow={slideshow}
           onSlideshow={changeSlideshow}
           autoScanOnPlug={autoScanOnPlug}
-          onAutoScanOnPlug={changeAutoScanOnPlug}
+          onAutoScanOnPlug={(value) => {
+            if (value && blockIfBetaExpired()) return;
+            changeAutoScanOnPlug(value);
+          }}
           onRelink={() => void relinkFromFolder()}
           healthLine={healthLine}
           ffmpegOk={ffmpegOk}
@@ -1901,6 +1925,7 @@ export function Workspace() {
           onNewLibrary={() => void createLibrary()}
           onExportTravel={() => void exportTravel()}
           onRebuildPreviews={() => {
+            if (blockIfBetaExpired()) return;
             void rebuildPreviews().then(() => setToast("Rebuilding previews"));
           }}
         />
@@ -2014,6 +2039,7 @@ export function Workspace() {
           }}
         />
       ) : null}
+      {betaNoticeOpen && beta.expired ? <BetaExpiredModal onClose={() => setBetaNoticeOpen(false)} /> : null}
     </div>
   );
 }

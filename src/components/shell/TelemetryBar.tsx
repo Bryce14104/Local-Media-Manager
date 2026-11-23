@@ -10,6 +10,8 @@ export function TelemetryBar({
   onPause,
   onStop,
   paused = false,
+  betaLabel,
+  onBetaClick,
 }: {
   telemetry: Telemetry;
   gridZoom: number;
@@ -18,6 +20,8 @@ export function TelemetryBar({
   onPause?: () => void;
   onStop?: () => void;
   paused?: boolean;
+  betaLabel?: string | null;
+  onBetaClick?: () => void;
 }) {
   const scanning = telemetry.scanProgress != null && telemetry.scanProgress < 1;
   const percent = telemetry.scanProgress == null ? null : Math.round(telemetry.scanProgress * 100);
@@ -36,6 +40,16 @@ export function TelemetryBar({
         </div>
       ) : null}
       <div className="flex items-center gap-4 overflow-hidden px-4 py-2 text-[11px] text-mute">
+        {betaLabel ? (
+          <button
+            type="button"
+            onClick={onBetaClick}
+            disabled={!onBetaClick}
+            className="shrink-0 rounded-full border border-line/80 bg-raised/60 px-2.5 py-0.5 text-[10px] font-medium tracking-wide text-mute hover:border-mute hover:text-foam disabled:cursor-default disabled:hover:border-line/80 disabled:hover:text-mute"
+          >
+            {betaLabel}
+          </button>
+        ) : null}
         <span className="flex min-w-0 items-center gap-2">
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${scanning ? "bg-teal" : "bg-mute/50"}`} />
           <span className="truncate">{telemetry.scanLabel}</span>

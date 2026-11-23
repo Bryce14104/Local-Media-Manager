@@ -181,14 +181,19 @@ export function Modal({
   onClose,
   children,
   wide = false,
+  layer = "default",
 }: {
   title: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  layer?: "default" | "top";
 }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onMouseDown={onClose}>
+    <div
+      className={`fixed inset-0 grid place-items-center bg-black/60 p-4 ${layer === "top" ? "z-[70]" : "z-50"}`}
+      onMouseDown={onClose}
+    >
       <div
         role="dialog"
         aria-modal="true"
