@@ -5,6 +5,13 @@ Shelf is unsigned during the public beta. Your OS will warn you the first
 time you open it. That is expected. Follow the steps for your platform.
 
 
+macOS — pick the right build
+----------------------------
+
+- Apple Silicon (M1 / M2 / M3 / M4): download the aarch64 / Apple Silicon build.
+- Intel Mac: download the x64 / x86_64 build.
+
+
 macOS — “Shelf” is damaged and can’t be opened
 ----------------------------------------------
 

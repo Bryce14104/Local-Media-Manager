@@ -13,14 +13,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ort 2.0.0-rc.15 dropped Intel macOS and requires macOS 13.4+.
+          # Apple Silicon — ort ships aarch64 macOS 13.4+ prebuilts.
           - platform: macos-latest
+            rust_target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
+            ort_custom: false
+          # Intel Mac — ort dropped x86_64 prebuilts; build ONNX Runtime 1.31 and link it.
+          - platform: macos-15-intel
+            rust_target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
+            ort_custom: true
           # ort's Linux prebuilts need glibc 2.38+ (Ubuntu 24.04).
           - platform: ubuntu-24.04
+            rust_target: ""
             args: ""
+            ort_custom: false
           - platform: windows-latest
+            rust_target: ""
             args: ""
+            ort_custom: false
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -35,7 +46,7 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_target }}
 
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-24.04'
@@ -48,8 +59,56 @@ jobs:
 
       # Match ort's macOS floor (13.4+) for CoreML / compiler-rt linkage.
       - name: Set macOS deployment target
-        if: matrix.platform == 'macos-latest'
+        if: runner.os == 'macOS'
         run: echo "MACOSX_DEPLOYMENT_TARGET=13.4" >> "$GITHUB_ENV"
+
+      - name: Cache Intel ONNX Runtime static build
+        if: matrix.ort_custom
+        id: ort-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/onnxruntime-x86_64
+          key: ort-1.31.0-macos-x86_64-static-13.4-v1
+
+      - name: Checkout ONNX Runtime 1.31 (Intel)
+        if: matrix.ort_custom && steps.ort-cache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: microsoft/onnxruntime
+          ref: v1.31.0
+          submodules: recursive
+          path: .ort-src
+
+      - name: Build ONNX Runtime 1.31 for Intel macOS
+        if: matrix.ort_custom && steps.ort-cache.outputs.cache-hit != 'true'
+        working-directory: .ort-src
+        run: |
+          set -euo pipefail
+          ./build.sh \
+            --config Release \
+            --build_dir build \
+            --parallel \
+            --skip_tests \
+            --compile_no_warning_as_error \
+            --skip_submodule_sync \
+            --cmake_extra_defines \
+              CMAKE_OSX_ARCHITECTURES=x86_64 \
+              CMAKE_OSX_DEPLOYMENT_TARGET=13.4
+          common="$(find build -type f -name 'libonnxruntime_common.a' | head -n 1)"
+          if [[ -z "$common" ]]; then
+            echo "Could not find libonnxruntime_common.a after the ONNX Runtime build." >&2
+            exit 1
+          fi
+          profile_dir="$(dirname "$common")"
+          lib_root="$(dirname "$profile_dir")"
+          mkdir -p "${{ runner.temp }}/onnxruntime-x86_64"
+          cp -R "$lib_root/." "${{ runner.temp }}/onnxruntime-x86_64/"
+
+      - name: Point ort at the Intel ONNX Runtime build
+        if: matrix.ort_custom
+        run: |
+          echo "ORT_LIB_PATH=${{ runner.temp }}/onnxruntime-x86_64" >> "$GITHUB_ENV"
+          echo "ORT_LIB_PROFILE=Release" >> "$GITHUB_ENV"
 
       - name: Build and upload release assets
         uses: tauri-apps/tauri-action@v1
@@ -60,6 +119,10 @@ jobs:
           releaseName: Shelf ${{ github.ref_name }}
           releaseBody: |
             Shelf is an **unsigned beta**. Your OS will warn you the first time you open it — that is expected.
+
+            ### macOS downloads
+            - **Apple Silicon (M1 / M2 / M3 / M4):** use the `aarch64` / `apple-silicon` asset.
+            - **Intel Mac:** use the `x64` / `x86_64` asset.
 
             ### macOS — “Shelf is damaged and can’t be opened”
             1. Drag **Shelf.app** into **Applications**.

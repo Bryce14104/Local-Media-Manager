@@ -1,3 +1,7 @@
 [target.aarch64-apple-darwin]
 # ort 2.0.0-rc.15 ships macOS binaries built for 13.4+.
 rustflags = ["-C", "link-arg=-mmacosx-version-min=13.4"]
+
+[target.x86_64-apple-darwin]
+# Intel builds use a custom ONNX Runtime 1.31 static lib; keep the same floor.
+rustflags = ["-C", "link-arg=-mmacosx-version-min=13.4"]
