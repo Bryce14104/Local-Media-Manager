@@ -1,21 +1,7 @@
-import { openUrl } from "@tauri-apps/plugin-opener";
-import { BETA_FEEDBACK_URL } from "../../lib/beta";
-import { desktopBridgeAvailable } from "../../lib/api";
+import { openBetaFeedback } from "../../lib/beta";
 import { Modal } from "./AddMediaModal";
 
 export function BetaExpiredModal({ onClose }: { onClose: () => void }) {
-  async function openFeedback() {
-    try {
-      if (desktopBridgeAvailable()) {
-        await openUrl(BETA_FEEDBACK_URL);
-        return;
-      }
-      window.open(BETA_FEEDBACK_URL, "_blank", "noopener,noreferrer");
-    } catch {
-      window.open(BETA_FEEDBACK_URL, "_blank", "noopener,noreferrer");
-    }
-  }
-
   return (
     <Modal title="Shelf beta has ended" onClose={onClose} layer="top">
       <p className="text-sm text-mute">
@@ -25,7 +11,7 @@ export function BetaExpiredModal({ onClose }: { onClose: () => void }) {
       <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
         <button
           type="button"
-          onClick={() => void openFeedback()}
+          onClick={() => void openBetaFeedback()}
           className="rounded-full border border-teal/50 px-4 py-2 text-sm text-teal hover:bg-teal/10"
         >
           Send feedback

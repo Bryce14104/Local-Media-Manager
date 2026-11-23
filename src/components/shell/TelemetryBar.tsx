@@ -1,3 +1,4 @@
+import { openBetaFeedback } from "../../lib/beta";
 import { gridZoomLabel } from "../../studio/gridZoom";
 import { pipelineReadout } from "../../studio/pipeline";
 import type { PipelineStatus, Telemetry } from "../../studio/types";
@@ -40,16 +41,25 @@ export function TelemetryBar({
         </div>
       ) : null}
       <div className="flex items-center gap-4 overflow-hidden px-4 py-2 text-[11px] text-mute">
-        {betaLabel ? (
+        <div className="flex shrink-0 items-center gap-1.5">
+          {betaLabel ? (
+            <button
+              type="button"
+              onClick={onBetaClick}
+              disabled={!onBetaClick}
+              className="rounded-full border border-line/80 bg-raised/60 px-2.5 py-0.5 text-[10px] font-medium tracking-wide text-mute hover:border-mute hover:text-foam disabled:cursor-default disabled:hover:border-line/80 disabled:hover:text-mute"
+            >
+              {betaLabel}
+            </button>
+          ) : null}
           <button
             type="button"
-            onClick={onBetaClick}
-            disabled={!onBetaClick}
-            className="shrink-0 rounded-full border border-line/80 bg-raised/60 px-2.5 py-0.5 text-[10px] font-medium tracking-wide text-mute hover:border-mute hover:text-foam disabled:cursor-default disabled:hover:border-line/80 disabled:hover:text-mute"
+            onClick={() => void openBetaFeedback()}
+            className="rounded-full px-2 py-0.5 text-[10px] text-mute/80 hover:text-foam"
           >
-            {betaLabel}
+            Send Feedback
           </button>
-        ) : null}
+        </div>
         <span className="flex min-w-0 items-center gap-2">
           <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${scanning ? "bg-teal" : "bg-mute/50"}`} />
           <span className="truncate">{telemetry.scanLabel}</span>

@@ -105,6 +105,7 @@ pub fn run() {
             commands::pause_catalog,
             commands::stop_catalog,
             commands::eject_volume,
+            commands::remove_volume,
             commands::export_travel_library,
             commands::open_library,
             commands::new_library,

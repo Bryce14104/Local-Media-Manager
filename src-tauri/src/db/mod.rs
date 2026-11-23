@@ -447,7 +447,7 @@ impl Library {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT volumes.id, volumes.fingerprint, volumes.label, volumes.last_mount, volumes.last_seen_at,
-                    COUNT(media_files.id)
+                    COUNT(media_files.id), COALESCE(SUM(media_files.file_size), 0)
              FROM volumes
              LEFT JOIN media_files ON media_files.volume_id = volumes.id
              GROUP BY volumes.id
@@ -463,9 +463,25 @@ impl Library {
                 last_seen_at: row.get(4)?,
                 online: Path::new(&mount).is_dir(),
                 media_count: row.get(5)?,
+                media_bytes: row.get(6)?,
             })
         })?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    /// Drop a remembered disk from the catalog. Source files stay on disk.
+    pub fn remove_volume(&self, volume_id: i64) -> Result<usize, DbError> {
+        let paths = {
+            let conn = self.lock()?;
+            let mut stmt = conn.prepare("SELECT file_path FROM media_files WHERE volume_id = ?1")?;
+            let rows = stmt.query_map(params![volume_id], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let removed = self.remove_paths(&paths)?;
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM watched_roots WHERE volume_id = ?1", params![volume_id])?;
+        conn.execute("DELETE FROM volumes WHERE id = ?1", params![volume_id])?;
+        Ok(removed)
     }
 
     /// Set or clear the rating for a path that is already indexed.
@@ -1812,5 +1828,39 @@ mod tests {
             .add_watch("/media/photos/cam", Some(first), "cam")
             .unwrap();
         assert_eq!(library.list_watches().unwrap()[0].relative_path.as_deref(), Some("cam"));
+    }
+
+    #[test]
+    fn remove_volume_drops_catalog_rows_and_keeps_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("shot.jpg");
+        std::fs::write(&file, b"jpeg").unwrap();
+        let library = Library::open(dir.path().join("library.sqlite")).unwrap();
+        let volume_id = library
+            .upsert_volume("uuid:card", "Card", dir.path().to_str().unwrap())
+            .unwrap();
+        library
+            .add_watch(dir.path().to_str().unwrap(), Some(volume_id), ".")
+            .unwrap();
+        library
+            .upsert_media(NewMedia {
+                file_path: file.to_str().unwrap(),
+                content_hash: "abc",
+                file_size: 4,
+                created_at: None,
+                modified_at: 1,
+                media_kind: MediaKind::Image,
+                exif_json: None,
+                captured_at: None,
+                volume_id: Some(volume_id),
+                relative_path: Some("shot.jpg"),
+            })
+            .unwrap();
+        assert_eq!(library.list_volumes().unwrap()[0].media_count, 1);
+        let removed = library.remove_volume(volume_id).unwrap();
+        assert_eq!(removed, 1);
+        assert!(library.list_volumes().unwrap().is_empty());
+        assert!(library.list_watches().unwrap().is_empty());
+        assert!(file.is_file());
     }
 }

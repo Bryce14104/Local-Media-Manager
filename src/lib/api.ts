@@ -305,6 +305,11 @@ export async function stopCatalog(): Promise<void> {
   return invoke("stop_catalog");
 }
 
+export async function removeVolume(volumeId: number): Promise<number> {
+  assertBridge();
+  return invoke<number>("remove_volume", { volumeId });
+}
+
 export async function ejectVolume(mount: string): Promise<void> {
   assertBridge();
   return invoke("eject_volume", { mount });

@@ -783,6 +783,7 @@ mod tests {
             last_seen_at: 1,
             online: false,
             media_count: 12,
+            media_bytes: 0,
         };
         let still_online = VolumeRecord {
             id: 2,
@@ -792,6 +793,7 @@ mod tests {
             last_seen_at: 1,
             online: true,
             media_count: 3,
+            media_bytes: 0,
         };
         let previous = vec![offline.clone(), still_online.clone()];
         let mut plugged = offline.clone();

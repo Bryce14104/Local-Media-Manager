@@ -151,6 +151,7 @@ pub struct VolumeRecord {
     pub last_seen_at: i64,
     pub online: bool,
     pub media_count: i64,
+    pub media_bytes: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

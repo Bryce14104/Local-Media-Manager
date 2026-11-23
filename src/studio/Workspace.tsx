@@ -50,6 +50,7 @@ import {
   listVolumes,
   listWatches,
   rescanWatched,
+  removeVolume,
 } from "../lib/api";
 import type { AlbumRecord, ConceptIndex, ImportPreview, MediaKind, MediaRecord, VolumeRecord, WatchedRoot } from "../lib/types";
 import { AddMediaModal, Modal } from "../components/drawers/AddMediaModal";
@@ -1642,6 +1643,35 @@ export function Workspace() {
             }}
             onAddFolder={() => void browseFolders()}
             importsLocked={beta.expired}
+            onRemoveVolume={(volumeId) => {
+              if (!desktopBridgeAvailable()) return;
+              const volume = volumes.find((item) => item.id === volumeId);
+              const label = volume?.label ?? "disk";
+              if (
+                !window.confirm(
+                  `Remove “${label}” from the library? Shelf drops its catalog rows and watched folders. Files stay on disk.`,
+                )
+              ) {
+                return;
+              }
+              void removeVolume(volumeId)
+                .then(async (removed) => {
+                  const { media } = await fetchLibrary();
+                  await paintLibrary(media);
+                  await refreshSources();
+                  setFilters((current) =>
+                    current.filter((filter) => !(filter.kind === "volume" && filter.volumeId === volumeId)),
+                  );
+                  setToast(
+                    removed > 0
+                      ? `Removed ${label} · ${removed} catalog ${removed === 1 ? "row" : "rows"}`
+                      : `Removed ${label}`,
+                  );
+                })
+                .catch((error) => {
+                  setToast(errorMessage(error));
+                });
+            }}
             onOpenAlbum={(album) => void openAlbum(album)}
             onOpen={viewItem}
           />

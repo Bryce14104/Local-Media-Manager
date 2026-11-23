@@ -57,6 +57,7 @@ export type VolumeRecord = {
   lastSeenAt: number;
   online: boolean;
   mediaCount: number;
+  mediaBytes: number;
 };
 
 export type WatchedRoot = {

@@ -1,3 +1,6 @@
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { desktopBridgeAvailable } from "./api";
+
 /** Inclusive last day of the public beta (local calendar date). */
 export const BETA_CUTOFF_DATE = "2026-12-23";
 
@@ -10,6 +13,19 @@ export type BetaStatus = {
   daysLeft: number;
   label: string;
 };
+
+/** Open the beta feedback form in the default browser. */
+export async function openBetaFeedback(): Promise<void> {
+  try {
+    if (desktopBridgeAvailable()) {
+      await openUrl(BETA_FEEDBACK_URL);
+      return;
+    }
+    window.open(BETA_FEEDBACK_URL, "_blank", "noopener,noreferrer");
+  } catch {
+    window.open(BETA_FEEDBACK_URL, "_blank", "noopener,noreferrer");
+  }
+}
 
 function parseYmd(ymd: string): { y: number; m: number; d: number } {
   const [y, m, d] = ymd.split("-").map(Number);

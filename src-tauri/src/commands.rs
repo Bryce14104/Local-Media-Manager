@@ -458,6 +458,11 @@ pub fn eject_volume(mount: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn remove_volume(volume_id: i64, state: State<'_, Library>) -> Result<usize, String> {
+    state.remove_volume(volume_id).map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 pub fn export_travel_library(
     destination: String,
     ids: Vec<i64>,

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { formatBytes } from "../../lib/format";
 import type { AlbumRecord, VolumeRecord, WatchedRoot } from "../../lib/types";
 import type { ActiveFilter, StudioItem } from "../../studio/types";
 
@@ -13,6 +14,7 @@ type SourceListProps = {
   onRescan: () => void;
   onAddFolder: () => void;
   importsLocked?: boolean;
+  onRemoveVolume?: (volumeId: number) => void;
   onOpenAlbum: (album: AlbumRecord) => void;
   onOpen: (id: string) => void;
 };
@@ -28,6 +30,7 @@ export function SourceList({
   onRescan,
   onAddFolder,
   importsLocked = false,
+  onRemoveVolume,
   onOpenAlbum,
   onOpen,
 }: SourceListProps) {
@@ -60,7 +63,7 @@ export function SourceList({
   }
 
   return (
-    <aside className="flex max-h-40 w-full shrink-0 flex-col border-b border-line bg-studio md:h-full md:max-h-none md:w-44 md:border-b-0 md:border-r">
+    <aside className="flex max-h-48 w-full shrink-0 flex-col border-b border-line bg-studio md:h-full md:max-h-none md:w-52 md:border-b-0 md:border-r">
       <div className="px-1.5 pb-1 pt-1.5">
         <button type="button" onClick={onClear} className={rowClass(!source)}>
           <span className="grid h-5 w-5 place-items-center rounded-md bg-raised text-teal">
@@ -87,6 +90,11 @@ export function SourceList({
                   onReveal={reveal}
                   onFilter={onFilter}
                   onOpen={onOpen}
+                  onRemove={
+                    node.volumeId != null && onRemoveVolume
+                      ? () => onRemoveVolume(node.volumeId!)
+                      : undefined
+                  }
                 />
               ))}
             </ul>
@@ -152,8 +160,10 @@ type DriveNodeData = {
   key: string;
   name: string;
   hint: string;
+  mount?: string;
   online?: boolean;
   count: number;
+  bytes?: number;
   volumeId?: number;
   folders: FolderNode[];
   files: FileLeaf[];
@@ -167,6 +177,7 @@ function DriveNode({
   onReveal,
   onFilter,
   onOpen,
+  onRemove,
 }: {
   node: DriveNodeData;
   source: ActiveFilter | undefined;
@@ -175,12 +186,16 @@ function DriveNode({
   onReveal: (key: string) => void;
   onFilter: (filter: ActiveFilter) => void;
   onOpen: (id: string) => void;
+  onRemove?: () => void;
 }) {
   const open = expanded(node.key);
   const hasChildren = node.folders.length > 0 || node.files.length > 0;
   const active = source?.kind === "volume" && node.volumeId != null && source.volumeId === node.volumeId;
+  const status =
+    node.online == null ? null : node.online ? "Online" : "Offline";
+  const sizeLabel = node.bytes != null && node.bytes > 0 ? formatBytes(node.bytes) : null;
   return (
-    <li>
+    <li className="mb-1">
       <div className={rowClass(Boolean(active))}>
         <Chevron open={open} disabled={!hasChildren} onClick={() => hasChildren && onToggle(node.key)} />
         <button
@@ -213,6 +228,30 @@ function DriveNode({
           <Count value={node.count} />
         </button>
       </div>
+      {node.volumeId != null ? (
+        <div className="ml-5 space-y-0.5 px-1 pb-1">
+          <p className="truncate text-[10px] leading-snug text-mute" title={node.mount ?? node.hint}>
+            {[status, sizeLabel, node.count === 1 ? "1 photo" : `${node.count} photos`]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+          {node.mount ? (
+            <p className="truncate font-mono text-[9px] leading-snug text-mute/80" title={node.mount}>
+              {node.mount}
+            </p>
+          ) : null}
+          {onRemove ? (
+            <button
+              type="button"
+              onClick={onRemove}
+              className="rounded px-1 py-0.5 text-[10px] text-mute hover:bg-raised hover:text-foam"
+              title="Remove this disk from the library. Files stay on disk."
+            >
+              Remove disk
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {open ? (
         <ul className="ml-2 border-l border-line pl-1">
           {node.folders.map((folder) => (
@@ -416,8 +455,10 @@ function buildTree(volumes: VolumeRecord[], watches: WatchedRoot[], items: Studi
       key: `volume-${volume.id}`,
       name: volume.label,
       hint: volume.online ? volume.lastMount : `Unplugged · last seen as ${volume.lastMount}`,
+      mount: volume.lastMount,
       online: volume.online,
       count: volume.mediaCount,
+      bytes: volume.mediaBytes,
       volumeId: volume.id,
       folders,
       files: loose,
