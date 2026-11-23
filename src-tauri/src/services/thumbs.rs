@@ -524,17 +524,38 @@ fn grab_video_frame(source: &Path) -> Result<DynamicImage, ThumbError> {
 }
 
 fn grab_at(bin: &Path, source: &Path, seek: &str, out: &Path) -> bool {
-    let ok = Command::new(bin)
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-ss", seek, "-i"])
-        .arg(source)
-        .args(["-frames:v", "1", "-q:v", "3"])
-        .arg(out)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    ok && jpeg_file(out)
+    // GoPro HEVC files carry a non-zero edit list. Seeking before `-i` then
+    // writes zero frames, so the poster never appears. Output seeking, with
+    // the edit list ignored, still gets a frame. `-hwaccel none` keeps older
+    // Intel Macs on the software HEVC decoder (they have no HEVC hardware).
+    let attempts: [&[&str]; 2] = [
+        &["-ss", seek, "-i"],
+        &["-i"],
+    ];
+    for (index, prefix) in attempts.iter().enumerate() {
+        let mut command = Command::new(bin);
+        command.args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-hwaccel",
+            "none",
+            "-ignore_editlist",
+            "1",
+        ]);
+        command.args(*prefix).arg(source);
+        if index == 1 {
+            command.args(["-ss", seek]);
+        }
+        command.args(["-frames:v", "1", "-q:v", "3"]).arg(out);
+        if ffmpeg_ok(&mut command) && jpeg_file(out) {
+            return true;
+        }
+        let _ = std::fs::remove_file(out);
+    }
+    false
 }
 
 pub fn write_playable(source: &Path, destination: &Path) -> Result<(), ThumbError> {
@@ -562,44 +583,73 @@ enum VideoEncoder {
 }
 
 fn transcode(bin: &Path, source: &Path, destination: &Path, encoder: VideoEncoder) -> bool {
+    let threads = ffmpeg_cpu_threads().to_string();
     let mut command = Command::new(bin);
-    command
-        .args(["-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i"])
-        .arg(source)
-        .args([
-            "-map",
-            "0:v:0",
-            "-vf",
-            "fps=3,scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2",
-            "-an",
-            "-threads",
-            &ffmpeg_cpu_threads().to_string(),
-        ]);
+    command.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-y",
+        "-hwaccel",
+        "none",
+        "-ignore_editlist",
+        "1",
+        "-i",
+    ]);
+    command.arg(source).args([
+        "-map",
+        "0:v:0",
+        "-vf",
+        "fps=3,scale=1280:720:force_original_aspect_ratio=decrease:force_divisible_by=2,format=yuv420p",
+        "-an",
+        "-threads",
+        &threads,
+        "-pix_fmt",
+        "yuv420p",
+    ]);
     match encoder {
         VideoEncoder::VideoToolbox => {
-            command.args(["-c:v", "h264_videotoolbox", "-b:v", "2500k", "-allow_sw", "1"]);
-        }
-        VideoEncoder::X264 => {
             command.args([
                 "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-crf",
-                "28",
-                "-pix_fmt",
-                "yuv420p",
+                "h264_videotoolbox",
+                "-b:v",
+                "2500k",
+                "-allow_sw",
+                "1",
+                "-profile:v",
+                "main",
             ]);
         }
+        VideoEncoder::X264 => {
+            command.args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-profile:v", "main"]);
+        }
     }
-    command
-        .args(["-movflags", "+faststart"])
-        .arg(destination)
+    command.args(["-movflags", "+faststart", "-tag:v", "avc1"]).arg(destination);
+    ffmpeg_ok(&mut command)
+}
+
+fn ffmpeg_ok(command: &mut Command) -> bool {
+    let output = command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+        .stderr(Stdio::piped())
+        .output();
+    match output {
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            let err = String::from_utf8_lossy(&output.stderr);
+            let tail: String = err.chars().rev().take(400).collect::<String>().chars().rev().collect();
+            if !tail.trim().is_empty() {
+                eprintln!("shelf index: ffmpeg: {}", tail.trim());
+            }
+            false
+        }
+        Err(error) => {
+            eprintln!("shelf index: ffmpeg: {error}");
+            false
+        }
+    }
 }
 
 fn jpeg_file(path: &Path) -> bool {
