@@ -18,7 +18,7 @@ jobs:
             rust_target: aarch64-apple-darwin
             args: --target aarch64-apple-darwin
             ort_custom: false
-          # Intel Mac — ort dropped x86_64 prebuilts; build ONNX Runtime 1.31 and link it.
+          # Intel Mac — ort dropped x86_64 prebuilts; link a public static ORT 1.23.2.
           - platform: macos-15-intel
             rust_target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
@@ -35,8 +35,6 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
     steps:
-      # Do not persist GITHUB_TOKEN into git config — it breaks clones of
-      # other public repos (microsoft/onnxruntime) with "Username" / not-found errors.
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -66,54 +64,34 @@ jobs:
         if: runner.os == 'macOS'
         run: echo "MACOSX_DEPLOYMENT_TARGET=13.4" >> "$GITHUB_ENV"
 
-      - name: Cache Intel ONNX Runtime static build
+      - name: Cache Intel ONNX Runtime static library
         if: matrix.ort_custom
         id: ort-cache
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/onnxruntime-x86_64
-          key: ort-1.31.0-macos-x86_64-static-13.4-v1
+          key: ort-1.23.2-macos-x86_64-static-hf-v1
 
-      - name: Clone and build ONNX Runtime 1.31 for Intel macOS
+      # No git clone — GitHub Actions credentials break public clones of microsoft/onnxruntime.
+      # Use the last published Intel macOS static lib (Hugging Face mirror).
+      - name: Download Intel ONNX Runtime 1.23.2 static library
         if: matrix.ort_custom && steps.ort-cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          rm -rf .ort-src
-          # Ignore runner gitconfig URL rewrites that inject GITHUB_TOKEN.
-          GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
-            git clone \
-              --branch v1.31.0 \
-              --depth 1 \
-              --recurse-submodules \
-              --shallow-submodules \
-              https://github.com/microsoft/onnxruntime.git \
-              .ort-src
-          cd .ort-src
-          ./build.sh \
-            --config Release \
-            --build_dir build \
-            --parallel \
-            --skip_tests \
-            --compile_no_warning_as_error \
-            --skip_submodule_sync \
-            --cmake_extra_defines \
-              CMAKE_OSX_ARCHITECTURES=x86_64 \
-              CMAKE_OSX_DEPLOYMENT_TARGET=13.4
-          common="$(find build -type f -name 'libonnxruntime_common.a' | head -n 1)"
-          if [[ -z "$common" ]]; then
-            echo "Could not find libonnxruntime_common.a after the ONNX Runtime build." >&2
-            exit 1
-          fi
-          profile_dir="$(dirname "$common")"
-          lib_root="$(dirname "$profile_dir")"
           mkdir -p "${{ runner.temp }}/onnxruntime-x86_64"
-          cp -R "$lib_root/." "${{ runner.temp }}/onnxruntime-x86_64/"
+          curl -fsSL --retry 5 --retry-all-errors \
+            -o "${{ runner.temp }}/ort-intel.zip" \
+            "https://huggingface.co/csukuangfj/onnxruntime-libs/resolve/main/1.23.2/onnxruntime-osx-x86_64-static_lib-1.23.2.zip"
+          unzip -q "${{ runner.temp }}/ort-intel.zip" -d "${{ runner.temp }}/ort-intel-unpack"
+          # ort-sys links libonnxruntime.a when it sits directly in ORT_LIB_PATH.
+          cp "${{ runner.temp }}/ort-intel-unpack/onnxruntime-osx-x86_64-static_lib-1.23.2/lib/libonnxruntime.a" \
+            "${{ runner.temp }}/onnxruntime-x86_64/libonnxruntime.a"
+          ls -lh "${{ runner.temp }}/onnxruntime-x86_64/libonnxruntime.a"
 
-      - name: Point ort at the Intel ONNX Runtime build
+      - name: Point ort at the Intel ONNX Runtime library
         if: matrix.ort_custom
         run: |
           echo "ORT_LIB_PATH=${{ runner.temp }}/onnxruntime-x86_64" >> "$GITHUB_ENV"
-          echo "ORT_LIB_PROFILE=Release" >> "$GITHUB_ENV"
 
       - name: Build and upload release assets
         uses: tauri-apps/tauri-action@v1

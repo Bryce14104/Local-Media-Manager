@@ -29,7 +29,17 @@ thiserror = "2.0.21"
 tauri-plugin-dialog = "2.8.4"
 image = { version = "0.25.9", default-features = false, features = ["jpeg", "png", "gif"] }
 jpeg-decoder = "0.3"
-ort = "=2.0.0-rc.15"
+# api-23 matches the last public Intel macOS static ONNX Runtime (1.23.x).
+# Apple Silicon still downloads ort's 1.31 prebuilts; GetApi(23) works there too.
+ort = { version = "=2.0.0-rc.15", default-features = false, features = [
+  "std",
+  "ndarray",
+  "tracing",
+  "download-binaries",
+  "tls-native",
+  "copy-dylibs",
+  "api-23",
+] }
 ndarray = "0.17"
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 ureq = "2.12"
