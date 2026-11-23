@@ -70,20 +70,21 @@ jobs:
           path: ${{ runner.temp }}/onnxruntime-x86_64
           key: ort-1.31.0-macos-x86_64-static-13.4-v1
 
-      - name: Checkout ONNX Runtime 1.31 (Intel)
+      # Clone without GITHUB_TOKEN — authenticated fetches of microsoft/onnxruntime
+      # return "Repository not found" from private-repo workflows.
+      - name: Clone and build ONNX Runtime 1.31 for Intel macOS
         if: matrix.ort_custom && steps.ort-cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: microsoft/onnxruntime
-          ref: v1.31.0
-          submodules: recursive
-          path: .ort-src
-
-      - name: Build ONNX Runtime 1.31 for Intel macOS
-        if: matrix.ort_custom && steps.ort-cache.outputs.cache-hit != 'true'
-        working-directory: .ort-src
         run: |
           set -euo pipefail
+          rm -rf .ort-src
+          git clone \
+            --branch v1.31.0 \
+            --depth 1 \
+            --recurse-submodules \
+            --shallow-submodules \
+            https://github.com/microsoft/onnxruntime.git \
+            .ort-src
+          cd .ort-src
           ./build.sh \
             --config Release \
             --build_dir build \
