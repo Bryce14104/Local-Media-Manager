@@ -1,0 +1,45 @@
+Shelf — how to open this beta build
+====================================
+
+Shelf is unsigned during the public beta. Your OS will warn you the first
+time you open it. That is expected. Follow the steps for your platform.
+
+
+macOS — “Shelf” is damaged and can’t be opened
+----------------------------------------------
+
+1. Drag Shelf.app into Applications (if it is not there already).
+2. Open Terminal and run this exact command:
+
+   xattr -cr "/Applications/Shelf.app"
+
+3. Open Shelf from Applications as usual.
+
+What this does: it clears the quarantine flag Finder adds to downloads.
+It does not change the app itself.
+
+
+Windows — Windows protected your PC / SmartScreen
+-------------------------------------------------
+
+1. Run the Shelf installer (or Shelf.exe).
+2. When SmartScreen appears, click More info.
+3. Click Run anyway.
+
+
+Linux — AppImage will not run
+-----------------------------
+
+1. Make the AppImage executable, then open it:
+
+   chmod +x Shelf*.AppImage
+   ./Shelf*.AppImage
+
+(Use the real filename if it differs.)
+
+
+Feedback
+--------
+
+Tell us what broke or what you want next:
+https://tally.so

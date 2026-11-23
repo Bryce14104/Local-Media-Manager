@@ -40,7 +40,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "models/tokenizer.json"
+      "models/tokenizer.json",
+      "HOW_TO_INSTALL.txt"
     ],
     "macOS": {
       "minimumSystemVersion": "13.4"

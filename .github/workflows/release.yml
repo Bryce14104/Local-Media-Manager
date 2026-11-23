@@ -58,7 +58,32 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: Shelf ${{ github.ref_name }}
-          releaseBody: "See the assets to download and install this version."
+          releaseBody: |
+            Shelf is an **unsigned beta**. Your OS will warn you the first time you open it — that is expected.
+
+            ### macOS — “Shelf is damaged and can’t be opened”
+            1. Drag **Shelf.app** into **Applications**.
+            2. Open **Terminal** and run:
+
+            ```
+            xattr -cr "/Applications/Shelf.app"
+            ```
+
+            3. Open Shelf from Applications.
+
+            ### Windows — SmartScreen / “Windows protected your PC”
+            1. Run the installer (or `Shelf.exe`).
+            2. Click **More info**.
+            3. Click **Run anyway**.
+
+            ### Linux — AppImage
+            ```
+            chmod +x Shelf*.AppImage
+            ./Shelf*.AppImage
+            ```
+
+            ### Feedback
+            https://tally.so
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
